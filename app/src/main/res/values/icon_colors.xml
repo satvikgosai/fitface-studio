@@ -1,0 +1,4 @@
+<resources>
+    <!-- FitFaceTheme's dark onPrimary: the deep teal the rest of the app is built on. -->
+    <color name="launcher_background">#062E29</color>
+</resources>

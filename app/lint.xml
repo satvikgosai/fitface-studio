@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <issue id="ObsoleteSdkInt">
+        <!-- Adaptive-icon XML must remain version-qualified for AAPT linking. -->
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+</lint>

@@ -1,0 +1,124 @@
+name: Bug report
+description: Something in the app behaves differently from what the docs say it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, a quick check that saves everyone time:
+
+        - Install trouble is usually step 4 of the checklist — discovery needs the stock
+          plugin holding the channel, the transfer needs it to let go. The README section
+          [Installing to the watch](../blob/main/README.md#installing-to-the-watch)
+          covers it.
+        - Face `00254` ("Photos") has no container at all and is *meant* to show as
+          **Not editable**. That is not a download failure.
+        - Every test task failing with `Failed to exec spawn helper` is a stale Gradle
+          daemon. Run `./gradlew --stop`.
+
+        **Do not attach `.bin` containers, `.apk` packages, or any watch-face artwork.**
+        Those belong to their publishers, and this project deliberately keeps them out of
+        the repository — see [`NOTICE.md`](../blob/main/NOTICE.md). Screenshots of the
+        app's own interface are fine.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what the app did instead of what you expected.
+      placeholder: |
+        1. Opened face 00022 from the catalogue
+        2. Selected the hour tens digit and tapped Smaller twice
+        3. Expected ... but the canvas showed ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in the app
+      options:
+        - Catalogue, search or download
+        - Editor canvas — selecting, dragging, nudging
+        - Widget edits — resize, recolour, duplicate, remove
+        - Background — replace, tint, or add
+        - Styles or style switching
+        - Validate
+        - Install over Bluetooth
+        - Projects
+        - Building the app
+        - Something else / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: face
+    attributes:
+      label: Face number
+      description: >-
+        The five-digit number, e.g. `00022`. Behaviour here is very often specific to
+        one face, so this is usually the single most useful field in the report.
+      placeholder: "00022"
+
+  - type: dropdown
+    id: install-step
+    attributes:
+      label: Install checklist step
+      description: For install problems only — which of the four steps it fails on.
+      options:
+        - "Not an install problem"
+        - "1 — Connect the watch in its companion app"
+        - "2 — Grant Nearby devices access"
+        - "3 — Discover the watch-face and OTA peers"
+        - "4 — Let the plugin release the channel, then send"
+        - "After step 4 — the transfer itself"
+
+  - type: input
+    id: watch
+    attributes:
+      label: Watch model
+      description: This project targets one watch family; anything else is unsupported.
+      value: "SM-R390"
+
+  - type: input
+    id: phone
+    attributes:
+      label: Phone and Android version
+      placeholder: "Pixel 7, Android 15"
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: From the identity table in the README, or `Settings › Apps › FitFace Studio`.
+      placeholder: "0.1.0 (16)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logcat
+      description: |
+        ```
+        adb logcat | rg 'Fit3|Accessory|OtaTransfer|SASocket|FOTA'
+        ```
+        Several failures reach logcat and nowhere else, so this is often the only place
+        the real reason appears.
+      render: text
+
+  - type: checkboxes
+    id: legal
+    attributes:
+      label: Confirmation
+      options:
+        - label: >-
+            The watch is mine, and I am authorised to inspect and modify the face I am
+            reporting about.
+          required: true
+        - label: >-
+            I have not attached any watch-face container, package or artwork to this
+            issue.
+          required: true

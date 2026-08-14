@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest something the app should be able to do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth knowing before you write: this is an independent, experimental,
+        personal-use project for one watch family. It will never be published to an app
+        store, and plenty of things are left undone on purpose rather than by oversight.
+
+        [`docs/`](../blob/main/docs/) explains what the format allows and what the
+        editor deliberately refuses — [`docs/editing.md`](../blob/main/docs/editing.md)
+        in particular records, for each edit the app will not make, the corpus or
+        hardware evidence for why. A request that runs into one of those is not
+        hopeless, but it needs to engage with the evidence.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do that the app makes hard or impossible today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What the app should do instead
+      description: The behaviour you want, in as much detail as you can give.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Roughly where this lands
+      description: A guess is fine — it helps with triage, nothing more.
+      options:
+        - Catalogue, download or projects
+        - Editor canvas and widget editing
+        - Backgrounds and styles
+        - Validation
+        - Install over Bluetooth
+        - Container format support
+        - Build, tests or documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checked-docs
+    attributes:
+      label: Confirmation
+      options:
+        - label: >-
+            I have checked `docs/` and this is not something the project has already
+            documented a reason for not doing.
+          required: true

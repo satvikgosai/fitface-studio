@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="com.samsung.accessory.permission.ACCESSORY_FRAMEWORK" />
+
+    <queries>
+        <package android:name="com.samsung.wearable.fit3plugin" />
+        <package android:name="com.samsung.android.app.watchmanager" />
+    </queries>
+
+    <application>
+        <meta-data
+            android:name="AccessoryServicesLocation"
+            android:value="/res/xml/fitface_accessory_services.xml" />
+
+        <receiver
+            android:name="com.samsung.android.sdk.accessory.RegisterUponInstallReceiver"
+            android:exported="true"
+            android:permission="com.samsung.accessory.permission.ACCESSORY_FRAMEWORK">
+            <intent-filter>
+                <action android:name="com.samsung.accessory.action.REGISTER_AGENT" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.samsung.android.sdk.accessory.ServiceConnectionIndicationBroadcastReceiver"
+            android:exported="true"
+            android:permission="com.samsung.accessory.permission.ACCESSORY_FRAMEWORK">
+            <intent-filter>
+                <action android:name="com.samsung.accessory.action.SERVICE_CONNECTION_REQUESTED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.samsung.android.sdk.accessory.MessageReceiver"
+            android:exported="true"
+            android:permission="com.samsung.accessory.permission.ACCESSORY_FRAMEWORK">
+            <intent-filter>
+                <action android:name="com.samsung.accessory.action.MESSAGE_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name="com.samsung.android.sdk.accessory.SAService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <service
+            android:name="com.samsung.android.sdk.accessory.SAJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+    </application>
+</manifest>

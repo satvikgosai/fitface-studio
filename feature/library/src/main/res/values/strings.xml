@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copy for the catalogue and projects screens.
+
+  Names are prefixed `library_` because library-module resources merge into one table at
+  the app level: a bare name that collided with another module's would be silently
+  overridden rather than reported. Decorative glyphs (⌕ ◇ × ›) stay inline in the
+  Composables — they are symbols, not copy, and a translator has nothing to do with them.
+-->
+<resources>
+    <!-- Header -->
+    <string name="library_brand">FitFace Studio</string>
+    <string name="library_title_watch_faces">Watch faces</string>
+    <string name="library_title_projects">Your projects</string>
+    <string name="library_subtitle_watch_faces">Pick a Fit3 face, download its package, then edit and install it.</string>
+    <string name="library_subtitle_projects">Continue an edit saved privately on this device.</string>
+    <string name="library_action_refresh">REFRESH</string>
+    <string name="library_action_syncing">SYNCING</string>
+    <string name="library_tab_watch_faces">Watch faces</string>
+    <string name="library_tab_projects">Projects %1$d</string>
+
+    <!-- Catalogue grid -->
+    <string name="library_catalogue_a11y">Watch face catalogue</string>
+    <string name="library_search_placeholder">Search faces or ID</string>
+    <string name="library_sort_label">Sort</string>
+    <string name="library_source_cached">Cached catalogue</string>
+    <string name="library_source_live">Live catalogue</string>
+    <string name="library_face_and_style_count">%1$d faces · %2$d styles</string>
+    <string name="library_no_matches_title">No matching faces</string>
+    <string name="library_no_matches_detail">Try a name or numeric face ID.</string>
+    <string name="library_loading_a11y">Loading the watch face catalogue</string>
+    <string name="library_loading_title">Loading watch faces…</string>
+    <string name="library_loading_detail">requesting faces and style previews</string>
+    <string name="library_unavailable_title">Catalogue unavailable</string>
+    <string name="library_unavailable_detail">Check your connection, then request the catalogue again.</string>
+    <string name="library_try_again">Try again</string>
+
+    <!-- Face card -->
+    <plurals name="library_style_count">
+        <item quantity="one">%1$d style</item>
+        <item quantity="other">%1$d styles</item>
+    </plurals>
+    <string name="library_face_number">#%1$s</string>
+    <string name="library_not_editable_badge">NOT EDITABLE</string>
+    <!-- name, face id, style count -->
+    <string name="library_face_card_a11y">%1$s, face %2$s, %3$s</string>
+    <string name="library_face_card_a11y_not_editable">%1$s, face %2$s, %3$s, not editable</string>
+
+    <!-- Face sheet -->
+    <string name="library_sheet_kind">Watch face</string>
+    <string name="library_sheet_face_version">face %1$s · version %2$s</string>
+    <string name="library_sheet_preview_a11y">Selected preview for %1$s, style %2$d</string>
+    <string name="library_sheet_choose_style">Choose starting style</string>
+    <string name="library_sheet_package">Package</string>
+    <string name="library_sheet_error_label">FAILED</string>
+    <string name="library_sheet_uneditable_label">N/A</string>
+    <string name="library_download">Download &amp; edit</string>
+    <string name="library_download_in_progress">Downloading…</string>
+    <string name="library_download_not_editable">Not editable</string>
+    <string name="library_download_cache_note">Packages are cached on this device and only re-downloaded when the store publishes a new version.</string>
+    <string name="library_style_thumb_a11y">%1$s style %2$d</string>
+    <string name="library_style_thumb_a11y_selected">%1$s style %2$d, selected</string>
+
+    <!-- Projects -->
+    <string name="library_projects_saved">Saved automatically</string>
+    <string name="library_projects_local_count">%1$d local</string>
+    <string name="library_projects_empty_title">No projects yet</string>
+    <string name="library_projects_empty_detail">Download a face from Watch faces. Your original package and every committed edit will be kept privately here.</string>
+    <string name="library_browse">Browse watch faces</string>
+    <string name="library_unnamed_face">Unnamed face</string>
+    <string name="library_project_face_line">face %1$s · %2$s</string>
+
+    <!-- Package size -->
+    <string name="library_size_unavailable">size unavailable</string>
+    <string name="library_size_bytes">%1$d B</string>
+    <string name="library_size_kib">%1$.1f KiB</string>
+    <string name="library_size_mib">%1$.1f MiB</string>
+</resources>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared component copy. Names are prefixed `ui_` because library-module resources are
+  merged into one table at the app level, where a bare name colliding with a feature
+  module's would be silently overridden rather than reported.
+-->
+<resources>
+    <!-- StatusBanner's default badge, one per FitStatus. -->
+    <string name="ui_status_pass">OK</string>
+    <string name="ui_status_warning">WARN</string>
+    <string name="ui_status_fail">FAIL</string>
+</resources>

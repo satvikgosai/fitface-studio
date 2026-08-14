@@ -1,0 +1,67 @@
+<!--
+  A watch face you can play with: the Fit3 panel in its own 256x402 proportion,
+  tilted off-axis, wearing clock hands over a row of palette dots, with a sparkle
+  caught on its top corner.
+
+  It is deliberately not a diagram of the editor. The hands say "watch face", the
+  three dots say "yours to recolour", and the tilt and the sparkle are the whole
+  point — the previous mark was an accurate schematic of the canvas and read as
+  two stacked boxes.
+
+  The colours are the product's tokens, not a separate icon palette — primary
+  #7FE3D2 for the panel and hands, the canvas #0A0E0E behind them, and secondary
+  #F2C879, error #FFAF9F and tertiary #C8B6FF for the three dots, all from
+  core:ui FitFaceTheme.
+
+  Everything stays inside the 66dp adaptive-icon safe circle: the panel reaches
+  28.9 of the 33 available from centre, the sparkle's top point 32.1.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:name="panel"
+        android:pivotX="52.5"
+        android:pivotY="54"
+        android:rotation="-8">
+
+        <path
+            android:fillColor="#0A0E0E"
+            android:pathData="M47.5,29 H57.5 A11,11 0 0 1 68.5,40 V68 A11,11 0 0 1 57.5,79 H47.5 A11,11 0 0 1 36.5,68 V40 A11,11 0 0 1 47.5,29 Z"
+            android:strokeColor="#7FE3D2"
+            android:strokeWidth="3" />
+
+        <path
+            android:pathData="M52.5,47.5 L52.5,37.5"
+            android:strokeColor="#7FE3D2"
+            android:strokeLineCap="round"
+            android:strokeWidth="3.2" />
+
+        <path
+            android:pathData="M52.5,47.5 L63.3,53.75"
+            android:strokeColor="#7FE3D2"
+            android:strokeLineCap="round"
+            android:strokeWidth="3.2" />
+
+        <path
+            android:fillColor="#7FE3D2"
+            android:pathData="M49.9,47.5 A2.6,2.6 0 1 1 55.1,47.5 A2.6,2.6 0 1 1 49.9,47.5 Z" />
+
+        <path
+            android:fillColor="#F2C879"
+            android:pathData="M40.1,66 A3.6,3.6 0 1 1 47.3,66 A3.6,3.6 0 1 1 40.1,66 Z" />
+        <path
+            android:fillColor="#FFAF9F"
+            android:pathData="M48.9,66 A3.6,3.6 0 1 1 56.1,66 A3.6,3.6 0 1 1 48.9,66 Z" />
+        <path
+            android:fillColor="#C8B6FF"
+            android:pathData="M57.7,66 A3.6,3.6 0 1 1 64.9,66 A3.6,3.6 0 1 1 57.7,66 Z" />
+    </group>
+
+    <path
+        android:fillColor="#F2C879"
+        android:pathData="M70,26.2 Q71.7,31.3 76.8,33 Q71.7,34.7 70,39.8 Q68.3,34.7 63.2,33 Q68.3,31.3 70,26.2 Z" />
+</vector>

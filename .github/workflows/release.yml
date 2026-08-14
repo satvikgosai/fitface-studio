@@ -1,0 +1,135 @@
+name: Build APK
+
+# Builds the debug APK on a version tag and publishes it as a GitHub Release, which
+# keeps it indefinitely — a workflow artifact expires after 90 days at most. Manual
+# runs build the same APK but publish nothing; the artifact is the only output there.
+#
+# Debug, not release: release signing credentials are deliberately not stored in this
+# repository, and an unsigned release APK cannot be installed by anyone. The debug key
+# is restored from the DEBUG_KEYSTORE_BASE64 secret so that consecutive releases share
+# one signing identity and can install over each other; without that secret the build
+# still succeeds, but signs with a throwaway key. See docs/development.md.
+#
+# This build fetches the two proprietary accessory SDK JARs and links their classes
+# into the APK. What it publishes is a convenience build of a personal project for use
+# on hardware its author owns, and is not a grant of any rights in that SDK. See
+# NOTICE.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # required to create the Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # A runner has no ~/.android/debug.keystore, so AGP would generate a throwaway one
+      # per run and no two releases could install over each other. Restoring one key from
+      # a secret keeps that identity stable. Absent the secret the build still succeeds —
+      # it just produces an APK that cannot update any other.
+      - name: Restore the debug keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning title=No debug keystore::DEBUG_KEYSTORE_BASE64 is not set. This APK is signed with a throwaway key and cannot be installed over any other build. See docs/development.md."
+            exit 0
+          fi
+          path="$RUNNER_TEMP/debug.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$path"
+          # Fails the run early on a truncated or mis-encoded secret, rather than letting
+          # Gradle report it as an opaque signing error. The printed fingerprint is public
+          # certificate data, and is the quickest way to confirm which key CI is using.
+          keytool -list -v -keystore "$path" -storepass "${KEYSTORE_PASSWORD:-android}" \
+            | grep -E 'Alias name|SHA256:'
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      # Also runs :core:delivery:fetchAccessorySdk, which downloads both accessory SDK
+      # JARs into libs/ and fails the build if either does not match its pinned SHA-256.
+      - name: Build the debug APK
+        env:
+          FIT3_DEBUG_KEYSTORE: ${{ steps.keystore.outputs.path }}
+          FIT3_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          FIT3_DEBUG_KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          FIT3_DEBUG_KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Name the APK after the tag
+        id: name
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            version="${GITHUB_SHA::7}"
+          fi
+          name="fitface-studio-${version}-debug.apk"
+          mv app/build/outputs/apk/debug/app-debug.apk "$name"
+          echo "apk=$name" >> "$GITHUB_OUTPUT"
+
+      # Kept for manual runs, which publish no Release. On a tag this duplicates the
+      # Release asset, and expires after 90 days — the GitHub Actions maximum.
+      - name: Upload the APK to the workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.apk }}
+          path: ${{ steps.name.outputs.apk }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish the Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: ${{ steps.name.outputs.apk }}
+          KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
+        run: |
+          if [ -n "$KEYSTORE_PATH" ]; then
+            signing="Signed with this project's debug key, so it installs over any other
+          build signed with the same key."
+          else
+            signing="**Signed with a throwaway key**, because no debug keystore was
+          configured for this build — it cannot be installed over an existing copy, and
+          uninstalling first will delete every saved project."
+          fi
+
+          body=$(cat <<'EOF'
+          It is a debug build in every other sense: no R8, no resource shrinking, and the
+          debug-only corpus broadcast receiver is compiled in. Release signing credentials
+          are deliberately not stored in this repository, so there is no signed release
+          variant to publish.
+
+          This APK contains code from two proprietary accessory SDK JARs, fetched at
+          build time and verified against pinned SHA-256 hashes. It is a convenience
+          build of an experimental personal project for use on hardware you own — not a
+          product, not supported, and not a grant of any rights in that SDK. See
+          [`NOTICE.md`](../blob/main/NOTICE.md), and read
+          [Installing to the watch](../blob/main/README.md#installing-to-the-watch)
+          before you send anything to a watch.
+          EOF
+          )
+
+          gh release create "$GITHUB_REF_NAME" "$APK" \
+            --title "$GITHUB_REF_NAME" \
+            --prerelease \
+            --notes "A **debug** build. $signing
+
+          $body"

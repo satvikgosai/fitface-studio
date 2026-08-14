@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108" role="img">
+  <title>FitFace Studio app icon</title>
+  <desc>A tilted watch panel on deep teal, with clock hands, a row of three coloured
+  palette dots below them, and an amber sparkle on its top corner.</desc>
+  <rect width="108" height="108" fill="#062E29"/>
+  <g transform="rotate(-8 52.5 54)">
+    <rect x="36.5" y="29" width="32" height="50" rx="11" fill="#0A0E0E" stroke="#7FE3D2" stroke-width="3"/>
+    <path d="M52.5,47.5 L52.5,37.5" fill="none" stroke="#7FE3D2" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M52.5,47.5 L63.3,53.75" fill="none" stroke="#7FE3D2" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="52.5" cy="47.5" r="2.6" fill="#7FE3D2"/>
+    <circle cx="43.7" cy="66" r="3.6" fill="#F2C879"/>
+    <circle cx="52.5" cy="66" r="3.6" fill="#FFAF9F"/>
+    <circle cx="61.3" cy="66" r="3.6" fill="#C8B6FF"/>
+  </g>
+  <path d="M70,26.2 Q71.7,31.3 76.8,33 Q71.7,34.7 70,39.8 Q68.3,34.7 63.2,33 Q68.3,31.3 70,26.2 Z" fill="#F2C879"/>
+</svg>

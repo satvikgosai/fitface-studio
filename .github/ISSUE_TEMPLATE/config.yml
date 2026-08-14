@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: How the app works inside
+    url: https://github.com/satvikgosai/fitface-studio/blob/main/docs/README.md
+    about: Architecture, the container format, the editing model and the install protocol.
+  - name: Build and test setup
+    url: https://github.com/satvikgosai/fitface-studio/blob/main/docs/development.md
+    about: Toolchain, the test corpus, and manual verification — start here for build trouble.
+  - name: Working brief for code changes
+    url: https://github.com/satvikgosai/fitface-studio/blob/main/AGENTS.md
+    about: The traps that already bit this codebase and the invariants a change must preserve.

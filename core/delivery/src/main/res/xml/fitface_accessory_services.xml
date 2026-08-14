@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <application name="FitFace Studio">
+        <serviceProfile
+            id="/system/WatchfaceSerevice"
+            name="WatchfaceSerevice"
+            role="provider"
+            serviceImpl="dev.fitface.studio.core.delivery.WatchfaceDeliveryAgent"
+            version="1">
+            <supportedTransports>
+                <transport type="TRANSPORT_BLE" />
+            </supportedTransports>
+            <supportedFeatures>
+                <feature type="message" />
+            </supportedFeatures>
+        </serviceProfile>
+        <serviceProfile
+            id="/system/OtaTransferAgent"
+            name="OtaTransferAgent"
+            role="provider"
+            serviceImpl="dev.fitface.studio.core.delivery.OtaTransferDeliveryAgent"
+            version="1">
+            <supportedTransports>
+                <transport type="TRANSPORT_BLE" />
+            </supportedTransports>
+            <supportedFeatures>
+                <feature type="message" />
+            </supportedFeatures>
+        </serviceProfile>
+    </application>
+</resources>

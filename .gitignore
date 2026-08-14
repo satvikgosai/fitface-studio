@@ -1,0 +1,28 @@
+.gradle/
+**/build/
+.kotlin/
+local.properties
+*.iml
+.idea/
+__pycache__/
+*.pyc
+
+# Never commit downloaded watch-face packages, containers or extracted assets.
+# They belong to their publishers — see NOTICE.md.
+*.apk
+*.bin
+
+# Never commit the accessory SDK JARs. They are proprietary third-party binaries
+# this project has no right to redistribute — see NOTICE.md. The build fetches and
+# hash-verifies them into libs/ when they are absent; see libs/README.md.
+libs/*.jar
+libs/*.jar.part
+
+# Default location for the local test corpus; see docs/development.md.
+corpus/
+
+# Local working area: raw captures, audit ledgers, design exports and the
+# generated visual reports. Findings that matter are written up in docs/.
+analysis/
+TODO.txt
+captures/

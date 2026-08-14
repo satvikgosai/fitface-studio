@@ -1,0 +1,7 @@
+-keep class dev.fitface.studio.core.delivery.WatchfaceDeliveryAgent { *; }
+-keep class dev.fitface.studio.core.delivery.OtaTransferDeliveryAgent { *; }
+-keep class com.samsung.android.sdk.SsdkInterface { *; }
+-keep class com.samsung.android.sdk.SsdkUnsupportedException { *; }
+-keep class com.samsung.android.sdk.SsdkVendorCheck { *; }
+-keep class com.samsung.android.sdk.accessory.** { *; }
+-keep class com.samsung.accessory.** { *; }

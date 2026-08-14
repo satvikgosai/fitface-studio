@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only additions. None of this is present in a release build: this manifest and
+  the code it names are compiled into the debug variant only.
+
+  CorpusFetchReceiver downloads catalogue packages so the local test corpus can be
+  populated without driving the UI once per face; see tools/fetch_corpus.py.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <!--
+          Exported without a permission so `adb shell am broadcast` can reach it; a
+          signature-level permission could not be granted to the shell. Acceptable
+          because it exists only in the debug variant, takes no data from the caller
+          beyond a catalogue face ID, and does nothing an ordinary tap on Download
+          would not: it fetches a public package into this app's private cache.
+        -->
+        <receiver
+            android:name="dev.fitface.studio.debug.CorpusFetchReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="dev.fitface.studio.debug.FETCH" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
