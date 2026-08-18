@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.fitface.studio.core.data.db.FitFaceDatabase
+import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.FacePackage
 import java.io.File
 import java.nio.file.Files
@@ -49,6 +50,7 @@ class StylePreviewProjectTest {
             context = context,
             projectDao = database.projectDao(),
             imageSource = AndroidImageSource(context.contentResolver),
+            diagnostics = DiagnosticsLog(),
         )
     }
 

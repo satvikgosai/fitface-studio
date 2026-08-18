@@ -11,6 +11,8 @@ import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.drawTop
+import dev.fitface.studio.core.data.DiagnosticsReporter
+import dev.fitface.studio.core.model.DiagnosticsLog
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
@@ -80,7 +82,7 @@ class EditorViewModelTest {
     @Test
     fun aRunOfMovesCoalescesToTheLatestTargetPerWidget() {
         val repository = FakeRepository(snapshot(widgets))
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
 
@@ -110,7 +112,7 @@ class EditorViewModelTest {
     @Test
     fun queuedMovesForDifferentWidgetsAreNotLostBehindEachOther() {
         val repository = FakeRepository(snapshot(widgets))
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
 
@@ -135,7 +137,7 @@ class EditorViewModelTest {
     @Test
     fun committingADragDoesNotTurnTheCanvasOff() {
         val repository = FakeRepository(snapshot(widgets))
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
 
@@ -161,7 +163,7 @@ class EditorViewModelTest {
     @Test
     fun aRefusedMoveDropsEveryQueuedTarget() {
         val repository = FakeRepository(snapshot(widgets), failWith = WatchFaceException("no"))
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
 
@@ -180,7 +182,7 @@ class EditorViewModelTest {
     @Test
     fun aMoveStillCommitsAfterAnEarlierOneWasRefused() {
         val repository = FakeRepository(snapshot(widgets), failWith = WatchFaceException("no"))
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
         viewModel.moveWidget(globalIndex = 1, x = 30, y = 30)
@@ -208,7 +210,7 @@ class EditorViewModelTest {
     @Test
     fun nudgingHoldsTheWidgetOnThePanel() {
         val repository = FakeRepository(snapshot(widgets), commitImmediately = true)
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
 
@@ -234,7 +236,7 @@ class EditorViewModelTest {
     fun nudgingAnEndAnchoredWidgetKeepsItAgainstTheEndItIsAnchoredTo() {
         val anchored = widget(globalIndex = 1, x = -30, y = -40)
         val repository = FakeRepository(snapshot(listOf(anchored)), commitImmediately = true)
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
         val before = anchored.drawLeft(PanelWidth)
@@ -254,7 +256,7 @@ class EditorViewModelTest {
     fun aNudgeRefusedByTheClampCommitsNothing() {
         val atEdge = widget(globalIndex = 1, x = 0, y = 0)
         val repository = FakeRepository(snapshot(listOf(atEdge)), commitImmediately = true)
-        val viewModel = EditorViewModel(repository, installer)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
 
@@ -371,4 +373,6 @@ class EditorViewModelTest {
         const val PanelWidth = 256
         const val PanelHeight = 402
     }
+
+    private fun reporter(): DiagnosticsReporter = mockk(relaxed = true)
 }

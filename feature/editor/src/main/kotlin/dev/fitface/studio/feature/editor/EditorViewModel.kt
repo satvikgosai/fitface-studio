@@ -3,6 +3,7 @@ package dev.fitface.studio.feature.editor
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.model.EditorSnapshot
@@ -10,12 +11,14 @@ import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.WatchFaceRepository
+import dev.fitface.studio.core.data.DiagnosticsReporter
+import dev.fitface.studio.core.model.DiagnosticsLog
+import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.encodeCoordinate
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.spriteResizeLimit
-import android.util.Log
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
@@ -64,12 +67,16 @@ data class EditorUiState(
     val pendingWidgetMove: WidgetMovePreview? = null,
     val directInstall: DirectInstallState = DirectInstallState(),
     val error: UserMessage? = null,
+    /** The pasteable report, non-null while the dialog is open. */
+    val diagnosticsReport: String? = null,
 )
 
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     private val repository: WatchFaceRepository,
     private val directInstaller: Fit3DirectInstaller,
+    private val diagnostics: DiagnosticsLog,
+    private val reporter: DiagnosticsReporter,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(EditorUiState())
     val state = mutableState.asStateFlow()
@@ -98,7 +105,21 @@ class EditorViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            var lastPhase: DirectInstallPhase? = null
             directInstaller.state.collect { delivery ->
+                // Physical delivery cannot be exercised in this repository's tests, so the
+                // phase order a real transfer walked is the only account of where one
+                // stopped. Counts and booleans only — no peer handle, address or name.
+                if (delivery.phase != lastPhase) {
+                    lastPhase = delivery.phase
+                    diagnostics.info(
+                        TAG,
+                        "Install phase ${delivery.phase}",
+                        "bytes=${delivery.acknowledgedBytes}/${delivery.totalBytes} " +
+                            "windows=${delivery.acknowledgedWindows}/${delivery.totalWindows}" +
+                            (delivery.failure?.let { " failure=$it" } ?: ""),
+                    )
+                }
                 mutableState.value = mutableState.value.copy(directInstall = delivery)
             }
         }
@@ -655,7 +676,15 @@ class EditorViewModel @Inject constructor(
 
     private fun showFailure(error: Throwable) {
         if (error is CancellationException) throw error
-        Log.w(TAG, "Editor operation failed", error)
+        // technicalDetail carries the machine-readable half — which widget, which style,
+        // which byte count refused the edit — and it stopped here before this, so the
+        // report only ever had the sentence the user had already read.
+        diagnostics.warn(
+            TAG,
+            "Editor operation failed",
+            (error as? WatchFaceException)?.technicalDetail,
+            error,
+        )
         val text = when (error) {
             is WatchFaceException -> error.userMessage
             is SecurityException ->
@@ -670,6 +699,36 @@ class EditorViewModel @Inject constructor(
             pendingWidgetMove = null,
             error = UserMessage(messageIds.incrementAndGet(), text),
         )
+    }
+
+    fun showDiagnostics() {
+        viewModelScope.launch {
+            val install = mutableState.value.directInstall
+            val sections = listOfNotNull(
+                repository.diagnosticsSection(),
+                DiagnosticsSection(
+                    title = "install",
+                    lines = listOfNotNull(
+                        "phase=${install.phase} previewReviewed=${mutableState.value.previewReviewed}",
+                        // Booleans and counts only. The peer handles and bonded-device
+                        // addresses this state machine works with are never collected.
+                        "companion=${install.environment.companionAppInstalled} " +
+                            "plugin=${install.environment.pluginInstalled}" +
+                            (install.environment.pluginVersionName?.let { "@$it" } ?: "") + " " +
+                            "accessory=${install.environment.accessoryFrameworkAvailable}",
+                        "peers=${install.peersCached} " +
+                            "bytes=${install.acknowledgedBytes}/${install.totalBytes} " +
+                            "windows=${install.acknowledgedWindows}/${install.totalWindows}",
+                        install.failure?.let { "failure=$it" },
+                    ),
+                ),
+            )
+            mutableState.value = mutableState.value.copy(diagnosticsReport = reporter.render(sections))
+        }
+    }
+
+    fun dismissDiagnostics() {
+        mutableState.value = mutableState.value.copy(diagnosticsReport = null)
     }
 
     override fun onCleared() {

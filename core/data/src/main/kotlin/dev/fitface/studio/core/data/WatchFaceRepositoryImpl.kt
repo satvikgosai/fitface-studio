@@ -17,6 +17,8 @@ import dev.fitface.studio.core.format.Fit3FormatException
 import dev.fitface.studio.core.format.ImageRecord
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StructuralEdit
+import dev.fitface.studio.core.model.DiagnosticsLog
+import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.EditorSnapshot
@@ -57,6 +59,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val projectDao: ProjectDao,
     private val imageSource: AndroidImageSource,
+    private val diagnostics: DiagnosticsLog,
 ) : WatchFaceRepository {
     private val mutex = Mutex()
     private var session: Session? = null
@@ -750,6 +753,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
             try {
                 val snapshot = current.snapshot()
                 persistEdited(current, keepEdited = false)
+                current.recordHistory("reset to the original container")
+                diagnostics.info(TAG, "Edits reset")
                 snapshot
             } catch (error: Throwable) {
                 current.currentContainer = previousContainer
@@ -760,6 +765,56 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 throw error
             }
         }
+    }
+
+    override suspend fun diagnosticsSection(): DiagnosticsSection? =
+        // Validating a container is real work, and every other method here keeps it off
+        // the caller's thread; this one is called straight out of a ViewModel's launch.
+        withContext(Dispatchers.Default) {
+            mutex.withLock { openSessionSection() }
+        }
+
+    private fun openSessionSection(): DiagnosticsSection? {
+        val current = session ?: return null
+        val report = current.currentContainer.validate()
+        return DiagnosticsSection(
+            title = "face",
+            lines = buildList {
+                add("face=${current.apk.faceId} style=${current.selectedStyle ?: "none"}")
+                add(
+                    "styles=${current.styleEntries().size} " +
+                        "original=${current.originalContainer.fileSize} " +
+                        "current=${current.currentContainer.fileSize} " +
+                        "ceiling=$WATCH_CONTAINER_BYTE_CEILING",
+                )
+                add("removed=${current.removedWidgets.size} thumbnail=${current.thumbnailRefreshed}")
+                add(
+                    "validation=" + report.issues
+                        .takeIf { it.isNotEmpty() }
+                        ?.joinToString("; ") { "${it.severity}:${it.code}" }
+                        .orEmpty()
+                        .ifEmpty { "clean" },
+                )
+                if (current.editHistory.isEmpty()) {
+                    add("edits: none committed")
+                } else {
+                    // Says what it dropped. A trimmed list that looks complete would have
+                    // a reader counting edits that are not there.
+                    val dropped = current.editHistoryTotal - current.editHistory.size
+                    add(
+                        if (dropped == 0) {
+                            "edits:"
+                        } else {
+                            "edits (the last ${current.editHistory.size} " +
+                                "of ${current.editHistoryTotal}):"
+                        },
+                    )
+                    current.editHistory.forEachIndexed { index, entry ->
+                        add("  ${index + 1 + dropped}. $entry")
+                    }
+                }
+            },
+        )
     }
 
     override suspend fun prepareDirectInstall(): DirectInstallPayload =
@@ -781,6 +836,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
         return try {
             val snapshot = current.snapshot(styleName)
             persistEdited(current, keepEdited = true)
+            // Recorded only once the edit has actually stuck. The worst bugs here leave a
+            // container that validates, transfers and is accepted while drawing wrong, so
+            // nothing throws and this ordered list is the only account of what was done.
+            current.recordHistory(
+                "${audit.operation} " +
+                    "(styles=${audit.changedStyles.size} bytes=${audit.changedPayloadBytes} " +
+                    "delta=${audit.sizeDelta} size=${container.fileSize})",
+            )
+            diagnostics.info(
+                TAG,
+                "Edit committed: ${audit.operation}",
+                "styles=${audit.changedStyles.joinToString("/")} " +
+                    "delta=${audit.sizeDelta} size=${container.fileSize}",
+            )
             snapshot
         } catch (error: Throwable) {
             current.currentContainer = previousContainer
@@ -978,6 +1047,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
         var stylePreviewFiles: Map<Int, String> = emptyMap(),
         val removedWidgets: MutableList<RemovedWidget> = mutableListOf(),
         /**
+         * Committed edits and resets, in order, for the bug report. Never persisted, and
+         * bounded like [DiagnosticsLog] is — a session left open all afternoon would
+         * otherwise grow a report nobody can read. Written through [recordHistory] so the
+         * count of what was dropped survives.
+         */
+        val editHistory: MutableList<String> = mutableListOf(),
+        /** How many entries [editHistory] has been given, including any it has dropped. */
+        var editHistoryTotal: Int = 0,
+        /**
          * The container whose `preview.bin` was rendered from the current edit. Held
          * as an identity rather than a flag so that any later edit — which replaces
          * [currentContainer] — automatically marks the thumbnail stale and lets the
@@ -992,6 +1070,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
         fun styleEntries() = currentContainer.entries
             .filter { it.basename.matches(Regex("""style\d+\.bin""")) }
+
+        /**
+         * Adds one line to the report's account of this session, oldest dropped first.
+         *
+         * A reset goes through here too. Without one the report listed edits the
+         * container no longer carried, with nothing saying they had been reverted — which
+         * points a reader at the wrong container while they are trying to work out why a
+         * face draws wrong.
+         */
+        fun recordHistory(entry: String) {
+            editHistoryTotal++
+            editHistory += entry
+            while (editHistory.size > MaxEditHistory) editHistory.removeFirst()
+        }
 
         /**
          * The styles an added background would be written to: all of them where the
@@ -1328,6 +1420,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
      * app produced something the watch should never receive.
      */
     private companion object {
+        const val TAG = "Editor"
+
+        /** How many lines of [Session.editHistory] a report carries. */
+        const val MaxEditHistory = 60
         const val OPAQUE_BLACK = 0xFF00_0000.toInt()
 
         val BlockingWarnings = setOf(

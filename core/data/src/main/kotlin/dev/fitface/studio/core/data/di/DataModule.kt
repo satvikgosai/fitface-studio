@@ -15,6 +15,7 @@ import dev.fitface.studio.core.data.WatchFaceRepositoryImpl
 import dev.fitface.studio.core.data.FaceCatalogRepositoryImpl
 import dev.fitface.studio.core.data.db.FitFaceDatabase
 import dev.fitface.studio.core.data.db.ProjectDao
+import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.FaceCatalogRepository
 import javax.inject.Singleton
@@ -52,6 +53,14 @@ object DataModule {
     @Provides
     fun provideContentResolver(@ApplicationContext context: Context): ContentResolver =
         context.contentResolver
+
+    /**
+     * One buffer for the whole process. A report is only useful if the catalogue, the
+     * editor and the transfer all wrote into the same one, in order.
+     */
+    @Provides
+    @Singleton
+    fun provideDiagnosticsLog(): DiagnosticsLog = DiagnosticsLog()
 }
 
 internal val Migration3To4 = object : Migration(3, 4) {

@@ -116,6 +116,33 @@ The four that catch people fastest:
   every one on face `00001` — so the canvas showed the drag and snapped back.
   Cross-style edits are strict on the selected variant and best effort on the
   rest; see `StyleWidgetMatch`.
+* **The store validates `locale` against a whitelist, and Android emits values that are not
+  on it.** `resultCode=1005 "locale not supported"` on page 0 surfaces as an empty
+  catalogue, so an affected phone never gets past the first screen — and the panel blamed
+  the connection, which is how this arrived as a screenshot of a five-bar phone being told
+  to check its network. Three device-derived shapes are refused: UN M.49 numeric regions
+  (`es_419` — the *default* Spanish across Latin America — plus `en_001`, `en_150`), Java's
+  obsolete codes (Android's libcore still converts `id`→`in`, `he`→`iw`, `yi`→`ji`, while
+  the desktop JDK stopped in 17, so a JVM test cannot reproduce it through `Locale`), and
+  languages with no two-letter code (`fil`, `tl`, `qu`, `gn`). The pair is case-sensitive
+  and a bare language is refused, so `en` alone is not a fallback. `CatalogLocale` repairs
+  what it can recognise — every specific country is accepted, so only the region is
+  replaced, which keeps the reader's own language — but the whitelist is not enumerable and
+  `qu_PE` is well-formed and still refused, so `CatalogRetry` retries the page once in
+  `en_US`. Do not reduce that to normalisation alone, and do not make the fallback an empty
+  `locale`: it is accepted, and serves **Korean** names, because `cc` is hardcoded `KOR`.
+* **`WatchFaceException.technicalDetail` is the half that explains a failure.** It was
+  filled in at every throw site and then dropped by both UI funnels, so the store's result
+  code existed in the process and reached nobody. Both funnels record it into
+  `DiagnosticsLog` now, and that buffer is what `DiagnosticsReporter` renders for the
+  "Report a problem" dialog. The report is built from an **allowlist** — never serialise a
+  state object into it. `Settings.Secure.ANDROID_ID` (sent as `extuk`, which is why no full
+  URL is ever recorded), Bluetooth addresses and bonded-watch names, the `csc`/`mcc`/`mnc`
+  fingerprints, and any picked image's URI stay out; `DiagnosticsRedaction` is the second
+  line, not the first.
+* **A snackbar is not a place to keep a reason.** Both routes clear it as soon as it has
+  been shown, so an empty state that outlives it needs its own field —
+  `LibraryUiState.catalogFailure` — or it falls back to asserting something it cannot know.
 * **Not every catalogue entry has a container.** Face `00254` ("Photos") is a
   601-file customisation app with no `.bin` at all — the watch renders it itself.
   `Fit3NoContainerException` → `WatchFaceException.isUneditablePackage` → the

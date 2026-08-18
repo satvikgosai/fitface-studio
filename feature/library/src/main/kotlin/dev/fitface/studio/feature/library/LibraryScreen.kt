@@ -69,9 +69,12 @@ import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.FaceStyleOption
 import dev.fitface.studio.core.model.ProjectSummary
+import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitButton
+import dev.fitface.studio.core.ui.ReportProblemAction
 import dev.fitface.studio.core.ui.FitChip
 import dev.fitface.studio.core.ui.FitFaceType
+import dev.fitface.studio.core.ui.fitColors
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
@@ -103,11 +106,16 @@ fun LibraryRoute(
         }
     }
 
+    state.diagnosticsReport?.let { report ->
+        DiagnosticsDialog(report = report, onDismiss = viewModel::dismissDiagnostics)
+    }
+
     LibraryScreen(
         state = state,
         projects = projects,
         snackbar = snackbar,
         onRefresh = viewModel::refreshCatalog,
+        onReportProblem = viewModel::showDiagnostics,
         onQuery = viewModel::setQuery,
         onSort = viewModel::setSort,
         onFace = viewModel::selectFace,
@@ -128,6 +136,7 @@ private fun LibraryScreen(
     projects: List<ProjectSummary>,
     snackbar: SnackbarHostState,
     onRefresh: () -> Unit,
+    onReportProblem: () -> Unit,
     onQuery: (String) -> Unit,
     onSort: (CatalogSort) -> Unit,
     onFace: (CatalogFace) -> Unit,
@@ -149,10 +158,12 @@ private fun LibraryScreen(
         ) {
             LibraryHeader(
                 page = page,
+                state = state,
                 projectCount = projects.size,
                 loading = state.isLoadingCatalog,
                 onPage = { page = it },
                 onRefresh = onRefresh,
+                onReportProblem = onReportProblem,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             when (page) {
@@ -194,10 +205,12 @@ private fun LibraryScreen(
 @Composable
 private fun LibraryHeader(
     page: LibraryPage,
+    state: LibraryUiState,
     projectCount: Int,
     loading: Boolean,
     onPage: (LibraryPage) -> Unit,
     onRefresh: () -> Unit,
+    onReportProblem: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -225,6 +238,17 @@ private fun LibraryHeader(
                     modifier = Modifier.padding(top = 7.dp),
                     style = MaterialTheme.typography.headlineLarge,
                 )
+            }
+            if (state.previousCrash) {
+                TextButton(onClick = onReportProblem) {
+                    Text(
+                        stringResource(R.string.library_previous_crash),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.fitColors.warning,
+                    )
+                }
+            } else {
+                ReportProblemAction(onReportProblem)
             }
             if (page == LibraryPage.WatchFaces) {
                 TextButton(onClick = onRefresh, enabled = !loading) {
@@ -355,7 +379,9 @@ private fun WatchFaceGrid(
         if (state.isLoadingCatalog && state.faces.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) { CatalogLoading() }
         } else if (state.faces.isEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) { CatalogUnavailable(onRefresh) }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                CatalogUnavailable(state.catalogFailure, onRefresh)
+            }
         } else if (state.visibleFaces.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Column(
@@ -416,7 +442,7 @@ private fun CatalogLoading() {
 }
 
 @Composable
-private fun CatalogUnavailable(onRefresh: () -> Unit) {
+private fun CatalogUnavailable(reason: String?, onRefresh: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -429,7 +455,10 @@ private fun CatalogUnavailable(onRefresh: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
         )
         Text(
-            stringResource(R.string.library_unavailable_detail),
+            // The panel used to assert a connection fault whatever had happened, which is
+            // how a store rejecting this phone's locale read as a network problem on a
+            // phone with five bars and Wi-Fi.
+            reason ?: stringResource(R.string.library_unavailable_detail),
             modifier = Modifier.padding(top = 8.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -8,7 +8,10 @@ import dev.fitface.studio.core.model.FaceCatalogRepository
 import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.FaceStyleOption
 import dev.fitface.studio.core.model.ProjectSummary
+import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WatchFaceRepository
+import dev.fitface.studio.core.data.DiagnosticsReporter
+import dev.fitface.studio.core.model.DiagnosticsLog
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -70,7 +73,7 @@ class LibraryViewModelTest {
     fun tappingAFaceWhileTheCatalogueRefreshesOpensTheSheet() {
         val catalog = FakeCatalog(cached = catalogue.copy(fromCache = true))
 
-        val viewModel = LibraryViewModel(repository, catalog)
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
         settle()
 
         val opening = viewModel.state.value
@@ -98,7 +101,7 @@ class LibraryViewModelTest {
             uneditable = setOf(faces[0].appId),
         )
 
-        val viewModel = LibraryViewModel(repository, catalog)
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
         settle()
         viewModel.selectFace(faces[0])
 
@@ -115,7 +118,7 @@ class LibraryViewModelTest {
     fun tappingAnotherFaceWhileADownloadIsInFlightIsIgnored() {
         val catalog = FakeCatalog(loaded = catalogue)
 
-        val viewModel = LibraryViewModel(repository, catalog)
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
         settle()
         assertFalse(viewModel.state.value.isLoadingCatalog)
         viewModel.selectFace(faces[0])
@@ -136,7 +139,7 @@ class LibraryViewModelTest {
         coEvery { repository.openProject(any()) } coAnswers { awaitCancellation() }
         val catalog = FakeCatalog(loaded = catalogue)
 
-        val viewModel = LibraryViewModel(repository, catalog)
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
         settle()
         viewModel.openProject(project)
         settle()
@@ -156,7 +159,7 @@ class LibraryViewModelTest {
     fun openingAProjectStillRefusesWhileTheCatalogueIsRefreshing() {
         val catalog = FakeCatalog(cached = catalogue.copy(fromCache = true))
 
-        val viewModel = LibraryViewModel(repository, catalog)
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
         settle()
         viewModel.openProject(project)
         settle()
@@ -170,7 +173,7 @@ class LibraryViewModelTest {
     fun aRefreshInFlightIsNotStartedTwice() {
         val catalog = FakeCatalog(cached = catalogue.copy(fromCache = true))
 
-        val viewModel = LibraryViewModel(repository, catalog)
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
         settle()
         viewModel.refreshCatalog()
         settle()
@@ -227,9 +230,11 @@ class LibraryViewModelTest {
         private val cached: FaceCatalog? = null,
         loaded: FaceCatalog? = null,
         private val uneditable: Set<String> = emptySet(),
+        failure: Throwable? = null,
     ) : FaceCatalogRepository {
         private val refresh = CompletableDeferred<FaceCatalog>().apply {
             if (loaded != null) complete(loaded)
+            if (failure != null) completeExceptionally(failure)
         }
         private val download = CompletableDeferred<FacePackage>()
 
@@ -252,5 +257,74 @@ class LibraryViewModelTest {
             styleId: Int,
             onProgress: (DownloadProgress) -> Unit,
         ): FacePackage = download.await()
+    }
+
+    private fun reporter(): DiagnosticsReporter = mockk(relaxed = true)
+
+    /**
+     * What the screenshot from the field showed: a phone with full signal being told to
+     * check its connection, while the reason the store gave was thrown away.
+     */
+    @Test
+    fun aRefusedCatalogueKeepsItsRealReasonAfterTheSnackbarIsGone() {
+        val catalog = FakeCatalog(
+            failure = WatchFaceException(
+                "The watch-face catalogue did not return any faces.",
+                "resultCode=1005 message=locale not supported",
+            ),
+        )
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+
+        val state = viewModel.state.value
+        // The snackbar is transient and is cleared as soon as it has been shown; the
+        // panel outlives it by minutes, and used to assert a network fault on its own.
+        viewModel.clearError(requireNotNull(state.error).id)
+        settle()
+
+        assertEquals(
+            "The watch-face catalogue did not return any faces.",
+            viewModel.state.value.catalogFailure,
+        )
+        assertNull("the snackbar should have been cleared", viewModel.state.value.error)
+    }
+
+    @Test
+    fun anEmptyCatalogueIsNotAnnouncedAsALiveOne() {
+        // catalogFromCache kept its default through the failure branch, so the header read
+        // "LIVE CATALOGUE - 0 faces" directly above a panel saying it was unavailable.
+        val catalog = FakeCatalog(failure = WatchFaceException("nope"))
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+
+        assertTrue(viewModel.state.value.faces.isEmpty())
+        assertFalse(viewModel.state.value.catalogFromCache)
+    }
+
+    @Test
+    fun theStoresResultCodeReachesTheReportInsteadOfBeingDropped() {
+        // technicalDetail was captured at the throw site and discarded here, which is why
+        // a phone that could never load the catalogue had nothing to send but a sentence.
+        val diagnostics = DiagnosticsLog()
+        val catalog = FakeCatalog(
+            failure = WatchFaceException(
+                "The watch-face catalogue did not return any faces.",
+                "resultCode=1005 message=locale not supported",
+            ),
+        )
+        LibraryViewModel(repository, catalog, diagnostics, reporter())
+        settle()
+
+        val recorded = diagnostics.snapshot().single { it.tag == "LibraryViewModel" }
+        assertEquals("resultCode=1005 message=locale not supported", recorded.detail)
+    }
+
+    @Test
+    fun aSuccessfulLoadClearsAnEarlierFailure() {
+        val catalog = FakeCatalog(loaded = catalogue)
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+
+        assertNull(viewModel.state.value.catalogFailure)
     }
 }

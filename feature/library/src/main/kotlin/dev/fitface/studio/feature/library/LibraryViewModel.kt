@@ -1,11 +1,13 @@
 package dev.fitface.studio.feature.library
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.fitface.studio.core.model.CatalogFace
+import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.CatalogSort
+import dev.fitface.studio.core.model.DiagnosticsLog
+import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.FaceCatalogRepository
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.UserMessage
@@ -43,6 +45,24 @@ data class LibraryUiState(
     val sheetError: String? = null,
     val uneditableAppIds: Set<String> = emptySet(),
     val error: UserMessage? = null,
+    /**
+     * Why the catalogue is empty, kept until the next successful load.
+     *
+     * Separate from [error] because that one is a snackbar: it is cleared the moment it
+     * has been shown, and the empty state outlives it by minutes. Leaving the panel to
+     * assert "Check your connection" on its own is what made a rejected locale read as a
+     * network problem on a phone with five bars.
+     */
+    val catalogFailure: String? = null,
+    /** The pasteable report, non-null while the dialog is open. */
+    val diagnosticsReport: String? = null,
+    /**
+     * The last run ended in a crash whose account has not been shown yet.
+     *
+     * Surfaced here because there is nowhere else it can be: the process was gone before
+     * anything could be said at the time, and a sideloaded APK reports to no console.
+     */
+    val previousCrash: Boolean = false,
 ) {
     val isWorking: Boolean
         get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null
@@ -86,6 +106,8 @@ sealed interface LibraryEvent {
 class LibraryViewModel @Inject constructor(
     private val repository: WatchFaceRepository,
     private val catalog: FaceCatalogRepository,
+    private val diagnostics: DiagnosticsLog,
+    private val reporter: DiagnosticsReporter,
 ) : ViewModel() {
     val projects = repository.observeProjects()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -99,6 +121,9 @@ class LibraryViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            if (reporter.hasPreviousCrash()) {
+                mutableState.update { it.copy(previousCrash = true) }
+            }
             runCatching { catalog.uneditableAppIds() }.getOrNull()?.let { known ->
                 mutableState.update { it.copy(uneditableAppIds = known) }
             }
@@ -134,12 +159,21 @@ class LibraryViewModel @Inject constructor(
                         styleCount = loaded.styleCount,
                         catalogFromCache = loaded.fromCache,
                         catalogFetchedAtEpochMillis = loaded.fetchedAtEpochMillis,
+                        catalogFailure = null,
                     )
                 }
             }
             .onFailure { error ->
+                val message = error.userMessage()
                 mutableState.update {
-                    it.copy(isLoadingCatalog = false, error = error.userMessage())
+                    it.copy(
+                        isLoadingCatalog = false,
+                        error = message,
+                        catalogFailure = message.text,
+                        // Without this the header keeps its default and announces a live
+                        // catalogue of nothing, next to a panel saying it is unavailable.
+                        catalogFromCache = it.faces.isNotEmpty() && it.catalogFromCache,
+                    )
                 }
             }
     }
@@ -254,6 +288,30 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    fun showDiagnostics() {
+        viewModelScope.launch {
+            val state = mutableState.value
+            val section = DiagnosticsSection(
+                title = "catalogue",
+                lines = listOfNotNull(
+                    "faces=${state.faces.size} styles=${state.styleCount} " +
+                        "cached=${state.catalogFromCache}",
+                    state.catalogFailure?.let { "failure=$it" },
+                ),
+            )
+            mutableState.update { it.copy(diagnosticsReport = reporter.render(listOf(section))) }
+        }
+    }
+
+    fun dismissDiagnostics() {
+        // The crash is cleared on dismissal rather than on render, so closing the dialog
+        // is what marks it seen. Left in place, every later report would carry a crash
+        // from an unrelated session and read as one that keeps happening.
+        val seen = mutableState.value.previousCrash
+        mutableState.update { it.copy(diagnosticsReport = null, previousCrash = false) }
+        if (seen) viewModelScope.launch { reporter.clearPreviousCrash() }
+    }
+
     fun clearError(id: Long) {
         mutableState.update { current ->
             if (current.error?.id == id) current.copy(error = null) else current
@@ -262,7 +320,16 @@ class LibraryViewModel @Inject constructor(
 
     private fun Throwable.userMessage(): UserMessage {
         if (this is CancellationException) throw this
-        Log.w(TAG, "Catalogue operation failed", this)
+        // technicalDetail is the half that explains the failure and it used to stop here:
+        // the store's `resultCode=1005 locale not supported` was captured at the throw
+        // site and then discarded, leaving a phone that could never load the catalogue
+        // with nothing but "Check your connection" to go on.
+        diagnostics.warn(
+            TAG,
+            "Catalogue operation failed",
+            (this as? WatchFaceException)?.technicalDetail,
+            this,
+        )
         val text = when (this) {
             is WatchFaceException -> userMessage
             is SecurityException -> "The downloaded package could not be opened safely."

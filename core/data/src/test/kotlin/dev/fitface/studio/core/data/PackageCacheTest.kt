@@ -3,6 +3,7 @@ package dev.fitface.studio.core.data
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import dev.fitface.studio.core.model.CatalogFace
+import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.FaceCatalog
 import dev.fitface.studio.core.model.FaceStyleOption
 import java.io.File
@@ -44,7 +45,7 @@ class PackageCacheTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
-        cache = PackageCache(context)
+        cache = PackageCache(context, DiagnosticsLog())
         cache.clear()
     }
 
