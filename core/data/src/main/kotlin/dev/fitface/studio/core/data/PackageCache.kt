@@ -1,9 +1,9 @@
 package dev.fitface.studio.core.data
 
 import android.content.Context
-import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.model.CatalogFace
+import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.FaceCatalog
 import dev.fitface.studio.core.model.FaceStyleOption
 import java.io.File
@@ -23,6 +23,7 @@ import kotlinx.serialization.json.Json
 @Singleton
 class PackageCache @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val diagnostics: DiagnosticsLog,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -37,14 +38,14 @@ class PackageCache @Inject constructor(
                 ?.readText()
                 ?.let { json.decodeFromString<CachedCatalog>(it) }
         } catch (error: Exception) {
-            Log.w(TAG, "Discarding unreadable catalogue cache", error)
+            diagnostics.warn(TAG, "Discarding unreadable catalogue cache", error = error)
             catalogFile.delete()
             null
         } ?: return null
         // A cache stamped with another version is never going to be accepted again, so
         // it is deleted here rather than re-read and re-rejected on every cold start.
         if (cached.version != CacheVersion) {
-            Log.w(TAG, "Discarding catalogue cache written at version ${cached.version}")
+            diagnostics.warn(TAG, "Discarding catalogue cache written at version ${cached.version}")
             catalogFile.delete()
             return null
         }
@@ -56,7 +57,7 @@ class PackageCache @Inject constructor(
             root.mkdirs()
             writeAtomically(catalogFile, json.encodeToString(CachedCatalog.of(catalog)).toByteArray())
         } catch (error: Exception) {
-            Log.w(TAG, "Could not cache the catalogue", error)
+            diagnostics.warn(TAG, "Could not cache the catalogue", error = error)
         }
     }
 
@@ -66,7 +67,7 @@ class PackageCache @Inject constructor(
         return try {
             file.readBytes()
         } catch (error: IOException) {
-            Log.w(TAG, "Could not read cached package $appId@$versionCode", error)
+            diagnostics.warn(TAG, "Could not read cached package $appId@$versionCode", error = error)
             file.delete()
             null
         }
@@ -78,7 +79,7 @@ class PackageCache @Inject constructor(
             evictOtherVersions(appId, versionCode)
             writeAtomically(packageFile(appId, versionCode), bytes)
         } catch (error: Exception) {
-            Log.w(TAG, "Could not cache package $appId@$versionCode", error)
+            diagnostics.warn(TAG, "Could not cache package $appId@$versionCode", error = error)
         }
     }
 
@@ -105,7 +106,7 @@ class PackageCache @Inject constructor(
             ?.let { json.decodeFromString<Set<String>>(it) }
             .orEmpty()
     } catch (error: Exception) {
-        Log.w(TAG, "Discarding unreadable uneditable list", error)
+        diagnostics.warn(TAG, "Discarding unreadable uneditable list", error = error)
         uneditableFile.delete()
         emptySet()
     }
@@ -118,7 +119,7 @@ class PackageCache @Inject constructor(
                 json.encodeToString(readUneditable() + appId).toByteArray(),
             )
         } catch (error: Exception) {
-            Log.w(TAG, "Could not record $appId as uneditable", error)
+            diagnostics.warn(TAG, "Could not record $appId as uneditable", error = error)
         }
     }
 

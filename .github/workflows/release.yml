@@ -121,8 +121,8 @@ jobs:
           build time and verified against pinned SHA-256 hashes. It is a convenience
           build of an experimental personal project for use on hardware you own — not a
           product, not supported, and not a grant of any rights in that SDK. See
-          [`NOTICE.md`](../blob/main/NOTICE.md), and read
-          [Installing to the watch](../blob/main/README.md#installing-to-the-watch)
+          [`NOTICE.md`](../main/NOTICE.md), and read
+          [Installing to the watch](../main/README.md#installing-to-the-watch)
           before you send anything to a watch.
           EOF
           )

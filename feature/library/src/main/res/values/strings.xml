@@ -32,8 +32,11 @@
     <string name="library_loading_title">Loading watch faces…</string>
     <string name="library_loading_detail">requesting faces and style previews</string>
     <string name="library_unavailable_title">Catalogue unavailable</string>
-    <string name="library_unavailable_detail">Check your connection, then request the catalogue again.</string>
+    <!-- Only used when nothing recorded a reason; the real one is shown in its place. -->
+    <string name="library_unavailable_detail">No faces were returned. Request the catalogue again, and use Report a problem if it keeps happening.</string>
     <string name="library_try_again">Try again</string>
+    <!-- Replaces the report action after a crash, so the offer finds the person. -->
+    <string name="library_previous_crash">Report crash</string>
 
     <!-- Face card -->
     <plurals name="library_style_count">

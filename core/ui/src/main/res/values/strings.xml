@@ -9,4 +9,12 @@
     <string name="ui_status_pass">OK</string>
     <string name="ui_status_warning">WARN</string>
     <string name="ui_status_fail">FAIL</string>
+
+    <!-- The pasteable bug report, reachable from both top bars. -->
+    <string name="ui_diagnostics_action">Report a problem</string>
+    <string name="ui_diagnostics_title">Report a problem</string>
+    <string name="ui_diagnostics_blurb">Copy this and paste it into your bug report. It holds the app version, this phone\'s Android version and model, its language setting, and what the app has done this session. It does not include your device identifiers, your watch\'s Bluetooth address, or anything about the images you picked.</string>
+    <string name="ui_diagnostics_copy">Copy</string>
+    <string name="ui_diagnostics_close">Close</string>
+    <string name="ui_diagnostics_copied">Report copied</string>
 </resources>

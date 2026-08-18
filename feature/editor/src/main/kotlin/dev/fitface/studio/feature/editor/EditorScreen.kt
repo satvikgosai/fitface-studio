@@ -109,9 +109,11 @@ import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.mebibytes
 import dev.fitface.studio.core.model.drawTop
 import dev.fitface.studio.core.model.encodeCoordinate
+import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
 import dev.fitface.studio.core.ui.FitChip
+import dev.fitface.studio.core.ui.ReportProblemAction
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.FitTopBar
@@ -174,10 +176,15 @@ fun EditorRoute(
         viewModel.refreshDirectInstallEnvironment()
     }
 
+    state.diagnosticsReport?.let { report ->
+        DiagnosticsDialog(report = report, onDismiss = viewModel::dismissDiagnostics)
+    }
+
     EditorScreen(
         state = state,
         snackbar = snackbar,
         onBack = onBack,
+        onReportProblem = viewModel::showDiagnostics,
         onStyle = viewModel::selectStyle,
         onWidget = viewModel::selectWidget,
         onMoveWidget = viewModel::moveWidget,
@@ -249,6 +256,7 @@ private fun EditorScreen(
     state: EditorUiState,
     snackbar: SnackbarHostState,
     onBack: () -> Unit,
+    onReportProblem: () -> Unit,
     onStyle: (String) -> Unit,
     onWidget: (Int?) -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
@@ -330,6 +338,7 @@ private fun EditorScreen(
                     selected = selected,
                     onBack = goBack,
                     onProject = { navigate(EditorPage.Project) },
+                    onReportProblem = onReportProblem,
                 )
                 Box(
                     Modifier.fillMaxWidth().height(1.dp)
@@ -471,6 +480,7 @@ private fun EditorHeader(
     selected: WidgetGuide?,
     onBack: () -> Unit,
     onProject: () -> Unit,
+    onReportProblem: () -> Unit,
 ) {
     val title = when (page) {
         EditorPage.Canvas -> snapshot.faceName
@@ -520,6 +530,7 @@ private fun EditorHeader(
         EditorPage.Project -> snapshot.sourceName
     }
     FitTopBar(title = title, subtitle = subtitle, onBack = onBack) {
+        ReportProblemAction(onReportProblem)
         if (page == EditorPage.Canvas) {
             if (snapshot.isDirty) {
                 Text(

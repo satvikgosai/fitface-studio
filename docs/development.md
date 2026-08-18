@@ -93,13 +93,13 @@ anyone holding it can produce an APK a device will accept as an update.
   :app:lintDebug
 ```
 
-Current baseline: **195 unit tests, 0 failures, 0 lint errors, 13 lint warnings.**
+Current baseline: **222 unit tests, 0 failures, 0 lint errors, 13 lint warnings.**
 Every warning is a dependency- or SDK-version notice in a build file, none in this
 code, so the count tracks whatever the ecosystem has published since.
 
-81 of the 195 read the uncommitted corpus and skip without it, and
+81 of the 222 read the uncommitted corpus and skip without it, and
 `IdentityTransferProtocolTest` skips without the recorded protocol fixtures. A clean
-clone therefore runs 113 and still passes.
+clone therefore runs 140 and still passes.
 
 With the full corpus present, `EveryFaceRendersTest` sweeps all 99 editable
 catalogue faces — about three minutes — and checks that each one:

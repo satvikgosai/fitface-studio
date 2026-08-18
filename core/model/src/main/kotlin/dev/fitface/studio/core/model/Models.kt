@@ -651,6 +651,17 @@ interface WatchFaceRepository {
     suspend fun resetEdits(): EditorSnapshot
 
     suspend fun prepareDirectInstall(): DirectInstallPayload
+
+    /**
+     * What the open editing session can safely say about itself in a bug report, or null
+     * when nothing is open.
+     *
+     * Lives here rather than being assembled from [EditorSnapshot] because the ordered
+     * edit history is the part that matters and the snapshot does not carry it — and
+     * because a face that draws wrong usually threw nothing, so the sequence of
+     * operations is the whole account of what happened.
+     */
+    suspend fun diagnosticsSection(): DiagnosticsSection?
 }
 
 /** Progress reported while a catalogue package downloads. */

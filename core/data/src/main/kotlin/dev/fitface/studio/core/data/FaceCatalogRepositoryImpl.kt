@@ -7,6 +7,7 @@ import android.provider.Settings
 import android.telephony.TelephonyManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.model.CatalogFace
+import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DownloadProgress
 import dev.fitface.studio.core.model.FaceCatalog
 import dev.fitface.studio.core.model.FaceCatalogRepository
@@ -43,6 +44,7 @@ import org.w3c.dom.Node
 class FaceCatalogRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val cache: PackageCache,
+    private val diagnostics: DiagnosticsLog,
 ) : FaceCatalogRepository {
     private val client = OkHttpClient.Builder()
         .followRedirects(true)
@@ -66,32 +68,91 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             if (!forceRefresh) {
                 cache.readCatalog()
                     ?.takeIf { it.fetchedAtEpochMillis > System.currentTimeMillis() - CatalogTtlMillis }
-                    ?.let { return@withContext it }
+                    ?.let {
+                        // Recorded so a report from a warm start says why the network was
+                        // never touched, rather than showing an empty log that reads as
+                        // nothing having happened.
+                        diagnostics.info(
+                            TAG,
+                            "Catalogue served from cache",
+                            "faces=${it.faces.size} styles=${it.styleCount}",
+                        )
+                        return@withContext it
+                    }
             }
-            val faces = mutableListOf<CatalogFace>()
-            var start = 1
-            var page = 0
-            while (page < MaxCatalogPages) {
-                val xml = getText(catalogUrl(start, start + PageSize - 1))
-                val chunk = CatalogXmlParser.parseCatalogPage(xml, allowEmpty = page > 0)
-                faces += chunk.faces
-                page++
-                if (chunk.endOfList || chunk.rawCount < PageSize) break
-                start += PageSize
-            }
-            if (faces.isEmpty()) {
+            try {
+                fetchCatalog()
+            } catch (error: WatchFaceException) {
                 // A failed refresh must not wipe a catalogue the user can still browse.
-                cache.readCatalog()?.let { return@withContext it }
-                throw WatchFaceException("The catalogue returned no compatible Fit3 faces.")
+                // Every failure has to reach this guard: it used to sit after the paging
+                // loop, where a throw out of the network call or the parser stepped
+                // straight over it and only a page that parsed to nothing was covered.
+                cache.readCatalog()?.let {
+                    diagnostics.warn(TAG, "Catalogue refresh failed; keeping the cached list")
+                    return@withContext it
+                }
+                throw error
             }
-            val catalog = FaceCatalog(
-                faces = faces.distinctBy(CatalogFace::productId),
-                styleCount = faces.sumOf { it.styles.size },
-                fetchedAtEpochMillis = System.currentTimeMillis(),
-            )
-            cache.writeCatalog(catalog)
-            catalog
         }
+
+    private fun fetchCatalog(): FaceCatalog {
+        val faces = mutableListOf<CatalogFace>()
+        var locale = catalogLocale()
+        var start = 1
+        var page = 0
+        while (page < MaxCatalogPages) {
+            val chunk = try {
+                fetchCatalogPage(start, locale, allowEmpty = page > 0)
+            } catch (rejection: CatalogRejected) {
+                // The whitelist is not enumerable from outside, so a normalised locale is
+                // not proof of an accepted one — qu_PE is well-formed and still refused.
+                // Retrying is what makes this recoverable at all; normalising upstream
+                // just keeps the reader's own language most of the time.
+                val retry = CatalogRetry.localeAfter(rejection, locale)
+                    ?: throw rejection.asWatchFaceException()
+                diagnostics.warn(
+                    TAG,
+                    "The store refused this phone's locale; retrying in $retry",
+                    "locale=$locale resultCode=${rejection.resultCode} " +
+                        "message=${rejection.resultMessage}",
+                )
+                locale = retry
+                try {
+                    fetchCatalogPage(start, locale, allowEmpty = page > 0)
+                } catch (retried: CatalogRejected) {
+                    throw retried.asWatchFaceException()
+                }
+            }
+            faces += chunk.faces
+            page++
+            if (chunk.endOfList || chunk.rawCount < PageSize) break
+            start += PageSize
+        }
+        if (faces.isEmpty()) {
+            throw WatchFaceException(
+                "The catalogue returned no compatible Fit3 faces.",
+                "pages=$page locale=$locale",
+            )
+        }
+        val catalog = FaceCatalog(
+            faces = faces.distinctBy(CatalogFace::productId),
+            styleCount = faces.sumOf { it.styles.size },
+            fetchedAtEpochMillis = System.currentTimeMillis(),
+        )
+        cache.writeCatalog(catalog)
+        diagnostics.info(
+            TAG,
+            "Catalogue loaded",
+            "faces=${catalog.faces.size} styles=${catalog.styleCount} locale=$locale",
+        )
+        return catalog
+    }
+
+    private fun fetchCatalogPage(start: Int, locale: String, allowEmpty: Boolean): CatalogPage =
+        CatalogXmlParser.parseCatalogPage(
+            getText(catalogUrl(start, start + PageSize - 1, locale)),
+            allowEmpty = allowEmpty,
+        )
 
     override suspend fun downloadPackage(
         face: CatalogFace,
@@ -101,6 +162,12 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         require(face.styles.any { it.id == styleId }) {
             "Style $styleId is not available for ${face.name}"
         }
+        diagnostics.info(
+            TAG,
+            "Opening a face package",
+            "face=${face.faceId} style=$styleId version=${face.versionCode} " +
+                "size=${face.packageSize}",
+        )
         val packageBytes = cache.readPackage(face.appId, face.versionCode) ?: run {
             checkUpdate(face)
             val metadata = requestDownload(face)
@@ -119,7 +186,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         )
     }
 
-    private fun catalogUrl(startNum: Int, endNum: Int): HttpUrl =
+    private fun catalogUrl(startNum: Int, endNum: Int, locale: String): HttpUrl =
         endpoint("product/getContentCategoryProductList.as")
             .newBuilder()
             .addQueryParameter("imgWidth", "216")
@@ -130,7 +197,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             .addQueryParameter("cc", CountryCode)
             .addQueryParameter("extraInfo", "screenshot")
             .addQueryParameter("callerId", PluginPackage)
-            .addQueryParameter("locale", catalogLocale())
+            .addQueryParameter("locale", locale)
             .addQueryParameter("alignOrder", "recent")
             .addQueryParameter("contentCategoryID", ContentCategoryId)
             .addQueryParameter("mcc", mobileNetwork().first)
@@ -331,11 +398,8 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         type.getMethod("get", String::class.java).invoke(null, key) as? String
     }.getOrNull()
 
-    private fun catalogLocale(): String {
-        val locale = Locale.getDefault()
-        val country = locale.country.takeIf(String::isNotBlank) ?: "US"
-        return "${locale.language.ifBlank { "en" }}_$country"
-    }
+    private fun catalogLocale(): String =
+        CatalogLocale.of(Locale.getDefault(), context.simCatalogRegion())
 
     private fun abiType(): String = when {
         Build.SUPPORTED_64_BIT_ABIS.isNotEmpty() -> "64"
@@ -348,6 +412,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
     }.getOrDefault("0")
 
     private companion object {
+        const val TAG = "FaceCatalog"
         const val ContentCategoryId = "0000004252"
         const val CountryCode = "KOR"
         const val DeviceModel = "SM-R390"
@@ -384,6 +449,29 @@ internal data class CatalogPage(
     val endOfList: Boolean,
 )
 
+/**
+ * The store answered a catalogue request with a non-zero `resultCode`.
+ *
+ * Typed so the repository can recognise [LocaleNotSupported] and retry rather than
+ * matching on a message, and so the code survives into the report instead of being
+ * flattened into prose the moment it reaches the UI.
+ */
+internal class CatalogRejected(
+    val resultCode: Int?,
+    val resultMessage: String,
+) : Exception("catalogue resultCode=$resultCode $resultMessage") {
+    fun asWatchFaceException(): WatchFaceException = WatchFaceException(
+        "The watch-face catalogue did not return any faces.",
+        "resultCode=$resultCode message=$resultMessage",
+        this,
+    )
+
+    companion object {
+        /** The pair in `locale` is not on the store's whitelist. */
+        const val LocaleNotSupported = 1005
+    }
+}
+
 internal object CatalogXmlParser {
     private const val FaceResolution = "256x402"
     private val FaceIdPattern = Regex("sm_r390_(\\d{4,5})$", RegexOption.IGNORE_CASE)
@@ -394,10 +482,7 @@ internal object CatalogXmlParser {
         if (resultCode != 0) {
             // 1007 "No Items" just means the previous page was the last one.
             if (allowEmpty) return CatalogPage(emptyList(), 0, endOfList = true)
-            throw WatchFaceException(
-                "The watch-face catalogue did not return any faces.",
-                "resultCode=$resultCode message=${root.directText("resultMsg")}",
-            )
+            throw CatalogRejected(resultCode, root.directText("resultMsg"))
         }
         val entries = root.directChildren("appInfo")
         return CatalogPage(
