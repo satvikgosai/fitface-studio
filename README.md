@@ -20,7 +20,7 @@ published to an app store. See [`NOTICE.md`](NOTICE.md) and [`LICENSE`](LICENSE)
 | | |
 | --- | --- |
 | Application ID | `dev.fitface.studio` |
-| Version | `0.1.1` (code `17`) |
+| Version | `0.1.2` (code `18`) |
 | Android | 9.0 (SDK 28) or newer |
 
 ## What it looks like
