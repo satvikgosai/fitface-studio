@@ -24,7 +24,7 @@ class TimeoutRecoveryTest {
             pluginInstalled = true,
             pluginLabel = "Fit3 plugin",
             companionAppInstalled = true,
-            accessoryFrameworkAvailable = true,
+            frameworkVerdict = FrameworkVerdict.USABLE,
             probed = true,
         ),
         helperNearbyGranted = true,

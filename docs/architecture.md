@@ -21,10 +21,10 @@ Editor UI -> EditorViewModel ---------------------------------------+
 
 | Module | Owns |
 | --- | --- |
-| `:app` | Application root, Hilt entry point, theme, navigation |
+| `:app` | Application root, Hilt entry point, theme, navigation, and the two app-menu dialogs |
 | `:core:model` | Framework-free contracts and immutable state. Both repository interfaces live here. |
 | `:core:format` | Container parse, validate, edit, CRC, serialize. Pure Kotlin, JVM-tested. |
-| `:core:data` | Catalogue client, on-disk caches, private projects, Room, DataStore, image I/O |
+| `:core:data` | Catalogue client, on-disk caches, private projects, Room, DataStore, image I/O, self-update |
 | `:core:delivery` | Companion probing, accessory discovery, payload verification, RFCOMM |
 | `:core:ui` | Theme tokens and shared components |
 | `:feature:library` | Catalogue browsing, sorting, download, style selection, projects |
@@ -59,8 +59,12 @@ the watch. They are the list a change has to preserve:
 3. `Session.validatedBytes()` is fail-closed and is the **only** path to the
    watch: magic, validation errors, blocking warnings, a byte-identical round
    trip, and a re-walk of every style and AOD entry.
-4. Downloads are bounded to 32 MiB, must match the declared size, and must
-   resolve over HTTPS to a trusted store host.
+4. Downloads are bounded, must match the declared size, and must resolve over
+   HTTPS to a host on an allowlist — checked both before the request and again on
+   the post-redirect URL. There are two, with different ceilings and different
+   allowlists: a face package at 32 MiB from the store hosts, and an app update at
+   64 MiB from GitHub. Neither limit is a measurement; the published APK is 36 MiB,
+   which is why the package ceiling could not simply be reused for it.
 5. Nothing is ever written outside app-private storage.
 6. A container may not pass `WATCH_CONTAINER_BYTE_CEILING` — 4 MiB exactly.
    `rebuild` refuses any growth past it and `validatedBytes()` refuses to send
@@ -112,15 +116,19 @@ every pass resamples them and visibly softens the result.
 
 | Path | Holds |
 | --- | --- |
-| `filesDir/catalog-cache/catalog.json` | The catalogue, 12 h TTL, always rendered first on launch |
+| `filesDir/catalog-cache/catalog.json` | The catalogue, 7 day TTL, always rendered first on launch |
 | `filesDir/catalog-cache/uneditable.json` | App IDs whose package carries no container |
 | `filesDir/catalog-cache/packages/<appId>@<versionCode>.apk` | Downloaded packages; older versions evicted |
 | `filesDir/projects/<id>/source.apk` | The package a project was opened from |
 | `filesDir/projects/<id>/edited.bin` | The current edited container |
 | `filesDir/projects/<id>/session.json` | Removed widget records, base64, so restore survives process death |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
+| `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
 
-A package is re-downloaded only when its `versionCode` changes.
+A package is re-downloaded only when its `versionCode` changes, and so is an update:
+a file already on disk at exactly the declared size is reused rather than fetched
+again, which is the difference between retrying a failed install and spending
+another 36 MiB.
 
 ### Why the style previews are files
 

@@ -33,9 +33,9 @@
     <string name="library_loading_detail">requesting faces and style previews</string>
     <string name="library_unavailable_title">Catalogue unavailable</string>
     <!-- Only used when nothing recorded a reason; the real one is shown in its place. -->
-    <string name="library_unavailable_detail">No faces were returned. Request the catalogue again, and use Report a problem if it keeps happening.</string>
+    <string name="library_unavailable_detail">No faces were returned. Request the catalogue again, and if it keeps happening use More options in the header to report it.</string>
     <string name="library_try_again">Try again</string>
-    <!-- Replaces the report action after a crash, so the offer finds the person. -->
+    <!-- Labels the header menu and its report entry after a crash, so the offer finds the person. -->
     <string name="library_previous_crash">Report crash</string>
 
     <!-- Face card -->

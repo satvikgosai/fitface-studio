@@ -49,6 +49,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
+    // The header's layout is measured, not eyeballed: `LibraryHeaderLayoutTest` renders the
+    // real composable and reads the positions out of it.
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
     // LibraryViewModel launches from its own init, so the ViewModel tests need a main
     // looper for Dispatchers.Main to dispatch onto.
     testImplementation(libs.robolectric)

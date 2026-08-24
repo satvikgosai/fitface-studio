@@ -102,6 +102,40 @@ Discovery itself is started from step 3's own row and nowhere else: a duplicate
 "Discover the peers" button used to sit beneath the checklist, so the page offered
 the same action twice with nothing to distinguish the copies.
 
+## What the phone has, and why it is not a gate
+
+The checklist's first step reports what was found. It does not decide anything, and three
+findings are why.
+
+**The companion app has no single package name.** It is distributed under
+`com.samsung.android.app.watchmanager` for mainstream models and
+`com.samsung.android.app.watchmanager2` for the entry-level ones, and the two are
+complementary — the store serves `watchmanager2` to an SM-A107M or SM-A115M and refuses
+`watchmanager` for exactly those models, with the same version, the same label and the same
+launchable setup activity in both. `com.samsung.android.app.watchmanagerstub` is the
+firmware preload that fronts whichever applies, and `com.samsung.android.hostmanager.app`
+is the retired predecessor. `CompanionResolution` matches all of them in order.
+
+**The companion app carries no accessory code.** Neither `watchmanager` build declares a
+`com.samsung.accessory.action.REGISTER_AGENT` receiver or `AccessoryServicesLocation`
+meta-data; it is a launcher and setup shell that installs per-device plugins. The stock
+plugin is the app that owns the channel — it declares those receivers, carries the whole
+host-manager stack and its own setup wizard, and on a non-Samsung phone it even carries the
+accessory framework as an install payload for the companion app to install. So a present
+companion app is no evidence that a channel can open, and an absent one is no evidence that
+it cannot.
+
+**Only the attempt knows.** `CompanionEnvironment` therefore exposes an
+`EnvironmentAdvisory` and nothing that gates: discovery is the arbiter. An agent that will
+not initialize lands in the recoverable `NEEDS_PLUGIN`, and it arrives through the discovery
+listener's `agent_error` outcome rather than `requestAgent`'s own callback. The plugin has
+no launchable activity, so `openCompanionApp` walks the companion list for something
+launchable and the page falls back to the plugin's app-info screen.
+
+`com.samsung.accessory` must stay declared in `<queries>` regardless of any of this: the
+SDK reaches the framework by name, so without the declaration it reports
+`LIBRARY_NOT_INSTALLED` on a phone that has it.
+
 ## Accessory SDK dependencies
 
 Accessory SDK 2.6.4 references three types supplied by `sdk-v1.0.0.jar`:

@@ -94,6 +94,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
+import dev.fitface.studio.core.delivery.EnvironmentAdvisory
 import dev.fitface.studio.core.delivery.SetupStep
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
@@ -112,14 +113,17 @@ import dev.fitface.studio.core.model.encodeCoordinate
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
+import dev.fitface.studio.core.ui.FitBadge
 import dev.fitface.studio.core.ui.FitChip
-import dev.fitface.studio.core.ui.ReportProblemAction
+import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.FitFaceType
+import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.FitTopBar
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
 import dev.fitface.studio.core.ui.fitColors
+import dev.fitface.studio.core.ui.fitText
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -128,6 +132,8 @@ import kotlin.math.roundToInt
 fun EditorRoute(
     projectId: Long,
     onBack: () -> Unit,
+    onAbout: () -> Unit,
+    onCheckForUpdate: () -> Unit,
     viewModel: EditorViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -185,6 +191,8 @@ fun EditorRoute(
         snackbar = snackbar,
         onBack = onBack,
         onReportProblem = viewModel::showDiagnostics,
+        onAbout = onAbout,
+        onCheckForUpdate = onCheckForUpdate,
         onStyle = viewModel::selectStyle,
         onWidget = viewModel::selectWidget,
         onMoveWidget = viewModel::moveWidget,
@@ -249,6 +257,19 @@ private enum class EditorPage {
             Install -> Validate
             else -> Canvas
         }
+
+    /**
+     * Whether the canvas the wide layout keeps beside this page is an editor or a picture.
+     *
+     * Outlined widgets are a promise you can drag them — the Canvas page's own hint says
+     * so in words — and the Install page was making that promise on the one page whose job
+     * is to send what has already been decided. Nothing was ever at risk there: the pane
+     * is frozen while a transfer is active, and a commit re-arms a finished one through
+     * `payloadChanged()` rather than corrupting it. The affordance contradicting the page
+     * is the bug. Install therefore gets the same read-only render the Validate page uses.
+     */
+    val canvasIsEditable: Boolean
+        get() = this != Install
 }
 
 @Composable
@@ -257,6 +278,8 @@ private fun EditorScreen(
     snackbar: SnackbarHostState,
     onBack: () -> Unit,
     onReportProblem: () -> Unit,
+    onAbout: () -> Unit,
+    onCheckForUpdate: () -> Unit,
     onStyle: (String) -> Unit,
     onWidget: (Int?) -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
@@ -339,6 +362,8 @@ private fun EditorScreen(
                     onBack = goBack,
                     onProject = { navigate(EditorPage.Project) },
                     onReportProblem = onReportProblem,
+                    onAbout = onAbout,
+                    onCheckForUpdate = onCheckForUpdate,
                 )
                 Box(
                     Modifier.fillMaxWidth().height(1.dp)
@@ -392,6 +417,7 @@ private fun EditorScreen(
                                 state = state,
                                 snapshot = snapshot,
                                 selected = selected,
+                                editable = page.canvasIsEditable,
                                 onWidget = onWidget,
                                 onMoveWidget = onMoveWidget,
                                 onTransformImage = onTransformImage,
@@ -434,8 +460,14 @@ private fun EditorUnavailable(
             verticalArrangement = Arrangement.Center,
         ) {
             if (loading) {
+                // The placeholder is a fixed 176x276dp, which is taller than a landscape
+                // phone leaves under the top bar — it pushed the spinner and "Opening…"
+                // off the bottom edge, so the screen read as a blank grey slab. Taking
+                // the height that is left and deriving the width from it keeps all three
+                // on screen; portrait still gets the full 176dp.
                 Box(
-                    Modifier.width(176.dp).aspectRatio(256f / 402f)
+                    Modifier.weight(1f, fill = false).widthIn(max = 176.dp)
+                        .aspectRatio(256f / 402f, matchHeightConstraintsFirst = true)
                         .background(
                             MaterialTheme.colorScheme.surfaceContainerHigh,
                             RoundedCornerShape(32.dp),
@@ -481,6 +513,8 @@ private fun EditorHeader(
     onBack: () -> Unit,
     onProject: () -> Unit,
     onReportProblem: () -> Unit,
+    onAbout: () -> Unit,
+    onCheckForUpdate: () -> Unit,
 ) {
     val title = when (page) {
         EditorPage.Canvas -> snapshot.faceName
@@ -529,26 +563,41 @@ private fun EditorHeader(
         EditorPage.Install -> stringResource(R.string.editor_subtitle_install)
         EditorPage.Project -> snapshot.sourceName
     }
+    // Order matters. The app menu is on every page while the badge and the overflow are
+    // Canvas-only, so it goes last: as the final child of the Row its right edge is pinned to
+    // the bar's padding and it stays put as you move between pages. Emitted first, it slid
+    // sideways whenever a neighbour appeared or vanished.
+    //
+    // Two glyphs sit side by side on Canvas and they are deliberately different shapes: `⋯`
+    // navigates to this face's Project page, `≡` opens the app-wide menu. Two ellipses would
+    // read as one control with two behaviours.
     FitTopBar(title = title, subtitle = subtitle, onBack = onBack) {
-        ReportProblemAction(onReportProblem)
-        if (page == EditorPage.Canvas) {
-            if (snapshot.isDirty) {
-                Text(
-                    stringResource(R.string.editor_badge_edited),
-                    modifier = Modifier
-                        .background(
-                            MaterialTheme.fitColors.warning.copy(alpha = .13f),
-                            RoundedCornerShape(4.dp),
-                        )
-                        .padding(horizontal = 7.dp, vertical = 4.dp),
-                    color = MaterialTheme.fitColors.warning,
-                    style = FitFaceType.micro,
-                )
-            }
-            TextButton(onClick = onProject, contentPadding = PaddingValues(horizontal = 10.dp)) {
-                Text("⋯", style = MaterialTheme.typography.titleLarge)
-            }
+        // One badge slot, whichever page has something outstanding to report. The bar is the
+        // only part of a page that does not scroll, which is why an unapplied background says
+        // so here: its commit buttons are the last children of a long scrolling column.
+        if (page == EditorPage.Canvas && snapshot.isDirty) {
+            FitBadge(
+                stringResource(R.string.editor_badge_edited),
+                MaterialTheme.fitColors.warning,
+            )
+        } else if (page == EditorPage.Background && pendingImage) {
+            FitBadge(
+                stringResource(R.string.editor_badge_unapplied),
+                MaterialTheme.fitColors.warning,
+            )
         }
+        if (page == EditorPage.Canvas) {
+            FitIconButton(
+                glyph = "⋯",
+                contentDescription = stringResource(R.string.editor_project_a11y),
+                onClick = onProject,
+            )
+        }
+        AppMenuAction(
+            onReportProblem = onReportProblem,
+            onAbout = onAbout,
+            onCheckForUpdate = onCheckForUpdate,
+        )
     }
 }
 
@@ -597,7 +646,7 @@ private fun RailItem(
     modifier: Modifier,
 ) {
     val color = if (selected) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f)
+    else MaterialTheme.fitText.secondary
     Column(
         modifier = modifier.clickable(onClick = onClick).padding(vertical = 8.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -710,62 +759,131 @@ private fun CanvasWorkspace(
     onInspect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier) {
-        // Sized against the height that is actually left, not just the width: the
-        // selection panel below appears the moment a widget is tapped, and a canvas
-        // that only honoured `fillMaxWidth().aspectRatio(…)` was clipped by exactly
-        // the height that panel took. Selecting a widget now shrinks the face instead
-        // of cutting the top and bottom off it.
-        BoxWithConstraints(
-            modifier = Modifier.weight(1f).fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            DirectWatchCanvas(
-                snapshot = snapshot,
-                editing = true,
-                selectedGlobalIndex = selected?.globalIndex,
-                pendingWidgetMove = state.pendingWidgetMove,
-                pendingImage = state.pendingImage,
-                placement = state.placement,
-                enabled = !state.isWorking && !state.directInstall.isActive,
-                onWidget = onWidget,
-                onMoveWidget = onMoveWidget,
-                onTransformImage = onTransformImage,
-                modifier = Modifier.width(fittedCanvasWidth(snapshot, CanvasMaxWidth)),
+    // Stacked, the face is only as tall as the hint and the selection panel leave it, and
+    // a landscape phone leaves all three about 340dp: the face came out a third of its
+    // portrait size, and tapping a widget — which is what adds the panel — shrank it to a
+    // dot with the hint clipped behind the panel's top edge. Under the stacked floor the
+    // page splits into two columns instead, where the face keeps the full height and the
+    // controls take width a short window has to spare. Measured here rather than read off
+    // `LocalConfiguration`, because the header and the rail have already taken their cut.
+    BoxWithConstraints(modifier) {
+        val face: @Composable (Modifier) -> Unit = { faceModifier ->
+            CanvasFace(
+                state, snapshot, selected, onWidget, onMoveWidget, onTransformImage,
+                faceModifier,
             )
         }
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                stringResource(
-                    when {
-                        selected == null -> R.string.editor_canvas_hint_none
-                        state.applyWidgetEditsToAllStyles ->
-                            R.string.editor_canvas_hint_all_styles
-                        else -> R.string.editor_canvas_hint_this_style
-                    },
-                ),
-                modifier = Modifier.widthIn(max = 300.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (selected == null) {
-                TextButton(onClick = onOpenWidgets) {
-                    Text(
-                        stringResource(R.string.editor_canvas_pick_from_list),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+        if (canvasPageSplits(maxWidth, maxHeight)) {
+            Row(Modifier.fillMaxSize()) {
+                face(Modifier.weight(1f).fillMaxHeight())
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight()
+                        .verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CanvasHint(state, selected, onOpenWidgets)
+                    selected?.let { SelectionPeek(it, snapshot, onNudgeWidget, onInspect) }
                 }
             }
-        }
-        selected?.let {
-            SelectionPeek(it, snapshot, onNudgeWidget, onInspect)
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                face(Modifier.weight(1f).fillMaxWidth())
+                CanvasHint(state, selected, onOpenWidgets)
+                selected?.let { SelectionPeek(it, snapshot, onNudgeWidget, onInspect) }
+            }
         }
     }
 }
+
+/**
+ * The face, fitted to whatever box it is handed.
+ *
+ * Sized against the height that is actually left, not just the width: the selection
+ * panel appears the moment a widget is tapped, and a canvas that only honoured
+ * `fillMaxWidth().aspectRatio(…)` was clipped by exactly the height that panel took.
+ */
+@Composable
+private fun CanvasFace(
+    state: EditorUiState,
+    snapshot: EditorSnapshot,
+    selected: WidgetGuide?,
+    onWidget: (Int?) -> Unit,
+    onMoveWidget: (Int, Int, Int) -> Unit,
+    onTransformImage: (Float, Float, Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        DirectWatchCanvas(
+            snapshot = snapshot,
+            editing = true,
+            selectedGlobalIndex = selected?.globalIndex,
+            pendingWidgetMove = state.pendingWidgetMove,
+            pendingImage = state.pendingImage,
+            placement = state.placement,
+            enabled = !state.isWorking && !state.directInstall.isActive,
+            onWidget = onWidget,
+            onMoveWidget = onMoveWidget,
+            onTransformImage = onTransformImage,
+            modifier = Modifier.width(fittedCanvasWidth(snapshot, CanvasMaxWidth)),
+        )
+    }
+}
+
+@Composable
+private fun CanvasHint(
+    state: EditorUiState,
+    selected: WidgetGuide?,
+    onOpenWidgets: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            stringResource(
+                when {
+                    selected == null -> R.string.editor_canvas_hint_none
+                    state.applyWidgetEditsToAllStyles -> R.string.editor_canvas_hint_all_styles
+                    else -> R.string.editor_canvas_hint_this_style
+                },
+            ),
+            modifier = Modifier.widthIn(max = 300.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (selected == null) {
+            TextButton(onClick = onOpenWidgets) {
+                Text(
+                    stringResource(R.string.editor_canvas_pick_from_list),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Whether the canvas page puts its face and its controls side by side.
+ *
+ * A pure function of the box the page was handed so it can be pinned by a test:
+ * `:feature:editor` cannot run Robolectric, so nothing here can measure a composable.
+ */
+internal fun canvasPageSplits(maxWidth: Dp, maxHeight: Dp): Boolean =
+    maxWidth >= CanvasSideBySideMinWidth && maxHeight < CanvasStackedMinHeight
+
+/**
+ * The height the canvas page needs before it will stack its two halves.
+ *
+ * The stacked column carries the face, the hint and — once a widget is selected — the
+ * nudge panel, which together want more than a landscape phone's ~340dp of content.
+ */
+private val CanvasStackedMinHeight = 480.dp
+
+/** And it only splits when there is width to split, which a portrait phone never has. */
+private val CanvasSideBySideMinWidth = 560.dp
 
 /**
  * The largest panel-aspect width that fits inside both constraints, never above [cap].
@@ -931,6 +1049,7 @@ private fun CanvasSidePane(
     state: EditorUiState,
     snapshot: EditorSnapshot,
     selected: WidgetGuide?,
+    editable: Boolean,
     onWidget: (Int?) -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onTransformImage: (Float, Float, Float) -> Unit,
@@ -946,16 +1065,18 @@ private fun CanvasSidePane(
         ) {
             DirectWatchCanvas(
                 snapshot = snapshot,
-                editing = true,
-                selectedGlobalIndex = selected?.globalIndex,
+                // A page that does not take edits gets no outlines and no selection
+                // either: the highlight is what says a widget is being worked on.
+                editing = editable,
+                selectedGlobalIndex = selected?.globalIndex?.takeIf { editable },
                 pendingWidgetMove = state.pendingWidgetMove,
                 pendingImage = state.pendingImage,
                 placement = state.placement,
-                // The same gate `CanvasWorkspace` uses. This pane only tested
+                // Otherwise the same gate `CanvasWorkspace` uses. This pane only tested
                 // `isWorking`, so the wide layout let a widget be dragged while an
                 // install was in flight — and that commit invalidates the transfer
                 // through `payloadChanged()` the moment it lands.
-                enabled = !state.isWorking && !state.directInstall.isActive,
+                enabled = editable && !state.isWorking && !state.directInstall.isActive,
                 onWidget = onWidget,
                 onMoveWidget = onMoveWidget,
                 onTransformImage = onTransformImage,
@@ -1047,7 +1168,7 @@ private fun SectionHeading(
             detail,
             modifier = Modifier.padding(top = 5.dp),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+            color = MaterialTheme.fitText.secondary,
         )
     }
 }
@@ -1114,18 +1235,14 @@ private fun WidgetRow(
                         color = MaterialTheme.fitColors.warning,
                     )
                 }
+                // A property of the record, so it reads as one — and keeping it off the line
+                // below is what stops that line wrapping.
+                widget.frameCount?.let { frames ->
+                    MicroLabel(stringResource(R.string.editor_row_frames, frames))
+                }
             }
             Text(
-                widget.frameCount?.let { frames ->
-                    stringResource(
-                        R.string.editor_row_record_frames,
-                        widget.type,
-                        widget.sequenceId,
-                        widget.width,
-                        widget.height,
-                        frames,
-                    )
-                } ?: stringResource(
+                stringResource(
                     R.string.editor_row_record,
                     widget.type,
                     widget.sequenceId,
@@ -1133,8 +1250,10 @@ private fun WidgetRow(
                     widget.height,
                 ),
                 modifier = Modifier.padding(top = 2.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
         Text(
@@ -1270,7 +1389,7 @@ private fun RemovedWidgetRow(
                     removed.recordsByStyle.size,
                 ),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
         FitButton(
@@ -1407,7 +1526,7 @@ private fun InspectorWorkspace(
                 ),
                 modifier = Modifier.padding(top = 9.dp),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
         Column(
@@ -1453,7 +1572,7 @@ private fun InspectorWorkspace(
                 widget.supportMessage,
                 modifier = Modifier.padding(top = 6.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
             widget.duplicateSourceGlobalIndex?.let { source ->
                 MicroLabel(
@@ -1544,7 +1663,7 @@ private fun InspectorWorkspace(
             Text(
                 stringResource(R.string.editor_destructive_note),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
     }
@@ -1576,7 +1695,7 @@ private fun SpriteSizeControls(
         Text(
             stringResource(R.string.editor_size_value, widget.width, widget.height),
             modifier = Modifier.padding(top = 9.dp),
-            style = MaterialTheme.typography.headlineSmall,
+            style = FitFaceType.readout,
             color = if (widget.canResize) {
                 MaterialTheme.colorScheme.onSurface
             } else {
@@ -1635,7 +1754,7 @@ private fun SpriteSizeControls(
                 stringResource(R.string.editor_size_unavailable),
                 modifier = Modifier.padding(top = 10.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
     }
@@ -1657,7 +1776,9 @@ private fun CoordinateControl(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MicroLabel(label)
-            Text(value.toString(), style = MaterialTheme.typography.headlineSmall)
+            // Mono: the nudge buttons directly below change this number, and a proportional
+            // digit changes width with its value, so the figure jittered as you held one.
+            Text(value.toString(), style = FitFaceType.readout)
         }
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             RepeatingNudgeButton("−", enabled, Modifier.weight(1f), onMinus)
@@ -2081,7 +2202,7 @@ private fun StylesWorkspace(
                             },
                         ),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                        color = MaterialTheme.fitText.secondary,
                     )
                 }
                 if (selected) Text("●", color = MaterialTheme.colorScheme.primary)
@@ -2092,7 +2213,7 @@ private fun StylesWorkspace(
                 stringResource(R.string.editor_styles_footnote),
                 modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
     }
@@ -2703,23 +2824,35 @@ private fun InstallWorkspace(
     modifier: Modifier = Modifier,
 ) {
     val delivery = state.directInstall
-    val unavailable = delivery.environment.probed && !delivery.environment.isComplete
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         DeviceStatusRow(delivery, snapshot)
 
-        if (unavailable) {
+        // A note, not a wall. This used to replace the whole checklist whenever a package
+        // probe came up short, which is how a phone with the watch paired, connected and
+        // holding a live accessory session was told direct install was unavailable — with
+        // no way forward on the screen. What is installed cannot answer that question, so
+        // it is said once, in passing, and the checklist below stays usable.
+        delivery.environment.advisory?.let { advisory ->
             StatusBanner(
-                FitStatus.Fail,
+                FitStatus.Warning,
                 stringResource(
-                    R.string.editor_install_unavailable,
-                    delivery.environment.missingParts.joinToString(),
+                    when (advisory) {
+                        EnvironmentAdvisory.FRAMEWORK_MISSING ->
+                            R.string.editor_install_advisory_framework
+                        EnvironmentAdvisory.NO_ACCESSORY_APP ->
+                            R.string.editor_install_advisory_no_agent
+                        EnvironmentAdvisory.NO_COMPANION_APP ->
+                            R.string.editor_install_advisory_no_companion
+                    },
                 ),
-                label = stringResource(R.string.editor_install_unavailable_label),
+                label = stringResource(R.string.editor_install_advisory_label),
             )
-        } else {
+        }
+
+        run {
             // A rewound setup shows the checklist, which says what to do next but not
             // what went wrong; the transfer panel renders its own failure banner.
             if (!delivery.setupComplete) {
@@ -2784,8 +2917,10 @@ private fun DeviceStatusRow(state: DirectInstallState, snapshot: EditorSnapshot)
     val (badge, badgeColor) = when {
         !state.environment.probed ->
             R.string.editor_device_badge_checking to MaterialTheme.fitColors.warning
-        !state.environment.isComplete ->
-            R.string.editor_device_badge_missing to MaterialTheme.colorScheme.error
+        // Warning, not error. Nothing here stops the reader trying, and colouring an
+        // advisory as a failure is what made a working phone look broken.
+        state.environment.advisory != null ->
+            R.string.editor_device_badge_setup to MaterialTheme.fitColors.warning
         state.peersCached ->
             R.string.editor_device_badge_linked to MaterialTheme.colorScheme.primary
         else -> R.string.editor_device_badge_setup to MaterialTheme.fitColors.warning
@@ -2871,7 +3006,22 @@ private fun SetupChecklist(
             step = SetupStep.COMPANION_PRESENT,
             title = stringResource(R.string.editor_setup_step1_title),
             why = stringResource(R.string.editor_setup_step1_why),
-            done = stringResource(R.string.editor_setup_step1_done),
+            // Named rather than blanket, because this step is now satisfied by either
+            // half and the plugin is the half that owns the channel: saying "companion
+            // app and plugin found" when only one of them is there is the same kind of
+            // claim-beyond-the-evidence that made the old hard gate wrong.
+            done = stringResource(
+                when {
+                    state.environment.pluginInstalled &&
+                        state.environment.companionAppInstalled ->
+                        R.string.editor_setup_step1_done
+                    state.environment.pluginInstalled ->
+                        R.string.editor_setup_step1_done_plugin_only
+                    state.environment.companionAppInstalled ->
+                        R.string.editor_setup_step1_done_companion_only
+                    else -> R.string.editor_setup_step1_done_agent_only
+                },
+            ),
             action = onOpenCompanion,
         ),
         SetupRow(
@@ -2912,7 +3062,11 @@ private fun SetupChecklist(
             steps.forEachIndexed { index, row ->
                 val done = state.isStepDone(row.step)
                 val busy = state.isStepBusy(row.step)
-                val blocked = !done && index > 0 && !state.isStepDone(steps[index - 1].step)
+                // Step 1 is advisory — connecting the watch is something the reader may
+                // have done months ago, and this app cannot reliably tell. Only steps 2
+                // onward are genuinely sequential, so the chain starts at index 2 and a
+                // not-detected companion app never disables the rest of the checklist.
+                val blocked = !done && index > 1 && !state.isStepDone(steps[index - 1].step)
                 SetupStepRow(
                     number = index + 1,
                     row = row,
@@ -2974,7 +3128,7 @@ private fun SetupChecklist(
             Text(
                 stringResource(R.string.editor_setup_confirm_note),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
     }
@@ -3040,7 +3194,7 @@ private fun SetupStepRow(
                 row.title,
                 style = MaterialTheme.typography.titleSmall,
                 color = if (blocked) {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f)
+                    MaterialTheme.fitText.tertiary
                 } else {
                     MaterialTheme.colorScheme.onSurface
                 },
@@ -3054,7 +3208,7 @@ private fun SetupStepRow(
                 modifier = Modifier.padding(top = 3.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = if (done) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                else MaterialTheme.fitText.secondary,
             )
         }
         if (!done && !busy) {
@@ -3215,7 +3369,7 @@ private fun PhaseRow(
                 color = if (done || active) {
                     MaterialTheme.colorScheme.onSurface
                 } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f)
+                    MaterialTheme.fitText.tertiary
                 },
             )
             detail?.let {

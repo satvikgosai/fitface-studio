@@ -4,6 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -35,6 +39,18 @@ class MainActivity : ComponentActivity() {
                         backStack.removeLastOrNull()
                     }
                 }
+                // The app menu's two dialogs are hosted here rather than in either screen.
+                // Both top bars carry the menu, so hosting them below would mean two
+                // copies of the same state; and a dialog composed outside `NavDisplay` is
+                // not owned by a nav entry, so opening a face while a 36 MiB update
+                // downloads leaves it alone. `remember` is enough — a dialog need not
+                // survive process death, and the download it is watching lives in a
+                // process-wide singleton either way.
+                var menuRequest by remember { mutableStateOf<AppMenuRequest?>(null) }
+                AppMenuDialogs(
+                    request = menuRequest,
+                    onDismiss = { menuRequest = null },
+                )
                 NavDisplay(
                     backStack = backStack,
                     onBack = { popSafely(1) },
@@ -48,12 +64,16 @@ class MainActivity : ComponentActivity() {
                                 onOpenEditor = { projectId ->
                                     backStack.add(EditorDestination(projectId))
                                 },
+                                onAbout = { menuRequest = AppMenuRequest.About },
+                                onCheckForUpdate = { menuRequest = AppMenuRequest.Update },
                             )
                         }
                         entry<EditorDestination> { destination ->
                             EditorRoute(
                                 projectId = destination.projectId,
                                 onBack = { popSafely(1) },
+                                onAbout = { menuRequest = AppMenuRequest.About },
+                                onCheckForUpdate = { menuRequest = AppMenuRequest.Update },
                             )
                         }
                     },

@@ -8,7 +8,6 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -39,7 +38,13 @@ fun DiagnosticsDialog(report: String, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.ui_diagnostics_title)) },
         text = {
-            Column {
+            // The whole slot scrolls, not just the report inside it. An AlertDialog caps
+            // its own height and hands the text slot whatever is left, which in landscape
+            // is very little: with the scroll on the report alone, the blurb above it was
+            // clipped and everything below it was simply absent. One scroll container
+            // rather than two nested in the same direction, which would fight for the
+            // gesture.
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     stringResource(R.string.ui_diagnostics_blurb),
                     style = MaterialTheme.typography.bodyMedium,
@@ -50,16 +55,14 @@ fun DiagnosticsDialog(report: String, onDismiss: () -> Unit) {
                     modifier = Modifier
                         .padding(top = 12.dp)
                         .fillMaxWidth()
-                        .heightIn(max = 320.dp)
                         .background(
                             MaterialTheme.colorScheme.surfaceContainerLow,
                             MaterialTheme.shapes.small,
                         )
-                        .padding(10.dp)
-                        // Wrapped rather than scrolled sideways: this text exists to be
-                        // copied, and a line clipped at the edge reads as a report that
-                        // is missing the part which mattered.
-                        .verticalScroll(rememberScrollState()),
+                        .padding(10.dp),
+                    // Wrapped rather than scrolled sideways: this text exists to be
+                    // copied, and a line clipped at the edge reads as a report that is
+                    // missing the part which mattered.
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                 )
             }
@@ -82,16 +85,5 @@ private fun copyReport(context: Context, report: String) {
     // reads as the copy having happened twice.
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
         Toast.makeText(context, R.string.ui_diagnostics_copied, Toast.LENGTH_SHORT).show()
-    }
-}
-
-/** The overflow entry that opens [DiagnosticsDialog], for either top bar. */
-@Composable
-fun ReportProblemAction(onClick: () -> Unit) {
-    TextButton(onClick = onClick) {
-        Text(
-            stringResource(R.string.ui_diagnostics_action),
-            style = MaterialTheme.typography.labelLarge,
-        )
     }
 }

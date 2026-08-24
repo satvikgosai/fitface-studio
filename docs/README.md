@@ -9,6 +9,8 @@ what the app does and how to use it; everything here is implementation detail.
 | [bin-format.md](bin-format.md) | The container format byte by byte, derived from the corpus; §14 lists related public work |
 | [editing.md](editing.md) | Which edits are safe, what the catalogue sweep proved, and why |
 | [direct-install.md](direct-install.md) | Accessory discovery, the OTA/RFCOMM transfer, security posture |
+| [design-system.md](design-system.md) | The token layer, and the three places the code knowingly departs from the design |
+| [design-system.html](design-system.html) | The same system, drawn — palette in both themes, type scale, every component state. Open it in a browser; it needs no server and no network |
 | [development.md](development.md) | Toolchain, build, the uncommitted corpus, decoding by hand, manual verification |
 
 Changing the code: [`CONTRIBUTING.md`](../CONTRIBUTING.md) is the procedure and

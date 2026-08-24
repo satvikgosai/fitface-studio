@@ -48,7 +48,7 @@ class Fit3DirectInstaller @Inject constructor(
     private val discoveryListener = DiscoveryListener {
             profile,
             peer,
-            _,
+            code,
             outcome,
             detail,
         ->
@@ -64,6 +64,13 @@ class Fit3DirectInstaller @Inject constructor(
                     "in the companion app, then discover again — the channel is only " +
                     "released afterwards.",
             )
+            // The accessory framework refusing to initialize arrives here, not through
+            // requestAgent's own callback, and it is the shape a phone with nothing
+            // installed now reaches — because discovery is what decides that, rather than
+            // a package probe refusing in advance. It has to stay recoverable: installing
+            // the plugin and connecting the watch is exactly what fixes it, and FAILED can
+            // only be left by restarting the whole setup.
+            "agent_error" -> failAgentInit("$profile agent", code, detail)
             else -> fail(
                 when (outcome) {
                     "service_not_found" ->
@@ -168,7 +175,10 @@ class Fit3DirectInstaller @Inject constructor(
             val nextPhase = when {
                 current.isTerminal -> current.phase
                 current.isActive -> current.phase
-                !companions.isComplete -> DirectInstallPhase.NEEDS_PLUGIN
+                // What is installed no longer decides anything here. NEEDS_PLUGIN is
+                // still reachable, but only once an attempt has actually failed — a probe
+                // that pre-emptively refused was how a working phone got told it could
+                // not transfer. Discovery is the arbiter.
                 !helperGranted -> DirectInstallPhase.NEEDS_HELPER_PERMISSION
                 current.peersCached &&
                     (pluginGranted == false || current.pluginNearbyReleaseAcknowledged) ->
@@ -194,13 +204,9 @@ class Fit3DirectInstaller @Inject constructor(
     fun initializeAndDiscover() {
         refreshEnvironment()
         val environment = state.value
-        if (!environment.environment.isComplete) {
-            fail(
-                "Direct install needs ${environment.environment.missingParts.joinToString()} " +
-                    "on this phone.",
-            )
-            return
-        }
+        // Deliberately no environment gate here. Whether the channel opens is a question
+        // only the accessory framework can answer, and it answers it below; refusing in
+        // advance on a package-name probe is what stopped a paired, connected watch.
         if (!environment.helperNearbyGranted) {
             fail("Grant FitFace Studio Nearby devices access first")
             return
@@ -349,8 +355,20 @@ class Fit3DirectInstaller @Inject constructor(
         }
     }
 
+    /**
+     * Opens whichever companion app this phone has.
+     *
+     * Presence is not enough to launch one: only some of the ids in
+     * [CompanionResolution.COMPANION_PACKAGES] carry a launcher activity, and the stock
+     * plugin carries none at all — every activity in it is unexported — so asking the one
+     * app that definitely owns the channel to come to the front is not a thing Android
+     * will do. Hence walking the list for something launchable rather than trusting the
+     * resolved id, and hence [openPluginSettings] as the caller's fallback.
+     */
     fun openCompanionApp(): Boolean {
-        val intent = appContext.packageManager.getLaunchIntentForPackage(COMPANION_PACKAGE)
+        val packages = appContext.packageManager
+        val intent = CompanionResolution.COMPANION_PACKAGES
+            .firstNotNullOfOrNull { runCatching { packages.getLaunchIntentForPackage(it) }.getOrNull() }
             ?: return false
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         appContext.startActivity(intent)
@@ -386,7 +404,13 @@ class Fit3DirectInstaller @Inject constructor(
         }.getOrNull()
 
         val plugin = usable(PLUGIN_PACKAGE)
-        val companion = usable(COMPANION_PACKAGE)
+        // The companion app has no single package name — see [CompanionResolution]. Read
+        // every id it ships under and take the preferred one that is actually here.
+        val companion = CompanionResolution
+            .preferred(CompanionResolution.COMPANION_PACKAGES.filterTo(mutableSetOf()) {
+                usable(it) != null
+            })
+            ?.let(::usable)
         val accessory = usable(ACCESSORY_FRAMEWORK_PACKAGE)
         return CompanionEnvironment(
             pluginInstalled = plugin != null,
@@ -400,12 +424,35 @@ class Fit3DirectInstaller @Inject constructor(
             companionAppLabel = companion?.applicationInfo
                 ?.let { packages.getApplicationLabel(it).toString() }
                 ?.takeIf(String::isNotBlank),
-            // The accessory service can also be bundled into the companion app on
-            // some builds, so either provider counts.
-            accessoryFrameworkAvailable = accessory != null || companion != null,
+            accessoryAgentCount = accessoryAgentApps(packages).size,
+            // Only the framework itself counts. The old reading also accepted the
+            // companion app as a provider, which is wrong twice over: the companion
+            // carries no accessory code, and taking its word for the framework hid the
+            // fact that this app could not see the framework at all.
+            frameworkVerdict = if (accessory != null) {
+                FrameworkVerdict.USABLE
+            } else {
+                FrameworkVerdict.MISSING
+            },
             probed = true,
         )
     }
+
+    /**
+     * Apps that declare an accessory agent, found by capability rather than by name.
+     *
+     * A `REGISTER_AGENT` receiver is what every accessory app declares, this one included,
+     * and it is the only signal that keeps working when Samsung ships a companion or a
+     * plugin under a package name written after this code. Narrowed to the vendor
+     * namespace because the count is reported in the diagnostics report, which is an
+     * allowlist — an arbitrary list of the reader's installed apps has no business in it.
+     */
+    private fun accessoryAgentApps(packages: PackageManager): List<String> = runCatching {
+        packages.queryBroadcastReceivers(Intent(ACCESSORY_REGISTER_AGENT_ACTION), 0)
+            .mapNotNull { it.activityInfo?.packageName }
+            .filter { it.startsWith(VENDOR_PACKAGE_PREFIX) }
+            .distinct()
+    }.getOrDefault(emptyList())
 
     @Synchronized
     fun reset() {
@@ -450,7 +497,7 @@ class Fit3DirectInstaller @Inject constructor(
 
                 override fun onError(errorCode: Int, message: String?) {
                     if (requestGeneration != generation.get()) return
-                    fail("Watch-face agent initialization failed: $errorCode ${message.orEmpty()}")
+                    failAgentInit("Watch-face agent", errorCode, message)
                 }
             },
         )
@@ -481,7 +528,7 @@ class Fit3DirectInstaller @Inject constructor(
 
                 override fun onError(errorCode: Int, message: String?) {
                     if (requestGeneration != generation.get()) return
-                    fail("OTA agent initialization failed: $errorCode ${message.orEmpty()}")
+                    failAgentInit("OTA agent", errorCode, message)
                 }
             },
         )
@@ -616,6 +663,38 @@ class Fit3DirectInstaller @Inject constructor(
     }
 
     /**
+     * An agent that would not initialize.
+     *
+     * With no environment gate in front of discovery any more, this is where a phone that
+     * genuinely cannot open the channel arrives — so it has to be the recoverable
+     * `NEEDS_PLUGIN` rather than `FAILED`, which can only be left by restarting the whole
+     * setup. Connecting the watch in its companion app is usually the whole fix, and that
+     * is a thing the reader can go and do. Anything else is a real failure.
+     */
+    private fun failAgentInit(what: String, errorCode: Int, detail: String?) {
+        cancelWatchdog()
+        val recoverable = state.value.environment.let {
+            !it.probed || it.frameworkVerdict != FrameworkVerdict.USABLE || !it.hasAccessoryAgent
+        }
+        if (!recoverable) {
+            fail("$what initialization failed: $errorCode ${detail.orEmpty()}")
+            return
+        }
+        // A retry has to start from discovery, so the latch and the peer handles go with
+        // it — the same teardown needsWatchConnection() does, for the same reason.
+        discoveryStarted = false
+        watchfaceAgent?.forgetPeer()
+        otaAgent?.forgetPeer()
+        mutableState.update {
+            it.rewoundToDiscovery().copy(
+                phase = DirectInstallPhase.NEEDS_PLUGIN,
+                failure = null,
+                message = environmentMessage(DirectInstallPhase.NEEDS_PLUGIN, it.environment, it),
+            )
+        }
+    }
+
+    /**
      * The timeout mechanism. What a timeout *means* is [TimeoutRecovery.timedOut] — it
      * was inlined here, which put the "a discovery timeout must stay recoverable" rule
      * inside a coroutine on a class that needs a Context, where no test could reach it.
@@ -648,9 +727,17 @@ class Fit3DirectInstaller @Inject constructor(
         companions: CompanionEnvironment,
         previous: DirectInstallState,
     ): String = when (phase) {
+        // Reached only after an attempt failed, so it describes what happened rather than
+        // predicting it, and it stays recoverable: connecting the watch in its companion
+        // app is usually all this needs.
         DirectInstallPhase.NEEDS_PLUGIN ->
-            "Direct install is unavailable: this phone is missing " +
-                "${companions.missingParts.joinToString()}."
+            if (companions.frameworkVerdict == FrameworkVerdict.MISSING) {
+                "The accessory framework this phone needs is not reachable. Connect the " +
+                    "watch in its companion app once, then try again."
+            } else {
+                "The accessory channel could not be opened. Connect the watch in its " +
+                    "companion app, then discover the peers again."
+            }
         DirectInstallPhase.NEEDS_HELPER_PERMISSION ->
             "Grant FitFace Studio Nearby devices access."
         DirectInstallPhase.NEEDS_WATCH_CONNECTION ->
@@ -668,8 +755,9 @@ class Fit3DirectInstaller @Inject constructor(
 
     private companion object {
         const val PLUGIN_PACKAGE = "com.samsung.wearable.fit3plugin"
-        const val COMPANION_PACKAGE = "com.samsung.android.app.watchmanager"
         const val ACCESSORY_FRAMEWORK_PACKAGE = "com.samsung.accessory"
+        const val ACCESSORY_REGISTER_AGENT_ACTION = "com.samsung.accessory.action.REGISTER_AGENT"
+        const val VENDOR_PACKAGE_PREFIX = "com.samsung."
         val ACTIVE_PHASES = DirectInstallState.ActivePhases
         const val PHASE_WATCHDOG_MS = 20_000L
         const val TRANSFER_WATCHDOG_MS = 20_000L

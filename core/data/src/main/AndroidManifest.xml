@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  This module's first manifest, and it declares one permission.
+
+  `REQUEST_INSTALL_PACKAGES` is what lets `UpdateInstaller` hand a downloaded APK to
+  `PackageInstaller`; without it a non-privileged app cannot install a package on any
+  API level this project supports. It is declared here rather than in `:app` because
+  the code that needs it is here — the same reason `:core:delivery` owns the Bluetooth
+  and accessory permissions instead of pushing them up.
+
+  Deliberately nothing else. In particular there is **no receiver** for the install
+  session's status: declaring one would add a component to the merged manifest of every
+  module that depends on `:core:data`, and pre-stackmap bytecode arriving that way
+  through `:core:delivery` is already why `:feature:editor` cannot run under
+  Robolectric. `UpdateInstaller` registers its receiver at runtime instead.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+</manifest>

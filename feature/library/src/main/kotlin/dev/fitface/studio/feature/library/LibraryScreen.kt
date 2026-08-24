@@ -1,6 +1,7 @@
 package dev.fitface.studio.feature.library
 
 import android.text.format.DateUtils
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,12 +52,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -71,10 +74,11 @@ import dev.fitface.studio.core.model.FaceStyleOption
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitButton
-import dev.fitface.studio.core.ui.ReportProblemAction
+import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.FitChip
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.fitColors
+import dev.fitface.studio.core.ui.fitText
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
@@ -83,6 +87,8 @@ import java.io.File
 @Composable
 fun LibraryRoute(
     onOpenEditor: (Long) -> Unit,
+    onAbout: () -> Unit,
+    onCheckForUpdate: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -116,6 +122,8 @@ fun LibraryRoute(
         snackbar = snackbar,
         onRefresh = viewModel::refreshCatalog,
         onReportProblem = viewModel::showDiagnostics,
+        onAbout = onAbout,
+        onCheckForUpdate = onCheckForUpdate,
         onQuery = viewModel::setQuery,
         onSort = viewModel::setSort,
         onFace = viewModel::selectFace,
@@ -127,7 +135,15 @@ fun LibraryRoute(
     )
 }
 
-private enum class LibraryPage { WatchFaces, Projects }
+/**
+ * The two halves of the library, each with the headline and one-line explanation that go
+ * with it. The strings hang off the entries so the header can measure the page it is not
+ * showing — see [LibraryHeader].
+ */
+internal enum class LibraryPage(@StringRes val title: Int, @StringRes val subtitle: Int) {
+    WatchFaces(R.string.library_title_watch_faces, R.string.library_subtitle_watch_faces),
+    Projects(R.string.library_title_projects, R.string.library_subtitle_projects),
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -137,6 +153,8 @@ private fun LibraryScreen(
     snackbar: SnackbarHostState,
     onRefresh: () -> Unit,
     onReportProblem: () -> Unit,
+    onAbout: () -> Unit,
+    onCheckForUpdate: () -> Unit,
     onQuery: (String) -> Unit,
     onSort: (CatalogSort) -> Unit,
     onFace: (CatalogFace) -> Unit,
@@ -164,6 +182,8 @@ private fun LibraryScreen(
                 onPage = { page = it },
                 onRefresh = onRefresh,
                 onReportProblem = onReportProblem,
+                onAbout = onAbout,
+                onCheckForUpdate = onCheckForUpdate,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             when (page) {
@@ -202,8 +222,15 @@ private fun LibraryScreen(
     }
 }
 
+/**
+ * The minimum touch target, and the height the header's action row keeps whether or not
+ * REFRESH is in it. Material gives every clickable this floor already; naming it here is what
+ * stops the row from shrinking to its content on the page that has no text button.
+ */
+private val ACTION_TOUCH_TARGET = 48.dp
+
 @Composable
-private fun LibraryHeader(
+internal fun LibraryHeader(
     page: LibraryPage,
     state: LibraryUiState,
     projectCount: Int,
@@ -211,45 +238,45 @@ private fun LibraryHeader(
     onPage: (LibraryPage) -> Unit,
     onRefresh: () -> Unit,
     onReportProblem: () -> Unit,
+    onAbout: () -> Unit,
+    onCheckForUpdate: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 17.dp),
     ) {
+        // The brand label sits above this Row rather than inside it. It used to share a Column
+        // with the headline, and the actions — centred against that pair — landed between the
+        // two, aligned with neither: the report button's touch target straddled the label above
+        // it and most of the headline below. With only the headline in the Row, centring means
+        // what it says.
+        MicroLabel(
+            stringResource(R.string.library_brand),
+            color = MaterialTheme.colorScheme.primary,
+        )
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 7.dp)
+                // REFRESH is a TextButton, so it carries the 48dp minimum touch target and the
+                // row is that tall on Watch faces; on Projects, where it is absent, the row
+                // measured its 40dp headline instead and everything below moved up 26px. The
+                // floor is the touch target, so both pages measure the same at every font
+                // scale the headline stays under it.
+                .heightIn(min = ACTION_TOUCH_TARGET),
+            // No arrangement: the headline takes the weight, so there is no free space left
+            // for one to distribute. `SpaceBetween` here would read as if it were doing
+            // something.
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                MicroLabel(
-                    stringResource(R.string.library_brand),
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    stringResource(
-                        if (page == LibraryPage.WatchFaces) {
-                            R.string.library_title_watch_faces
-                        } else {
-                            R.string.library_title_projects
-                        },
-                    ),
-                    modifier = Modifier.padding(top = 7.dp),
-                    style = MaterialTheme.typography.headlineLarge,
-                )
-            }
-            if (state.previousCrash) {
-                TextButton(onClick = onReportProblem) {
-                    Text(
-                        stringResource(R.string.library_previous_crash),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.fitColors.warning,
-                    )
-                }
-            } else {
-                ReportProblemAction(onReportProblem)
-            }
+            Text(
+                stringResource(page.title),
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.headlineLarge,
+            )
             if (page == LibraryPage.WatchFaces) {
                 TextButton(onClick = onRefresh, enabled = !loading) {
                     Text(
@@ -264,19 +291,59 @@ private fun LibraryHeader(
                     )
                 }
             }
+            // Last, so its right edge is pinned to the header padding. Emitted before REFRESH
+            // it moved 189px sideways when you switched to Projects and REFRESH went away.
+            //
+            // A crash in the previous run changes the colour and the label, never the size or
+            // the shape: the old crash branch swapped in a differently-styled TextButton, so
+            // the control changed typeface and width depending on whether the last run died.
+            // With the report behind a menu, the wording has to move too — an amber glyph on
+            // its own cannot say what it is amber about — so the first entry is relabelled
+            // and tinted with it.
+            if (state.previousCrash) {
+                val warning = MaterialTheme.fitColors.warning
+                val crashLabel = stringResource(R.string.library_previous_crash)
+                AppMenuAction(
+                    onReportProblem = onReportProblem,
+                    onAbout = onAbout,
+                    onCheckForUpdate = onCheckForUpdate,
+                    tint = warning,
+                    contentDescription = crashLabel,
+                    reportLabel = crashLabel,
+                    reportTint = warning,
+                )
+            } else {
+                AppMenuAction(
+                    onReportProblem = onReportProblem,
+                    onAbout = onAbout,
+                    onCheckForUpdate = onCheckForUpdate,
+                )
+            }
         }
-        Text(
-            stringResource(
-                if (page == LibraryPage.WatchFaces) {
-                    R.string.library_subtitle_watch_faces
-                } else {
-                    R.string.library_subtitle_projects
-                },
-            ),
-            modifier = Modifier.padding(top = 6.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // Both subtitles are laid out and only the current page's is drawn, so the box is as
+        // tall as the longer of the two wraps at this width. The strings are different lengths
+        // — on a narrow phone "Pick a Fit3 face, download its package, then edit and install
+        // it." takes two lines and "Continue an edit saved privately on this device." takes one
+        // — so sizing the box to whichever page was showing dropped the tabs below it by a line
+        // and switching tabs moved the tab you had just tapped out from under your finger.
+        // Measuring both is exact at any width, font scale and translation; reserving a fixed
+        // two lines would only be exact at the ones checked by hand.
+        Box(modifier = Modifier.padding(top = 6.dp)) {
+            LibraryPage.entries.forEach { candidate ->
+                Text(
+                    stringResource(candidate.subtitle),
+                    // The pages not showing are there for their height alone: invisible, and
+                    // out of the semantics tree so a screen reader does not read all of them.
+                    modifier = if (candidate == page) {
+                        Modifier
+                    } else {
+                        Modifier.alpha(0f).clearAndSetSemantics { }
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 15.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -370,7 +437,7 @@ private fun WatchFaceGrid(
                             state.styleCount,
                         ),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .72f),
+                        color = MaterialTheme.fitText.secondary,
                     )
                 }
             }
@@ -435,7 +502,7 @@ private fun CatalogLoading() {
             Text(
                 stringResource(R.string.library_loading_detail),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
     }
@@ -545,7 +612,7 @@ private fun WatchFaceCard(
             Text(
                 styleCount,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
         }
     }
@@ -708,7 +775,7 @@ private fun FaceDetailsSheet(
                     stringResource(R.string.library_download_cache_note),
                     modifier = Modifier.padding(top = 10.dp),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .72f),
+                    color = MaterialTheme.fitText.secondary,
                 )
             }
         }
@@ -796,7 +863,7 @@ private fun ProjectsList(
                     Text(
                         stringResource(R.string.library_projects_local_count, projects.size),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .66f),
+                        color = MaterialTheme.fitText.secondary,
                     )
                 }
             }
@@ -905,13 +972,15 @@ private fun ProjectRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+                color = MaterialTheme.fitText.secondary,
             )
             Text(
                 age,
                 modifier = Modifier.padding(top = 3.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .48f),
+                // Mono, like the face line directly above it: this is a quantity, and it was
+                // the one numeral in the app still set in a proportional face.
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.fitText.tertiary,
             )
         }
         TextButton(onClick = onRemove, enabled = enabled) {

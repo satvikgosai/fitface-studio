@@ -16,10 +16,33 @@ enum class DirectInstallPhase {
     FAILED,
 }
 
+/** Whether the accessory framework — the app that owns the channel — is reachable. */
+enum class FrameworkVerdict { UNKNOWN, USABLE, MISSING }
+
 /**
- * What is installed on the phone. Direct install borrows the stock watch plugin's
- * accessory channel, so a missing plugin or companion app is a hard stop that the
- * UI has to state plainly rather than failing later inside the SDK.
+ * Something worth telling the reader about the phone, and nothing more than that.
+ *
+ * None of these stops a transfer being attempted. What is installed is a poor predictor
+ * of whether the channel opens — a reporter whose watch was paired and holding a live
+ * accessory session was refused because one package name out of the several the companion
+ * app ships under was absent — so the only honest arbiter is discovery itself. These say
+ * what was not found, in case discovery then fails and the reader needs somewhere to look.
+ */
+enum class EnvironmentAdvisory { NO_ACCESSORY_APP, NO_COMPANION_APP, FRAMEWORK_MISSING }
+
+/**
+ * What is installed on the phone, as an advisory rather than a gate.
+ *
+ * This used to be a hard stop: three package names ANDed together, and any one missing
+ * replaced the install checklist with a dead end. Two of the three were the wrong
+ * question. The companion app carries no accessory code at all — no `REGISTER_AGENT`
+ * receiver, no `AccessoryServicesLocation` — so its presence never said anything about
+ * the channel; and it ships under several package names, so its absence was often just
+ * this app looking for the wrong one. See [CompanionResolution].
+ *
+ * [accessoryAgentCount] is the honest form of the question: how many apps on this phone
+ * declare themselves accessory agents, found by capability rather than by name, so that
+ * the next id Samsung forks does not read as an empty phone.
  */
 data class CompanionEnvironment(
     val pluginInstalled: Boolean = false,
@@ -27,18 +50,31 @@ data class CompanionEnvironment(
     val pluginVersionName: String? = null,
     val companionAppInstalled: Boolean = false,
     val companionAppLabel: String? = null,
-    val accessoryFrameworkAvailable: Boolean = false,
+    /** Apps declaring an accessory agent, the stock plugin among them when present. */
+    val accessoryAgentCount: Int = 0,
+    val frameworkVerdict: FrameworkVerdict = FrameworkVerdict.UNKNOWN,
     /** False until the environment has actually been probed once. */
     val probed: Boolean = false,
 ) {
-    val isComplete: Boolean
-        get() = pluginInstalled && companionAppInstalled && accessoryFrameworkAvailable
+    /** Something on this phone can serve the accessory channel. */
+    val hasAccessoryAgent: Boolean
+        get() = pluginInstalled || accessoryAgentCount > 0
 
-    val missingParts: List<String>
-        get() = buildList {
-            if (!companionAppInstalled) add("the watch companion app")
-            if (!pluginInstalled) add("the Fit3 plugin")
-            if (!accessoryFrameworkAvailable) add("the accessory framework")
+    /**
+     * The one thing most worth saying, or null when there is nothing to say.
+     *
+     * Ordered by how much it would explain a later failure: a framework that cannot be
+     * reached explains everything, no agent app explains a transfer with nothing to talk
+     * to, and a missing companion app explains only that the reader has nowhere to tap to
+     * connect the watch.
+     */
+    val advisory: EnvironmentAdvisory?
+        get() = when {
+            !probed -> null
+            frameworkVerdict == FrameworkVerdict.MISSING -> EnvironmentAdvisory.FRAMEWORK_MISSING
+            !hasAccessoryAgent -> EnvironmentAdvisory.NO_ACCESSORY_APP
+            !companionAppInstalled -> EnvironmentAdvisory.NO_COMPANION_APP
+            else -> null
         }
 }
 
@@ -91,11 +127,15 @@ data class DirectInstallState(
         get() = pluginNearbyGranted == false || pluginNearbyReleaseAcknowledged
 
     val setupComplete: Boolean
-        get() = environment.isComplete && helperNearbyGranted && peersCached &&
-            pluginChannelReleased
+        get() = helperNearbyGranted && peersCached && pluginChannelReleased
 
     fun isStepDone(step: SetupStep): Boolean = when (step) {
-        SetupStep.COMPANION_PRESENT -> environment.isComplete
+        // Advisory, and never a prerequisite: this step is the reader being told to go and
+        // connect the watch, which they may well have done long before opening this app.
+        // Anything that could serve the channel, or any companion app to tap, counts.
+        SetupStep.COMPANION_PRESENT ->
+            environment.probed &&
+                (environment.hasAccessoryAgent || environment.companionAppInstalled)
         SetupStep.HELPER_PERMISSION -> helperNearbyGranted
         SetupStep.PEERS_DISCOVERED -> peersCached
         // The handover is only meaningful once there is something to hand over. With
@@ -112,7 +152,7 @@ data class DirectInstallState(
 
     /** Discovery is the step the checklist is waiting on. */
     val awaitingDiscovery: Boolean
-        get() = environment.isComplete && helperNearbyGranted && !peersCached
+        get() = helperNearbyGranted && !peersCached
 
     /**
      * Discovery is starting, so every claim that only held while the peers were live
