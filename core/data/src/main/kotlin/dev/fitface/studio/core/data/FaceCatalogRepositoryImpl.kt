@@ -422,7 +422,10 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         const val MaxPackageBytes = 32 * 1024 * 1024L
         const val PageSize = 100
         const val MaxCatalogPages = 20
-        const val CatalogTtlMillis = 12 * 60 * 60 * 1000L
+        // A week. The store's list of faces barely moves, and pull-to-refresh is
+        // right there for the reader who wants to check — so the short window only
+        // bought a paged network sweep on the first launch of most days.
+        const val CatalogTtlMillis = 7 * 24 * 60 * 60 * 1000L
 
         fun storeHash(appInfo: String): String {
             val digest = MessageDigest.getInstance("SHA-1").digest(

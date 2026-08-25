@@ -17,7 +17,7 @@ class DirectInstallStateTest {
         environment = CompanionEnvironment(
             pluginInstalled = true,
             companionAppInstalled = true,
-            accessoryFrameworkAvailable = true,
+            frameworkVerdict = FrameworkVerdict.USABLE,
             probed = true,
         ),
         helperNearbyGranted = true,
@@ -110,7 +110,7 @@ class DirectInstallStateTest {
         assertEquals("the reason survives into the checklist", "The cached OTA peer is gone", rewound.failure)
         assertEquals(0, rewound.acknowledgedBytes)
         // Nothing the phone told us about itself is thrown away: this is not a reset.
-        assertTrue(rewound.environment.isComplete)
+        assertTrue(rewound.environment.probed)
         assertTrue(rewound.helperNearbyGranted)
         assertTrue(rewound.isStepDone(SetupStep.COMPANION_PRESENT))
         assertTrue(rewound.isStepDone(SetupStep.HELPER_PERMISSION))

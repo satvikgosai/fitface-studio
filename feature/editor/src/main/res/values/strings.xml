@@ -31,6 +31,9 @@
     <string name="editor_page_validate">Validate</string>
     <string name="editor_page_install">Install</string>
     <string name="editor_page_project">Project</string>
+    <!-- The "⋯" that opens the page above. A glyph needs its label spelled out for TalkBack,
+         which otherwise announces the ellipsis character itself. -->
+    <string name="editor_project_a11y">Project and reset</string>
     <string name="editor_widget_index_unknown">—</string>
 
     <!-- Page subtitles -->
@@ -46,6 +49,13 @@
     <string name="editor_subtitle_validate">reparse of the edited container</string>
     <string name="editor_subtitle_install">direct to paired Fit3</string>
     <string name="editor_badge_edited">EDITED</string>
+    <!--
+      Shown in the top bar while an image is positioned but not yet committed. The bar is
+      the one part of the page that does not scroll, and the Apply button is the last thing
+      in a long column, so this is what tells you there is still something to do.
+      One short word: it spends the bar's width budget.
+    -->
+    <string name="editor_badge_unapplied">UNAPPLIED</string>
 
     <!-- Canvas -->
     <string name="editor_canvas_hint_none">Each outlined region is a draggable widget. Tap one to select it.</string>
@@ -75,7 +85,12 @@
     <string name="editor_row_placement_last">Last</string>
     <string name="editor_row_opaque">Opaque</string>
     <string name="editor_row_record">type %1$d · seq %2$d · %3$d×%4$d</string>
-    <string name="editor_row_record_frames">type %1$d · seq %2$d · %3$d×%4$d · %5$d frames</string>
+    <!--
+      The frame count is a badge beside OPAQUE rather than a fifth clause on the record line.
+      Appended, the line overflowed the row's flexible column on a third of the widgets and
+      wrapped, orphaning the word "frames" on a line of its own.
+    -->
+    <string name="editor_row_frames">%1$d frames</string>
     <string name="editor_row_position">%1$d, %2$d</string>
     <string name="editor_row_removed">type %1$d · seq %2$d · %3$d×%4$d · %5$d styles</string>
     <string name="editor_restore">Restore</string>
@@ -195,8 +210,10 @@
     <string name="editor_reset_note">Resetting restores this project\'s working copy to the downloaded container.</string>
 
     <!-- Install page -->
-    <string name="editor_install_unavailable_label">UNAVAILABLE</string>
-    <string name="editor_install_unavailable">Direct install borrows the stock plugin\'s accessory channel, and this phone is missing %1$s. Install the watch\'s companion app and its Fit3 plugin, pair the watch, then come back.</string>
+    <string name="editor_install_advisory_label">HEADS UP</string>
+    <string name="editor_install_advisory_no_companion">No watch companion app was found on this phone. If your watch is already connected you can carry on — this only means there is nothing here to open for you.</string>
+    <string name="editor_install_advisory_no_agent">No app that can reach the watch was found on this phone. Connect the watch in its companion app once, then carry on.</string>
+    <string name="editor_install_advisory_framework">The accessory service this phone needs was not found. Connect the watch in its companion app once, then carry on.</string>
     <string name="editor_install_stopped_label">STOPPED</string>
     <string name="editor_install_restart">Restart direct-install setup</string>
 
@@ -219,6 +236,9 @@
     <string name="editor_setup_step1_title">Connect the watch in its companion app</string>
     <string name="editor_setup_step1_why">Hands pairing back to the stock app, then return here.</string>
     <string name="editor_setup_step1_done">Companion app and plugin found</string>
+    <string name="editor_setup_step1_done_plugin_only">Watch plugin found, no companion app</string>
+    <string name="editor_setup_step1_done_companion_only">Companion app found, no watch plugin</string>
+    <string name="editor_setup_step1_done_agent_only">An app that can reach the watch was found</string>
     <string name="editor_setup_step2_title">Grant FitFace Nearby devices access</string>
     <string name="editor_setup_step2_why">Android 12+ requires it to use the accessory channel.</string>
     <string name="editor_setup_step2_done">Granted</string>

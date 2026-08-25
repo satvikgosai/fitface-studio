@@ -89,17 +89,30 @@ anyone holding it can produce an APK a device will accept as an update.
 ./gradlew -Dorg.gradle.java.home="$JBR" \
   :core:model:testDebugUnitTest :core:format:testDebugUnitTest \
   :core:delivery:testDebugUnitTest :core:data:testDebugUnitTest \
+  :core:ui:testDebugUnitTest \
   :feature:editor:testDebugUnitTest :feature:library:testDebugUnitTest \
   :app:lintDebug
 ```
 
-Current baseline: **222 unit tests, 0 failures, 0 lint errors, 13 lint warnings.**
+Current baseline: **293 unit tests, 0 failures, 0 lint errors, 14 lint warnings.**
 Every warning is a dependency- or SDK-version notice in a build file, none in this
 code, so the count tracks whatever the ecosystem has published since.
 
-81 of the 222 read the uncommitted corpus and skip without it, and
+81 of the 293 read the uncommitted corpus and skip without it, and
 `IdentityTransferProtocolTest` skips without the recorded protocol fixtures. A clean
-clone therefore runs 140 and still passes.
+clone therefore runs 211 and still passes.
+
+25 of them are `:core:ui`'s, which is the only module whose tests measure composables.
+`FitTopBarLayoutTest` is the one that measures a real layout, so it runs Robolectric in
+`@GraphicsMode(NATIVE)`: the default stub font metrics collapse every string to a few
+pixels, which makes a text-labelled button look tiny and a title column look enormous.
+Even in native mode Robolectric's metrics are not the device's — it measures the
+subtitle that clipped on a real phone as fitting — so it asserts layout geometry rather
+than whether text was ellipsized. See the class comment.
+
+`SemanticColorContrastTest` and `SmallTextContrastTest` need no Android runtime at all:
+`Color` is a value class and the WCAG formula is arithmetic, so the palette is pinned by
+plain JVM tests that cannot flake.
 
 With the full corpus present, `EveryFaceRendersTest` sweeps all 99 editable
 catalogue faces — about three minutes — and checks that each one:

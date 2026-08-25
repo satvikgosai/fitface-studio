@@ -112,17 +112,11 @@ jobs:
           fi
 
           body=$(cat <<'EOF'
-          It is a debug build in every other sense: no R8, no resource shrinking, and the
-          debug-only corpus broadcast receiver is compiled in. Release signing credentials
-          are deliberately not stored in this repository, so there is no signed release
-          variant to publish.
-
           This APK contains code from two proprietary accessory SDK JARs, fetched at
           build time and verified against pinned SHA-256 hashes. It is a convenience
           build of an experimental personal project for use on hardware you own — not a
           product, not supported, and not a grant of any rights in that SDK. See
-          [`NOTICE.md`](../main/NOTICE.md), and read
-          [Installing to the watch](../main/README.md#installing-to-the-watch)
+          [`NOTICE.md`](../main/NOTICE.md), and read [Installing to the watch](../main/README.md#installing-to-the-watch)
           before you send anything to a watch.
           EOF
           )

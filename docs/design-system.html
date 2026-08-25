@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FitFace Studio — design system</title>
+<!--
+  A self-contained visual reference for :core:ui. One file, no build step, no server,
+  no network: it must keep working from a fresh clone with no internet, so do not add a
+  CDN script, a webfont link or an external image to it.
+
+  It deliberately uses the platform sans and mono stacks rather than IBM Plex, because
+  that is what the app itself uses — FontFamily.SansSerif and FontFamily.Monospace. See
+  design-system.md, "Departure 1".
+
+  Every value here is transcribed from FitFaceTheme.kt and FitFaceComponents.kt. Those
+  files are the authority; if this page disagrees with them it is stale. Update all
+  three together — this page, design-system.md, and the Kotlin.
+-->
+<style>
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* DarkColors — FitFaceTheme.kt */
+    --d-primary: #7FE3D2;      --d-on-primary: #062E29;
+    --d-primary-ctr: #00504A;  --d-on-primary-ctr: #C2FFF4;
+    --d-secondary: #F2C879;    --d-tertiary: #C8B6FF;
+    --d-background: #0A0E0E;   --d-on-background: #E6EDEA;
+    --d-surface-variant: #18201F;
+    --d-sc-lowest: #080B0B;    --d-sc-low: #101615;
+    --d-sc: #18201F;           --d-sc-high: #222B29;   --d-sc-highest: #2B3533;
+    --d-on-surface: #E6EDEA;   --d-on-surface-var: #99A5A1;
+    --d-outline: #596460;      --d-outline-variant: #2C3533;
+    --d-error: #FFAF9F;
+    --d-warning: #F2C879;      --d-experimental: #C8B6FF;
+
+    /* LightColors — FitFaceTheme.kt */
+    --l-primary: #006B60;      --l-on-primary: #FFFFFF;
+    --l-primary-ctr: #C0F3E9;  --l-on-primary-ctr: #003731;
+    --l-secondary: #775B16;    --l-tertiary: #62558B;
+    --l-background: #F7FAF9;   --l-on-background: #171D1B;
+    --l-surface-variant: #E4ECE9;
+    --l-sc-lowest: #FFFFFF;    --l-sc-low: #F1F5F3;
+    --l-sc: #EAEFED;           --l-sc-high: #E1E8E5;   --l-sc-highest: #D8E0DD;
+    --l-on-surface: #171D1B;   --l-on-surface-var: #4A5551;
+    --l-outline: #75817D;      --l-outline-variant: #C5CECB;
+    --l-error: #A73A2E;
+    --l-warning: #775B16;      --l-experimental: #62558B;
+  }
+
+  /* The demo surfaces resolve against whichever scheme the panel is showing. */
+  .scheme-dark {
+    --primary: var(--d-primary); --on-primary: var(--d-on-primary);
+    --primary-ctr: var(--d-primary-ctr); --on-primary-ctr: var(--d-on-primary-ctr);
+    --background: var(--d-background); --on-background: var(--d-on-background);
+    --sc-low: var(--d-sc-low); --sc: var(--d-sc); --sc-high: var(--d-sc-high);
+    --sc-lowest: var(--d-sc-lowest); --sc-highest: var(--d-sc-highest);
+    --surface-variant: var(--d-surface-variant);
+    --on-surface: var(--d-on-surface); --on-surface-var: var(--d-on-surface-var);
+    --outline: var(--d-outline); --outline-variant: var(--d-outline-variant);
+    --error: var(--d-error); --warning: var(--d-warning); --experimental: var(--d-experimental);
+  }
+  .scheme-light {
+    --primary: var(--l-primary); --on-primary: var(--l-on-primary);
+    --primary-ctr: var(--l-primary-ctr); --on-primary-ctr: var(--l-on-primary-ctr);
+    --background: var(--l-background); --on-background: var(--l-on-background);
+    --sc-low: var(--l-sc-low); --sc: var(--l-sc); --sc-high: var(--l-sc-high);
+    --sc-lowest: var(--l-sc-lowest); --sc-highest: var(--l-sc-highest);
+    --surface-variant: var(--l-surface-variant);
+    --on-surface: var(--l-on-surface); --on-surface-var: var(--l-on-surface-var);
+    --outline: var(--l-outline); --outline-variant: var(--l-outline-variant);
+    --error: var(--l-error); --warning: var(--l-warning); --experimental: var(--l-experimental);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 80px;
+    font-family: var(--sans);
+    background: #0a0c0c; color: #e6edea;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 40px 32px 28px;
+    border-bottom: 1px solid rgba(255,255,255,.09);
+  }
+  h1 { margin: 0 0 10px; font-size: 26px; font-weight: 600; letter-spacing: -.02em; }
+  .lede { margin: 0; max-width: 78ch; font-size: 13.5px; line-height: 1.75; color: rgba(230,237,234,.62); }
+  .lede code, code.i { font-family: var(--mono); font-size: 12px; color: #7fe3d2; }
+  .lede strong { color: #e6edea; font-weight: 600; }
+
+  section { padding: 34px 32px 8px; border-bottom: 1px solid rgba(255,255,255,.07); }
+  h2 {
+    margin: 0 0 6px; font: 600 11px var(--mono); letter-spacing: .16em;
+    text-transform: uppercase; color: #7fe3d2;
+  }
+  .note { margin: 0 0 22px; max-width: 82ch; font-size: 12.5px; line-height: 1.7; color: rgba(230,237,234,.55); }
+  .note strong { color: rgba(230,237,234,.85); font-weight: 600; }
+
+  table { border-collapse: collapse; font-size: 12.5px; margin: 0 0 20px; }
+  th, td { text-align: left; padding: 7px 16px 7px 0; vertical-align: middle; }
+  th { font: 600 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: rgba(230,237,234,.4); border-bottom: 1px solid rgba(255,255,255,.1); }
+  td { border-bottom: 1px solid rgba(255,255,255,.05); }
+  td.m, .m { font-family: var(--mono); font-size: 11.5px; color: rgba(230,237,234,.72); }
+
+  .sw { width: 46px; height: 26px; border-radius: 5px; border: 1px solid rgba(255,255,255,.14); display: inline-block; vertical-align: middle; }
+  .ratio { font-family: var(--mono); font-size: 11.5px; }
+  .pass { color: #7fe3d2; } .fail { color: #ffaf9f; }
+
+  /* A phone-width panel that renders components against a real scheme. */
+  .panels { display: flex; flex-wrap: wrap; gap: 26px; }
+  .panel {
+    /* 360px stands in for a 360dp phone, but never wider than the space available —
+       a fixed width here scrolls the whole page sideways on a narrow window. */
+    width: 360px; max-width: 100%; flex: none; border-radius: 14px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,.1);
+    background: var(--background); color: var(--on-surface);
+    font-family: var(--sans);
+  }
+  .panel-tag {
+    font: 600 9.5px var(--mono); letter-spacing: .14em; text-transform: uppercase;
+    padding: 8px 14px; background: rgba(255,255,255,.04);
+    color: rgba(230,237,234,.5); border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .scheme-light .panel-tag { color: rgba(0,0,0,.45); background: rgba(0,0,0,.04); border-bottom-color: rgba(0,0,0,.09); }
+  .panel-body { padding: 14px; display: flex; flex-direction: column; gap: 16px; }
+  .caption { font: 500 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--on-surface-var); opacity: .7; }
+
+  /* ---- component recreations. Numbers come from FitFaceComponents.kt. ---- */
+  /*
+    The bar must span the panel's full 360px, not 360 minus the body padding. The real bar
+    gets the whole screen width and applies its own 16dp padding, so an inset demo is 28px
+    narrower than reality — narrow enough to ellipsize the subtitle here while the device
+    does not, which would misrepresent the very rule this page states.
+  */
+  .bleed { margin-left: -14px; margin-right: -14px; }
+  .top-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--background); }
+  .icon-btn {
+    width: 38px; height: 38px; flex: none; border-radius: 8px;
+    border: 1px solid var(--outline-variant); background: transparent;
+    color: var(--on-surface); font: 400 17px var(--sans);
+    display: flex; align-items: center; justify-content: center; cursor: default;
+  }
+  .icon-btn.warn { color: var(--warning); }
+  .bar-titles { flex: 1; min-width: 0; }
+  .bar-title { font: 600 15px/20px var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-sub { font: 500 11px/16px var(--mono); letter-spacing: .3px; color: var(--on-surface-var); opacity: .72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { font: 600 9.5px var(--mono); letter-spacing: 1.3px; padding: 4px 7px; border-radius: 4px; background: color-mix(in srgb, var(--warning) 13%, transparent); color: var(--warning); flex: none; }
+
+  .fit-btn { min-height: 46px; border-radius: 8px; font: 600 13px var(--sans); padding: 0 18px; border: none; cursor: default; display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
+  .fit-btn.primary { background: var(--primary); color: var(--on-primary); }
+  .fit-btn.secondary { background: transparent; color: var(--on-surface); border: 1px solid color-mix(in srgb, var(--on-surface) 38%, transparent); }
+  .fit-btn.danger { background: transparent; color: var(--error); border: 1px solid color-mix(in srgb, var(--error) 38%, transparent); }
+  .fit-btn.experimental { background: transparent; color: var(--experimental); border: 1px solid color-mix(in srgb, var(--experimental) 38%, transparent); }
+  .fit-btn.disabled { background: color-mix(in srgb, var(--on-surface) 5%, transparent); color: color-mix(in srgb, var(--on-surface) 28%, transparent); }
+  .spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid currentColor;
+          border-right-color: transparent; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+  .chip { min-height: 42px; border-radius: 999px; padding: 8px 14px; font: 500 11px var(--mono); letter-spacing: .3px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--outline-variant); color: var(--on-surface-var); background: transparent; }
+  .chip.sel { border-color: var(--primary); color: var(--primary); background: color-mix(in srgb, var(--primary) 13%, transparent); }
+  .chip.dis { opacity: .7; color: color-mix(in srgb, var(--on-surface) 28%, transparent); border-color: color-mix(in srgb, var(--outline-variant) 45%, transparent); }
+
+  .banner { display: flex; gap: 11px; align-items: flex-start; padding: 13px 14px; border-radius: 0 9px 9px 0; }
+  .banner .rule { width: 2px; min-height: 34px; flex: none; }
+  .banner .lbl { font: 500 12px/16px var(--mono); flex: none; }
+  .banner .msg { font: 400 13px/20px var(--sans); color: color-mix(in srgb, var(--on-surface) 82%, transparent); }
+  .banner.pass { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+  .banner.pass .rule, .banner.pass .lbl { background: var(--primary); color: var(--primary); }
+  .banner.pass .rule { background: var(--primary); }
+  .banner.warn { background: color-mix(in srgb, var(--warning) 8%, transparent); }
+  .banner.warn .rule { background: var(--warning); } .banner.warn .lbl { color: var(--warning); }
+  .banner.fail { background: color-mix(in srgb, var(--error) 8%, transparent); }
+  .banner.fail .rule { background: var(--error); } .banner.fail .lbl { color: var(--error); }
+
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--sc-low); border: 1px solid var(--outline-variant); }
+  .row .thumb { width: 44px; height: 62px; border-radius: 6px; background: var(--sc-high); border: 1px solid var(--outline-variant); flex: none; }
+  .row .mid { flex: 1; min-width: 0; }
+  .row .name { font: 600 13px/18px var(--sans); }
+  .row .badges { display: flex; gap: 7px; margin-top: 2px; }
+  .micro { font: 600 9.5px var(--mono); letter-spacing: 1.3px; text-transform: uppercase; color: var(--on-surface-var); opacity: .68; }
+  .micro.warn { color: var(--warning); opacity: 1; }
+  .micro.type { color: var(--experimental); opacity: 1; }
+  .row .meta { font: 500 11px/16px var(--mono); letter-spacing: .3px; color: var(--on-surface-var); opacity: .68; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .coords { font: 500 12px/16px var(--mono); color: var(--on-surface-var); flex: none; }
+
+  .readout-card { padding: 12px; border-radius: 8px; background: var(--sc-low); border: 1px solid var(--outline-variant); }
+  .readout-top { display: flex; justify-content: space-between; align-items: baseline; }
+  .readout { font: 600 20px/24px var(--mono); color: var(--on-surface); }
+  .nudge-row { display: flex; gap: 7px; margin-top: 10px; }
+  .nudge { flex: 1; min-height: 44px; border-radius: 7px; border: 1px solid var(--outline-variant); background: color-mix(in srgb, var(--on-surface) 4%, transparent); color: var(--on-surface); font: 400 15px var(--sans); display: flex; align-items: center; justify-content: center; }
+
+  /* IA map */
+  .ia { display: flex; gap: 0; align-items: flex-start; flex-wrap: wrap; }
+  .ia-col { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 172px; }
+  .ia-h { font: 600 9px var(--mono); letter-spacing: .14em; color: rgba(230,237,234,.32); margin-bottom: 2px; }
+  .ia-page { padding: 10px 12px; background: #18201f; border: 1px solid rgba(127,227,210,.28); border-radius: 8px; font: 600 12px var(--sans); }
+  .ia-page span { display: block; font: 400 10.5px var(--mono); color: rgba(230,237,234,.42); margin-top: 3px; }
+  .ia-peek { padding: 9px 12px; background: rgba(200,182,255,.05); border: 1px dashed rgba(200,182,255,.24); border-radius: 8px; font: 400 11.5px/1.4 var(--sans); color: rgba(230,237,234,.55); }
+  .ia-peek span { display: block; font: 400 9.5px var(--mono); color: #c8b6ff; margin-top: 3px; }
+  .ia-arm { flex: none; width: 34px; padding-top: 46px; display: flex; justify-content: center; }
+  .ia-arm div { width: 100%; height: 1px; background: rgba(127,227,210,.3); }
+
+  .toggle { display: inline-flex; gap: 0; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; overflow: hidden; margin: 0 0 22px; }
+  .toggle button { font: 600 11px var(--mono); letter-spacing: .08em; padding: 9px 16px; background: transparent; color: rgba(230,237,234,.55); border: none; cursor: pointer; }
+  .toggle button[aria-pressed="true"] { background: #7fe3d2; color: #062e29; }
+
+  /* ---- editor rail ---- */
+  .rail { display: flex; min-height: 58px; background: var(--sc-lowest); align-items: center; }
+  .rail-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 2px; color: color-mix(in srgb, var(--on-surface-var) 68%, transparent); }
+  .rail-item.sel { color: var(--primary); }
+  .rail-glyph { font: 500 12px/16px var(--mono); }
+  .rail-label { font: 600 9.5px var(--mono); letter-spacing: 1.3px; text-transform: uppercase; }
+
+  /* ---- selection peek ---- */
+  .peek { background: var(--sc); padding: 12px 16px; }
+  .peek-top { display: flex; align-items: center; gap: 10px; }
+  .peek-accent { width: 3px; height: 24px; background: var(--primary); flex: none; }
+  .peek-name { font: 600 13px/18px var(--sans); }
+  .peek-geo { font: 500 12px/16px var(--mono); color: var(--primary); }
+  .peek-nudges { display: flex; gap: 7px; margin-top: 10px; }
+
+  /* ---- library cards ---- */
+  .face-card { border-radius: 10px; background: var(--sc-low); border: 1px solid var(--outline-variant); padding: 8px; width: 152px; }
+  .face-shot { width: 100%; aspect-ratio: 256/402; border-radius: 8px; background: var(--sc-high); position: relative; display: flex; align-items: center; justify-content: center; }
+  .face-shot .stub { font: 500 11px var(--mono); color: var(--on-surface-var); opacity: .45; }
+  .face-name { font: 600 13px/18px var(--sans); padding: 10px 3px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .face-meta { display: flex; justify-content: space-between; padding: 5px 3px; font: 500 11px var(--mono); }
+  .face-id { color: var(--primary); }
+  .face-styles { color: var(--on-surface-var); opacity: .7; }
+  .not-editable { position: absolute; left: 6px; bottom: 6px; background: var(--sc-highest); border-radius: 4px; padding: 3px 6px; font: 600 9.5px var(--mono); letter-spacing: 1.3px; color: var(--on-surface-var); }
+
+  .proj-row { display: flex; align-items: center; gap: 13px; min-height: 84px; border-radius: 10px; background: var(--sc-low); border: 1px solid var(--outline-variant); padding: 12px 6px 12px 14px; }
+  .proj-thumb { width: 44px; height: 62px; border-radius: 5px; background: var(--sc-high); flex: none; }
+  .proj-mid { flex: 1; min-width: 0; }
+  .proj-name { font: 600 15px/20px var(--sans); }
+  /* The app sets maxLines = 1 with an ellipsis on both of these; wrapping here would
+     misrepresent how a long source filename actually behaves. */
+  .proj-meta { font: 500 11px/16px var(--mono); color: var(--on-surface-var); opacity: .68; margin-top: 3px;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .proj-age { font: 500 11px/16px var(--mono); color: var(--on-surface-var); opacity: .48; margin-top: 3px; }
+  .glyph-btn { font: 400 17px var(--sans); color: var(--on-surface-var); padding: 0 8px; }
+
+  /* ---- search field ---- */
+  .search { display: flex; align-items: center; gap: 12px; border: 1px solid var(--outline-variant); border-radius: 14px; padding: 14px 16px; color: var(--on-surface-var); }
+  .search .q { font: 400 14px var(--sans); opacity: .75; }
+
+  /* ---- section heading ---- */
+  .sect-detail { font: 400 12px/17px var(--sans); color: var(--on-surface-var); opacity: .68; margin-top: 5px; }
+
+  /* ---- validation check ---- */
+  .check { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--sc-low); }
+  .check .mark { font: 500 12px var(--mono); }
+  .check .mark.ok { color: var(--primary); } .check .mark.bad { color: var(--error); }
+  .check .lbl { flex: 1; font: 400 13px/20px var(--sans); }
+  .check .res { font: 500 12px var(--mono); color: var(--on-surface-var); }
+
+  /* ---- install step ---- */
+  .step { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; }
+  .step-dot { width: 22px; height: 22px; border-radius: 11px; flex: none; display: flex; align-items: center; justify-content: center;
+              font: 600 9.5px var(--mono); border: 1px solid var(--outline-variant); color: var(--on-surface-var); }
+  .step-dot.done { border-color: var(--primary); color: var(--primary); background: color-mix(in srgb, var(--primary) 16%, transparent); }
+  .step-title { font: 600 15px/20px var(--sans); }
+  .step-sub { font: 500 11px/16px var(--mono); color: var(--on-surface-var); opacity: .7; margin-top: 2px; }
+  .step.pending .step-title, .step.pending .step-sub { opacity: .55; }
+
+  /* ---- device badge ---- */
+  .dev-badge { font: 600 9.5px var(--mono); letter-spacing: 1.3px; padding: 4px 7px; border-radius: 4px; }
+  .dev-badge.linked { color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent); }
+  .dev-badge.setup, .dev-badge.checking { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+  .dev-badge.missing { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
+
+  /* ---- removed widget row ---- */
+  .removed { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 8px; background: var(--sc-low); border: 1px solid var(--outline-variant); }
+  .removed-accent { width: 3px; height: 28px; background: color-mix(in srgb, var(--warning) 60%, transparent); flex: none; }
+
+  /* ---- empty state ---- */
+  .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 8px 0; }
+  .empty-plate { width: 44px; height: 44px; border-radius: 10px; background: var(--sc-low); border: 1px solid var(--outline-variant); display: flex; align-items: center; justify-content: center; font: 400 17px var(--sans); color: var(--on-surface-var); }
+  .empty-title { font: 600 15px/20px var(--sans); }
+  .empty-body { font: 400 13px/20px var(--sans); color: var(--on-surface-var); }
+
+  /* ---- size card ---- */
+  .size-card { padding: 14px; border-radius: 8px; background: var(--sc-low); border: 1px solid var(--outline-variant); }
+  .size-value { font: 600 20px/24px var(--mono); margin-top: 9px; }
+  .size-btns { display: flex; gap: 10px; margin-top: 12px; }
+
+  /* ---- glyph inventory ---- */
+  .glyphs { display: flex; flex-wrap: wrap; gap: 8px; }
+  .glyph-cell { width: 92px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 10px 8px; text-align: center; background: #101615; }
+  .glyph-cell .g { font-size: 17px; color: #e6edea; }
+  .glyph-cell .n { font: 500 9.5px var(--mono); color: rgba(230,237,234,.45); margin-top: 6px; letter-spacing: .06em; }
+
+  .hidden { display: none !important; }
+
+  /* Wide content scrolls inside itself; the page body must never scroll sideways. */
+  .scroller { overflow-x: auto; margin: 0 0 20px; }
+  .scroller table { margin-bottom: 0; }
+  @media (max-width: 600px) {
+    header, section { padding-left: 18px; padding-right: 18px; }
+    .ia-arm { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FitFace Studio — design system</h1>
+  <p class="lede">
+    The visual reference for <code>:core:ui</code>. Everything below is transcribed from
+    <code>FitFaceTheme.kt</code> and <code>FitFaceComponents.kt</code>; <strong>those files are
+    the authority</strong> and this page is stale if it disagrees with them. The prose half —
+    why the tokens are shaped this way, and the three places the code knowingly departs from
+    the original design — is in <code>design-system.md</code> beside this file.
+  </p>
+  <p class="lede" style="margin-top:12px">
+    <strong>This file is self-contained on purpose.</strong> No build step, no server, no
+    network: it has to render from a fresh clone on a plane. Do not add a CDN script, a
+    webfont link or an external image to it.
+  </p>
+</header>
+
+<section>
+  <h2>Colour</h2>
+  <p class="note">
+    One teal accent, three semantic hues, and a surface ladder that expresses elevation as
+    <strong>lighter surfaces plus a 1dp border</strong> — never a shadow. <code class="i">warning</code>
+    and <code class="i">experimental</code> are not part of a Material scheme, so
+    <code class="i">FitFaceTheme</code> provides them through
+    <code class="i">LocalFitFaceSemanticColors</code>; they carry different values per theme
+    because the dark pair is unreadable on a light surface. The ratios below are against that
+    scheme's own background, and <code class="i">SemanticColorContrastTest</code> holds them to
+    4.5:1.
+  </p>
+  <p class="note">
+    <code class="i">FitFaceTextColors</code> supplies the two quiet tiers of text, and they are
+    the <strong>only</strong> way to dim text in this app — there is no alpha to choose at a
+    call site. <code class="i">secondary</code> is meta lines, subtitles and section headings;
+    <code class="i">tertiary</code> is the quietest line where three stack up, as in a project
+    row's name, source and age. Both clear 4.5:1 on every surface in both schemes, which
+    <code class="i">SmallTextContrastTest</code> holds. Disabled controls keep their own alphas
+    and are exempt — a control that cannot be operated should look inert.
+  </p>
+  <div class="scroller"><table>
+    <tr><th>Role</th><th>Dark</th><th></th><th>Light</th><th></th></tr>
+    <tr><td class="m">primary</td><td><span class="sw" style="background:#7FE3D2"></span></td><td class="m">#7FE3D2</td><td><span class="sw" style="background:#006B60"></span></td><td class="m">#006B60</td></tr>
+    <tr><td class="m">primaryContainer</td><td><span class="sw" style="background:#00504A"></span></td><td class="m">#00504A</td><td><span class="sw" style="background:#C0F3E9"></span></td><td class="m">#C0F3E9</td></tr>
+    <tr><td class="m">background / surface</td><td><span class="sw" style="background:#0A0E0E"></span></td><td class="m">#0A0E0E</td><td><span class="sw" style="background:#F7FAF9"></span></td><td class="m">#F7FAF9</td></tr>
+    <tr><td class="m">surfaceContainerLow</td><td><span class="sw" style="background:#101615"></span></td><td class="m">#101615</td><td><span class="sw" style="background:#F1F5F3"></span></td><td class="m">#F1F5F3</td></tr>
+    <tr><td class="m">surfaceContainer</td><td><span class="sw" style="background:#18201F"></span></td><td class="m">#18201F</td><td><span class="sw" style="background:#EAEFED"></span></td><td class="m">#EAEFED</td></tr>
+    <tr><td class="m">surfaceContainerHigh</td><td><span class="sw" style="background:#222B29"></span></td><td class="m">#222B29</td><td><span class="sw" style="background:#E1E8E5"></span></td><td class="m">#E1E8E5</td></tr>
+    <tr><td class="m">onSurface</td><td><span class="sw" style="background:#E6EDEA"></span></td><td class="m">#E6EDEA</td><td><span class="sw" style="background:#171D1B"></span></td><td class="m">#171D1B</td></tr>
+    <tr><td class="m">onSurfaceVariant</td><td><span class="sw" style="background:#99A5A1"></span></td><td class="m">#99A5A1</td><td><span class="sw" style="background:#4A5551"></span></td><td class="m">#4A5551</td></tr>
+    <tr><td class="m">outlineVariant</td><td><span class="sw" style="background:#2C3533"></span></td><td class="m">#2C3533</td><td><span class="sw" style="background:#C5CECB"></span></td><td class="m">#C5CECB</td></tr>
+    <tr><td class="m">error</td><td><span class="sw" style="background:#FFAF9F"></span></td><td class="m">#FFAF9F</td><td><span class="sw" style="background:#A73A2E"></span></td><td class="m">#A73A2E</td></tr>
+    <tr><td class="m"><strong>warning</strong> (semantic)</td><td><span class="sw" style="background:#F2C879"></span></td><td class="m">#F2C879 <span class="ratio pass">12.30:1</span></td><td><span class="sw" style="background:#775B16"></span></td><td class="m">#775B16 <span class="ratio pass">6.07:1</span></td></tr>
+    <tr><td class="m"><strong>experimental</strong> (semantic)</td><td><span class="sw" style="background:#C8B6FF"></span></td><td class="m">#C8B6FF <span class="ratio pass">10.71:1</span></td><td><span class="sw" style="background:#62558B"></span></td><td class="m">#62558B <span class="ratio pass">6.27:1</span></td></tr>
+    <tr><td class="m"><strong>text.secondary</strong></td><td><span class="sw" style="background:#99A5A1"></span></td><td class="m">onSurfaceVariant <span class="ratio pass">6.52:1</span></td><td><span class="sw" style="background:#4A5551"></span></td><td class="m">onSurfaceVariant <span class="ratio pass">6.67:1</span></td></tr>
+    <tr><td class="m"><strong>text.tertiary</strong></td><td><span class="sw" style="background:#8B9693"></span></td><td class="m">&times;&nbsp;.90 <span class="ratio pass">5.56:1</span></td><td><span class="sw" style="background:#5D6764"></span></td><td class="m">&times;&nbsp;.90 <span class="ratio pass">5.27:1</span></td></tr>
+  </table></div>
+  <p class="note" style="margin-bottom:6px">
+    What the dark pair measures if it leaks into the light theme, which is what happened when
+    the theme declared the composition local and never provided it:
+    <span class="ratio fail">amber 1.50:1</span> &middot;
+    <span class="ratio fail">violet 1.73:1</span>.
+  </p>
+</section>
+
+<section>
+  <h2>Type</h2>
+  <p class="note">
+    Mono is not decoration. <strong>In this app the numerals are the content</strong> — a
+    coordinate, a byte count, a sequence id — and a proportional digit changes width with its
+    value, so a figure being nudged jitters while you hold the button. Anything quantitative
+    goes in a mono slot. <code class="i">FitFaceType.readout</code> exists because Material's
+    ramp has no mono slot at 20sp, which is why the inspector's coordinates had fallen back to
+    a proportional <code class="i">headlineSmall</code>.
+  </p>
+  <div class="scroller"><table>
+    <tr><th>Token</th><th>Spec</th><th>Family</th><th>Sample</th></tr>
+    <tr><td class="m">headlineLarge</td><td class="m">28/32 · 600 · -0.3</td><td class="m">sans</td><td style="font:600 28px/32px var(--sans); letter-spacing:-.3px">Watch faces</td></tr>
+    <tr><td class="m">headlineSmall</td><td class="m">22/27 · 600</td><td class="m">sans</td><td style="font:600 22px/27px var(--sans)">Remove widget?</td></tr>
+    <tr><td class="m">titleLarge</td><td class="m">17/22 · 600</td><td class="m">sans</td><td style="font:600 17px/22px var(--sans)">Recent projects</td></tr>
+    <tr><td class="m">titleMedium</td><td class="m">15/20 · 600</td><td class="m">sans</td><td style="font:600 15px/20px var(--sans)">Black or white</td></tr>
+    <tr><td class="m">titleSmall</td><td class="m">13/18 · 600</td><td class="m">sans</td><td style="font:600 13px/18px var(--sans)">Widget #2</td></tr>
+    <tr><td class="m">bodyLarge</td><td class="m">14/20 · 400</td><td class="m">sans</td><td style="font:400 14px/20px var(--sans)">Each outlined region is a draggable widget.</td></tr>
+    <tr><td class="m">bodyMedium</td><td class="m">13/20 · 400</td><td class="m">sans</td><td style="font:400 13px/20px var(--sans)">Pick a face, edit it, then install it.</td></tr>
+    <tr><td class="m">bodySmall</td><td class="m">12/17 · 400</td><td class="m">sans</td><td style="font:400 12px/17px var(--sans)">Resetting restores the downloaded container.</td></tr>
+    <tr><td class="m">labelLarge</td><td class="m">13/18 · 600</td><td class="m">sans</td><td style="font:600 13px/18px var(--sans)">Continue to install</td></tr>
+    <tr><td class="m">labelMedium</td><td class="m">11/16 · 500 · 0.3</td><td class="m"><strong>mono</strong></td><td style="font:500 11px/16px var(--mono); letter-spacing:.3px">face 00112 · style0</td></tr>
+    <tr><td class="m">labelSmall</td><td class="m">10/14 · 600 · 1.2</td><td class="m"><strong>mono</strong></td><td style="font:600 10px/14px var(--mono); letter-spacing:1.2px">app=0.1.1 (17)</td></tr>
+    <tr><td class="m">FitFaceType.numeric</td><td class="m">12/16 · 500</td><td class="m"><strong>mono</strong></td><td style="font:500 12px/16px var(--mono)">x 77 · y 50 · 40×62</td></tr>
+    <tr><td class="m">FitFaceType.micro</td><td class="m">9.5/13 · 600 · 1.3</td><td class="m"><strong>mono</strong></td><td style="font:600 9.5px/13px var(--mono); letter-spacing:1.3px">VALIDATION · CHANGED BYTES</td></tr>
+    <tr><td class="m">FitFaceType.readout</td><td class="m">20/24 · 600</td><td class="m"><strong>mono</strong></td><td style="font:600 20px/24px var(--mono)">40 × 62 px</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>Shape, spacing, elevation</h2>
+  <p class="note">
+    <strong>There is no spacing token.</strong> A <code class="i">FitFaceSpacing</code> class
+    encoding a 4dp scale used to exist and nothing ever read it, while the UI modules hold
+    ~330 dp literals of which about two thirds are off that scale. It was deleted rather than
+    left to imply a rule the code does not follow — see design-system.md, "Departure 2". The
+    values below are the ones actually in use; treat them as observed, not prescribed.
+  </p>
+  <div style="display:flex; gap:44px; flex-wrap:wrap; margin-bottom:22px">
+    <div>
+      <div class="ia-h">SHAPE — MaterialTheme.shapes</div>
+      <div style="display:flex; align-items:flex-end; gap:10px; margin-top:10px">
+        <div style="width:52px;height:36px;background:#18201f;border:1px solid rgba(255,255,255,.13);border-radius:4px"></div>
+        <div style="width:52px;height:36px;background:#18201f;border:1px solid rgba(255,255,255,.13);border-radius:8px"></div>
+        <div style="width:52px;height:36px;background:#18201f;border:1px solid rgba(255,255,255,.13);border-radius:10px"></div>
+        <div style="width:52px;height:36px;background:#18201f;border:1px solid rgba(255,255,255,.13);border-radius:14px"></div>
+        <div style="width:52px;height:36px;background:#18201f;border:1px solid rgba(255,255,255,.13);border-radius:18px"></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px" class="m">
+        <span style="width:52px;text-align:center">xs 4</span>
+        <span style="width:52px;text-align:center">sm 8</span>
+        <span style="width:52px;text-align:center">md 10</span>
+        <span style="width:52px;text-align:center">lg 14</span>
+        <span style="width:52px;text-align:center">xl 18</span>
+      </div>
+      <p class="note" style="margin-top:10px;max-width:34ch">
+        <code class="i">extraSmall</code> is <code class="i">FitBadge</code>'s corner.
+        <code class="i">extraLarge</code> has no consumer, and a few places still hardcode
+        <code class="i">RoundedCornerShape</code> rather than reach for the token.
+      </p>
+    </div>
+    <div>
+      <div class="ia-h">SURFACE ELEVATION — lighter, not shadow</div>
+      <div style="display:flex; align-items:flex-end; gap:10px; margin-top:10px">
+        <div style="width:64px;height:36px;background:#0A0E0E;border:1px solid rgba(255,255,255,.07);border-radius:8px"></div>
+        <div style="width:64px;height:36px;background:#101615;border:1px solid rgba(255,255,255,.08);border-radius:8px"></div>
+        <div style="width:64px;height:36px;background:#18201F;border:1px solid rgba(255,255,255,.1);border-radius:8px"></div>
+        <div style="width:64px;height:36px;background:#222B29;border:1px solid rgba(255,255,255,.12);border-radius:8px"></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px" class="m">
+        <span style="width:64px;text-align:center">base</span>
+        <span style="width:64px;text-align:center">low</span>
+        <span style="width:64px;text-align:center">container</span>
+        <span style="width:64px;text-align:center">high</span>
+      </div>
+      <p class="note" style="margin-top:10px;max-width:36ch">
+        A card is <code class="i">surfaceContainerLow</code> plus a 1dp
+        <code class="i">outlineVariant</code> border. There is no shadow anywhere in the app,
+        and <code class="i">FitFaceElevation</code> was deleted for having no consumers.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Components</h2>
+  <p class="note">
+    Rendered against both schemes, because the semantic colours differ between them and that
+    is exactly where a regression hides. Use the toggle to compare.
+  </p>
+  <p class="note">
+    <strong>These are hand-built approximations, not a pixel-accurate render.</strong> The
+    panels are 360px wide to stand in for a 360dp phone, but they draw with whatever sans and
+    mono your browser resolves — Menlo or SF&nbsp;Mono on a Mac, which is materially wider
+    than the Roboto&nbsp;Mono the device uses. Colours, sizes, weights, radii and structure are
+    exact; <strong>text widths are not</strong>, so do not read a truncation or a fit off this
+    page. The measured device figures are in the width-budget table below, and
+    <code class="i">FitTopBarLayoutTest</code> is what actually holds the line.
+  </p>
+  <div class="toggle" role="group" aria-label="Which schemes to show">
+    <button type="button" data-show="both" aria-pressed="true">BOTH</button>
+    <button type="button" data-show="dark" aria-pressed="false">DARK</button>
+    <button type="button" data-show="light" aria-pressed="false">LIGHT</button>
+  </div>
+
+  <div class="panels">
+    <!-- The two panels are identical markup; only the scheme class differs. -->
+    <div class="panel scheme-dark" data-scheme="dark">
+      <div class="panel-tag">Dark</div>
+      <div class="panel-body">
+
+        <div class="caption">FitTopBar — the actions slot is a width budget</div>
+        <div class="top-bar bleed">
+          <div class="icon-btn">&lsaquo;</div>
+          <div class="bar-titles">
+            <div class="bar-title">Black or white</div>
+            <div class="bar-sub">face 00112 · style0</div>
+          </div>
+          <div class="icon-btn">⋯</div>
+          <div class="icon-btn">&#8801;</div>
+        </div>
+        <div class="caption">FitBadge — something outstanding, from the one row that never scrolls</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <span class="badge">EDITED</span>
+          <span class="badge">UNAPPLIED</span>
+        </div>
+
+        <div class="caption">FitIconButton — 38dp · default / warning-tinted</div>
+        <div style="display:flex; gap:10px">
+          <div class="icon-btn">&#8801;</div>
+          <div class="icon-btn warn">&#8801;</div>
+          <div class="icon-btn">⋯</div>
+          <div class="icon-btn">&lsaquo;</div>
+        </div>
+
+        <div class="caption">FitButton — primary / loading / secondary / danger / experimental / disabled</div>
+        <div style="display:flex; flex-wrap:wrap; gap:8px">
+          <div class="fit-btn primary">Continue to install</div>
+          <div class="fit-btn primary"><span class="spin"></span>Transferring</div>
+          <div class="fit-btn secondary">Export BIN</div>
+          <div class="fit-btn danger">Reset edits</div>
+          <div class="fit-btn experimental">Direct install</div>
+          <div class="fit-btn disabled">Continue to install</div>
+        </div>
+
+        <div class="caption">FitChip — 42dp · selected / default / disabled</div>
+        <div style="display:flex; gap:8px">
+          <div class="chip sel">Watch faces</div>
+          <div class="chip">Projects 1</div>
+          <div class="chip dis">Face number</div>
+        </div>
+
+        <div class="caption">StatusBanner — pass / warning / fail</div>
+        <div class="banner pass"><div class="rule"></div><div class="lbl">OK</div><div class="msg">Container reparsed. Entry bounds, records and CRCs valid.</div></div>
+        <div class="banner warn"><div class="rule"></div><div class="lbl">WARN</div><div class="msg">This widget's frames have no transparency, so the watch paints its whole rectangle.</div></div>
+        <div class="banner fail"><div class="rule"></div><div class="lbl">FAIL</div><div class="msg">Record size 412 exceeds entry bound at offset 0x1A40.</div></div>
+
+        <div class="caption">WidgetRow — badges inline, meta on one line</div>
+        <div class="row">
+          <div class="thumb"></div>
+          <div class="mid">
+            <div class="name">Widget #2</div>
+            <div class="badges"><span class="micro type">Sprite</span><span class="micro warn">Opaque</span><span class="micro">10 frames</span></div>
+            <div class="meta">type 3 · seq 3 · 40×62</div>
+          </div>
+          <div class="coords">77, 50</div>
+        </div>
+
+        <div class="caption">CoordinateControl — FitFaceType.readout</div>
+        <div class="readout-card">
+          <div class="readout-top"><span class="micro">X</span><span class="readout">77</span></div>
+          <div class="nudge-row"><div class="nudge">−</div><div class="nudge">+</div></div>
+        </div>
+
+        <div class="caption">EditorRail — 58dp · the five destinations</div>
+        <div class="rail bleed">
+          <div class="rail-item sel"><span class="rail-glyph">&#9638;</span><span class="rail-label">Widgets</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#9639;</span><span class="rail-label">Background</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#9707;</span><span class="rail-label">Styles</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#10003;</span><span class="rail-label">Validate</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#8679;</span><span class="rail-label">Install</span></div>
+        </div>
+
+        <div class="caption">SelectionPeek — a peek, never a page</div>
+        <div class="peek bleed">
+          <div class="peek-top">
+            <div class="peek-accent"></div>
+            <div style="flex:1;min-width:0">
+              <div class="peek-name">Widget #2</div>
+              <div class="peek-geo">x 77 &middot; y 50 &middot; 40&times;62</div>
+            </div>
+            <div class="fit-btn secondary" style="min-height:38px;padding:0 12px">Inspect &rsaquo;</div>
+          </div>
+          <div class="peek-nudges">
+            <div class="nudge">&larr;</div><div class="nudge">&uarr;</div>
+            <div class="nudge">&darr;</div><div class="nudge">&rarr;</div>
+          </div>
+          <div class="micro" style="margin-top:8px">Tap for 1 px &middot; hold to keep moving</div>
+        </div>
+
+        <div class="caption">SectionHeading</div>
+        <div>
+          <div class="micro">On the canvas</div>
+          <div class="sect-detail">12 of 13 records draw a rectangle you can select and drag.</div>
+        </div>
+
+        <div class="caption">Search field</div>
+        <div class="search"><span>&#8981;</span><span class="q">Search faces or ID</span></div>
+
+        <div class="caption">Face card — default / not editable</div>
+        <div style="display:flex; gap:10px">
+          <div class="face-card">
+            <div class="face-shot"><span class="stub">256&times;402</span></div>
+            <div class="face-name">Black or white</div>
+            <div class="face-meta"><span class="face-id">#112</span><span class="face-styles">4 styles</span></div>
+          </div>
+          <div class="face-card">
+            <div class="face-shot"><span class="stub">256&times;402</span><span class="not-editable">Not editable</span></div>
+            <div class="face-name">Photos</div>
+            <div class="face-meta"><span class="face-id">#254</span><span class="face-styles">1 style</span></div>
+          </div>
+        </div>
+
+        <div class="caption">ProjectRow</div>
+        <div class="proj-row">
+          <div class="proj-thumb"></div>
+          <div class="proj-mid">
+            <div class="proj-name">Black or white</div>
+            <div class="proj-meta">face 00112 &middot; Blanco y negro.apk</div>
+            <div class="proj-age">1 hr. ago</div>
+          </div>
+          <span class="glyph-btn">&times;</span><span class="glyph-btn">&rsaquo;</span>
+        </div>
+
+        <div class="caption">RemovedWidgetRow — kept so it can go back</div>
+        <div class="removed">
+          <div class="removed-accent"></div>
+          <div style="flex:1;min-width:0">
+            <div class="peek-name">Widget #7</div>
+            <div class="proj-meta">type 1 &middot; seq 0 &middot; 40&times;40 &middot; 4 styles</div>
+          </div>
+          <div class="fit-btn secondary" style="min-height:38px;padding:0 12px">Restore</div>
+        </div>
+
+        <div class="caption">ValidationCheck — pass / fail</div>
+        <div class="check"><span class="mark ok">&#10003;</span><span class="lbl">Per-entry CRC</span><span class="res">pass</span></div>
+        <div class="check"><span class="mark bad">&times;</span><span class="lbl">Record sizes</span><span class="res">fail</span></div>
+
+        <div class="caption">Install checklist step — done / pending</div>
+        <div>
+          <div class="step"><div class="step-dot done">&#10003;</div><div><div class="step-title">Connect the watch in its companion app</div><div class="step-sub">Companion app and plugin found</div></div></div>
+          <div class="step pending"><div class="step-dot">3</div><div><div class="step-title">Discover the watch-face and OTA peers</div><div class="step-sub">Needs the watch connected</div></div></div>
+        </div>
+
+        <div class="caption">Device badge — linked / setup / checking / missing</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <span class="dev-badge linked">Linked</span>
+          <span class="dev-badge setup">Setup</span>
+          <span class="dev-badge checking">Checking</span>
+          <span class="dev-badge missing">Missing</span>
+        </div>
+
+        <div class="caption">Sprite size card — readout plus the resize ladder</div>
+        <div class="size-card">
+          <div class="micro">Size &middot; aspect ratio locked</div>
+          <div class="size-value">40 &times; 62 px</div>
+          <div class="size-btns">
+            <div class="fit-btn secondary" style="flex:1">Smaller</div>
+            <div class="fit-btn secondary" style="flex:1">Larger</div>
+          </div>
+        </div>
+
+        <div class="caption">Empty state</div>
+        <div class="empty">
+          <div class="empty-plate">&#9671;</div>
+          <div class="empty-title">No projects yet</div>
+          <div class="empty-body">Pick a face from the catalogue to start one.</div>
+          <div class="fit-btn primary" style="width:100%">Browse watch faces</div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="panel scheme-light" data-scheme="light">
+      <div class="panel-tag">Light</div>
+      <div class="panel-body">
+
+        <div class="caption">FitTopBar — the actions slot is a width budget</div>
+        <div class="top-bar bleed">
+          <div class="icon-btn">&lsaquo;</div>
+          <div class="bar-titles">
+            <div class="bar-title">Black or white</div>
+            <div class="bar-sub">face 00112 · style0</div>
+          </div>
+          <div class="icon-btn">⋯</div>
+          <div class="icon-btn">&#8801;</div>
+        </div>
+        <div class="caption">FitBadge — something outstanding, from the one row that never scrolls</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <span class="badge">EDITED</span>
+          <span class="badge">UNAPPLIED</span>
+        </div>
+
+        <div class="caption">FitIconButton — 38dp · default / warning-tinted</div>
+        <div style="display:flex; gap:10px">
+          <div class="icon-btn">&#8801;</div>
+          <div class="icon-btn warn">&#8801;</div>
+          <div class="icon-btn">⋯</div>
+          <div class="icon-btn">&lsaquo;</div>
+        </div>
+
+        <div class="caption">FitButton — primary / loading / secondary / danger / experimental / disabled</div>
+        <div style="display:flex; flex-wrap:wrap; gap:8px">
+          <div class="fit-btn primary">Continue to install</div>
+          <div class="fit-btn primary"><span class="spin"></span>Transferring</div>
+          <div class="fit-btn secondary">Export BIN</div>
+          <div class="fit-btn danger">Reset edits</div>
+          <div class="fit-btn experimental">Direct install</div>
+          <div class="fit-btn disabled">Continue to install</div>
+        </div>
+
+        <div class="caption">FitChip — 42dp · selected / default / disabled</div>
+        <div style="display:flex; gap:8px">
+          <div class="chip sel">Watch faces</div>
+          <div class="chip">Projects 1</div>
+          <div class="chip dis">Face number</div>
+        </div>
+
+        <div class="caption">StatusBanner — pass / warning / fail</div>
+        <div class="banner pass"><div class="rule"></div><div class="lbl">OK</div><div class="msg">Container reparsed. Entry bounds, records and CRCs valid.</div></div>
+        <div class="banner warn"><div class="rule"></div><div class="lbl">WARN</div><div class="msg">This widget's frames have no transparency, so the watch paints its whole rectangle.</div></div>
+        <div class="banner fail"><div class="rule"></div><div class="lbl">FAIL</div><div class="msg">Record size 412 exceeds entry bound at offset 0x1A40.</div></div>
+
+        <div class="caption">WidgetRow — badges inline, meta on one line</div>
+        <div class="row">
+          <div class="thumb"></div>
+          <div class="mid">
+            <div class="name">Widget #2</div>
+            <div class="badges"><span class="micro type">Sprite</span><span class="micro warn">Opaque</span><span class="micro">10 frames</span></div>
+            <div class="meta">type 3 · seq 3 · 40×62</div>
+          </div>
+          <div class="coords">77, 50</div>
+        </div>
+
+        <div class="caption">CoordinateControl — FitFaceType.readout</div>
+        <div class="readout-card">
+          <div class="readout-top"><span class="micro">X</span><span class="readout">77</span></div>
+          <div class="nudge-row"><div class="nudge">−</div><div class="nudge">+</div></div>
+        </div>
+
+        <div class="caption">EditorRail — 58dp · the five destinations</div>
+        <div class="rail bleed">
+          <div class="rail-item sel"><span class="rail-glyph">&#9638;</span><span class="rail-label">Widgets</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#9639;</span><span class="rail-label">Background</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#9707;</span><span class="rail-label">Styles</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#10003;</span><span class="rail-label">Validate</span></div>
+          <div class="rail-item"><span class="rail-glyph">&#8679;</span><span class="rail-label">Install</span></div>
+        </div>
+
+        <div class="caption">SelectionPeek — a peek, never a page</div>
+        <div class="peek bleed">
+          <div class="peek-top">
+            <div class="peek-accent"></div>
+            <div style="flex:1;min-width:0">
+              <div class="peek-name">Widget #2</div>
+              <div class="peek-geo">x 77 &middot; y 50 &middot; 40&times;62</div>
+            </div>
+            <div class="fit-btn secondary" style="min-height:38px;padding:0 12px">Inspect &rsaquo;</div>
+          </div>
+          <div class="peek-nudges">
+            <div class="nudge">&larr;</div><div class="nudge">&uarr;</div>
+            <div class="nudge">&darr;</div><div class="nudge">&rarr;</div>
+          </div>
+          <div class="micro" style="margin-top:8px">Tap for 1 px &middot; hold to keep moving</div>
+        </div>
+
+        <div class="caption">SectionHeading</div>
+        <div>
+          <div class="micro">On the canvas</div>
+          <div class="sect-detail">12 of 13 records draw a rectangle you can select and drag.</div>
+        </div>
+
+        <div class="caption">Search field</div>
+        <div class="search"><span>&#8981;</span><span class="q">Search faces or ID</span></div>
+
+        <div class="caption">Face card — default / not editable</div>
+        <div style="display:flex; gap:10px">
+          <div class="face-card">
+            <div class="face-shot"><span class="stub">256&times;402</span></div>
+            <div class="face-name">Black or white</div>
+            <div class="face-meta"><span class="face-id">#112</span><span class="face-styles">4 styles</span></div>
+          </div>
+          <div class="face-card">
+            <div class="face-shot"><span class="stub">256&times;402</span><span class="not-editable">Not editable</span></div>
+            <div class="face-name">Photos</div>
+            <div class="face-meta"><span class="face-id">#254</span><span class="face-styles">1 style</span></div>
+          </div>
+        </div>
+
+        <div class="caption">ProjectRow</div>
+        <div class="proj-row">
+          <div class="proj-thumb"></div>
+          <div class="proj-mid">
+            <div class="proj-name">Black or white</div>
+            <div class="proj-meta">face 00112 &middot; Blanco y negro.apk</div>
+            <div class="proj-age">1 hr. ago</div>
+          </div>
+          <span class="glyph-btn">&times;</span><span class="glyph-btn">&rsaquo;</span>
+        </div>
+
+        <div class="caption">RemovedWidgetRow — kept so it can go back</div>
+        <div class="removed">
+          <div class="removed-accent"></div>
+          <div style="flex:1;min-width:0">
+            <div class="peek-name">Widget #7</div>
+            <div class="proj-meta">type 1 &middot; seq 0 &middot; 40&times;40 &middot; 4 styles</div>
+          </div>
+          <div class="fit-btn secondary" style="min-height:38px;padding:0 12px">Restore</div>
+        </div>
+
+        <div class="caption">ValidationCheck — pass / fail</div>
+        <div class="check"><span class="mark ok">&#10003;</span><span class="lbl">Per-entry CRC</span><span class="res">pass</span></div>
+        <div class="check"><span class="mark bad">&times;</span><span class="lbl">Record sizes</span><span class="res">fail</span></div>
+
+        <div class="caption">Install checklist step — done / pending</div>
+        <div>
+          <div class="step"><div class="step-dot done">&#10003;</div><div><div class="step-title">Connect the watch in its companion app</div><div class="step-sub">Companion app and plugin found</div></div></div>
+          <div class="step pending"><div class="step-dot">3</div><div><div class="step-title">Discover the watch-face and OTA peers</div><div class="step-sub">Needs the watch connected</div></div></div>
+        </div>
+
+        <div class="caption">Device badge — linked / setup / checking / missing</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <span class="dev-badge linked">Linked</span>
+          <span class="dev-badge setup">Setup</span>
+          <span class="dev-badge checking">Checking</span>
+          <span class="dev-badge missing">Missing</span>
+        </div>
+
+        <div class="caption">Sprite size card — readout plus the resize ladder</div>
+        <div class="size-card">
+          <div class="micro">Size &middot; aspect ratio locked</div>
+          <div class="size-value">40 &times; 62 px</div>
+          <div class="size-btns">
+            <div class="fit-btn secondary" style="flex:1">Smaller</div>
+            <div class="fit-btn secondary" style="flex:1">Larger</div>
+          </div>
+        </div>
+
+        <div class="caption">Empty state</div>
+        <div class="empty">
+          <div class="empty-plate">&#9671;</div>
+          <div class="empty-title">No projects yet</div>
+          <div class="empty-body">Pick a face from the catalogue to start one.</div>
+          <div class="fit-btn primary" style="width:100%">Browse watch faces</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Glyphs</h2>
+  <p class="note">
+    There is <strong>no icon library in this project</strong> and no vector drawable outside
+    the launcher. Every symbol is a text glyph, which both <code class="i">strings.xml</code>
+    headers record as deliberate: they are symbols, not copy, so they stay inline in the
+    Composables where a translator will not see them. <strong>A glyph-only control needs a
+    <code class="i">contentDescription</code></strong> — without one a screen reader announces
+    the character, which is how the overflow button used to introduce itself as "midline
+    horizontal ellipsis".
+  </p>
+  <div class="glyphs">
+    <div class="glyph-cell"><div class="g">&lsaquo;</div><div class="n">back</div></div>
+    <div class="glyph-cell"><div class="g">&rsaquo;</div><div class="n">forward</div></div>
+    <div class="glyph-cell"><div class="g">&#8943;</div><div class="n">overflow</div></div>
+    <div class="glyph-cell"><div class="g">&#8801;</div><div class="n">app menu</div></div>
+    <div class="glyph-cell"><div class="g">&#8981;</div><div class="n">search</div></div>
+    <div class="glyph-cell"><div class="g">&times;</div><div class="n">remove</div></div>
+    <div class="glyph-cell"><div class="g">&#9671;</div><div class="n">empty</div></div>
+    <div class="glyph-cell"><div class="g">&#10003;</div><div class="n">pass / done</div></div>
+    <div class="glyph-cell"><div class="g">&#9638;</div><div class="n">widgets</div></div>
+    <div class="glyph-cell"><div class="g">&#9639;</div><div class="n">background</div></div>
+    <div class="glyph-cell"><div class="g">&#9707;</div><div class="n">styles</div></div>
+    <div class="glyph-cell"><div class="g">&#8679;</div><div class="n">install</div></div>
+    <div class="glyph-cell"><div class="g">&#9679;</div><div class="n">selected</div></div>
+    <div class="glyph-cell"><div class="g">&larr;</div><div class="n">nudge left</div></div>
+    <div class="glyph-cell"><div class="g">&uarr;</div><div class="n">nudge up</div></div>
+    <div class="glyph-cell"><div class="g">&darr;</div><div class="n">nudge down</div></div>
+    <div class="glyph-cell"><div class="g">&rarr;</div><div class="n">nudge right</div></div>
+    <div class="glyph-cell"><div class="g">&minus;</div><div class="n">decrement</div></div>
+    <div class="glyph-cell"><div class="g">+</div><div class="n">increment</div></div>
+  </div>
+  <p class="note" style="margin-top:20px">
+    Avoid <code class="i">&#9888;</code> and <code class="i">&#9873;</code> and anything else
+    with an emoji presentation: several devices render them as a colour emoji, which breaks a
+    monochrome set badly. Everything above is a plain typographic character on every Android
+    version the app supports.
+  </p>
+</section>
+
+<section>
+  <h2>The top bar's width budget</h2>
+  <p class="note">
+    The one component rule with a test attached, because breaking it is invisible.
+    <code class="i">FitTopBar</code> gives its title/subtitle column a
+    <code class="i">weight(1f)</code>, so the column is the flexible child and
+    <strong>every dp an action takes comes out of the title</strong>. A full-label
+    "Report a problem" <code class="i">TextButton</code> took 109dp of a 360dp bar — wider
+    than the title beside it — and the subtitle was silently ellipsized on every editor page,
+    with no exception, no lint warning and nothing in any test.
+  </p>
+  <p class="note">
+    This is also why the app's three global actions — report a problem, about, check for
+    update — are one <code class="i">≡</code> button and a menu rather than three buttons.
+    A <code class="i">DropdownMenu</code> is a <code class="i">Popup</code>, measured in its
+    own window, so the bar pays for the anchor and nothing else: the numbers below are the
+    same as they were for the single button it replaced.
+    <code class="i">FitTopBarLayoutTest.theOpenMenuCostsTheBarNoWidth</code> is what keeps
+    that true.
+  </p>
+  <div class="scroller"><table>
+    <tr><th>Bar at 360dp</th><th>dp</th><th>Note</th></tr>
+    <tr><td class="m">horizontal padding</td><td class="m">16 + 16</td><td class="m">fixed</td></tr>
+    <tr><td class="m">back button</td><td class="m">38</td><td class="m">FitIconButton</td></tr>
+    <tr><td class="m">gaps</td><td class="m">12 each</td><td class="m">Arrangement.spacedBy</td></tr>
+    <tr><td class="m">each action</td><td class="m">38</td><td class="m">≤ 44 is the tested budget</td></tr>
+    <tr><td class="m"><strong>title column, one action</strong></td><td class="m"><strong>228</strong></td><td class="m">floor asserted at 200</td></tr>
+    <tr><td class="m"><strong>title column, Canvas worst case</strong></td><td class="m"><strong>152</strong></td><td class="m">badge + ⋯ + ≡ · floor asserted at 130</td></tr>
+  </table></div>
+  <p class="note">
+    Two rules follow, and both have been broken here before. <strong>An action is a
+    <code class="i">FitIconButton</code></strong> and its label lives in the
+    <code class="i">contentDescription</code>. <strong>The always-present action is emitted
+    last</strong>, so as the final child its right edge pins to the padding and it stops
+    sliding sideways when a conditional neighbour appears — the library's moved 189px on a tab
+    switch. <code class="i">FitTopBarLayoutTest</code> pins the budget; it asserts geometry
+    rather than whether text was ellipsized, because Robolectric's font metrics are not the
+    device's and a truncation assertion passes while a real phone still clips.
+  </p>
+</section>
+
+<section>
+  <h2>Screens</h2>
+  <p class="note">
+    <strong>A page</strong> is a distinct task with its own state and its own way out, and
+    earns a back-stack entry. <strong>A peek or sheet</strong> needs the canvas visible while
+    you use it, or resolves in one tap — a 1px nudge needs the face in the same eyeful, so
+    nudging is never a page. Five rail destinations means one back stack and no nested graphs.
+  </p>
+  <div class="ia">
+    <div class="ia-col">
+      <div class="ia-h">L0 · ROOT</div>
+      <div class="ia-page">Library<span>Watch faces / Projects</span></div>
+      <div class="ia-peek">Face sheet<span>SHEET · download, styles</span></div>
+      <div class="ia-peek">App menu<span>MENU · both top bars · &#8801;</span></div>
+      <div class="ia-peek">Diagnostics<span>DIALOG · from the menu</span></div>
+      <div class="ia-peek">About<span>DIALOG · from the menu</span></div>
+      <div class="ia-peek">App update<span>DIALOG · check, download, install</span></div>
+    </div>
+    <div class="ia-arm"><div></div></div>
+    <div class="ia-col">
+      <div class="ia-h">L1 · EDITOR HOME</div>
+      <div class="ia-page">Canvas<span>preview · drag · nudge</span></div>
+      <div class="ia-peek">Selection peek bar<span>PEEK · coords, nudge, Inspect ›</span></div>
+    </div>
+    <div class="ia-arm"><div></div></div>
+    <div class="ia-col" style="min-width:210px">
+      <div class="ia-h">L2 · RAIL DESTINATIONS</div>
+      <div class="ia-page">Widgets<span>→ Inspector (L3)</span></div>
+      <div class="ia-page">Background<span>fit · zoom · apply</span></div>
+      <div class="ia-page">Styles<span>variants as pictures</span></div>
+      <div class="ia-page">Validate<span>the gate → Install</span></div>
+      <div class="ia-page">Install<span>own page, own phases</span></div>
+      <div class="ia-peek">Project<span>PAGE · off ⋯ · reset</span></div>
+    </div>
+  </div>
+  <p class="note" style="margin-top:20px">
+    <strong>Install is its own page</strong> because it has a four-step checklist, two
+    permission gates and a byte counter; it cannot share attention with a canvas.
+    <strong>Validate is a gate</strong> — the only route to Install — so a failed parse can
+    never reach Bluetooth, and every commit clears the flag that opens it.
+  </p>
+</section>
+
+<script>
+  // The only script here, and it only shows and hides. Keep it that way: this file has to
+  // render usefully even with JavaScript disabled, which it does — both panels are in the
+  // markup and "both" is the default state.
+  const buttons = document.querySelectorAll('.toggle button');
+  const panels = document.querySelectorAll('.panel');
+  for (const b of buttons) {
+    b.addEventListener('click', () => {
+      const show = b.dataset.show;
+      for (const other of buttons) other.setAttribute('aria-pressed', String(other === b));
+      for (const p of panels) {
+        p.classList.toggle('hidden', show !== 'both' && p.dataset.scheme !== show);
+      }
+    });
+  }
+</script>
+
+</body>
+</html>

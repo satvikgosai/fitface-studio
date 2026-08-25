@@ -712,10 +712,14 @@ class EditorViewModel @Inject constructor(
                         "phase=${install.phase} previewReviewed=${mutableState.value.previewReviewed}",
                         // Booleans and counts only. The peer handles and bonded-device
                         // addresses this state machine works with are never collected.
+                        // The companion app ships under several package names and the
+                        // agent count is found by capability, so record both: "no
+                        // companion" alone once sent a reader chasing an app they had.
                         "companion=${install.environment.companionAppInstalled} " +
                             "plugin=${install.environment.pluginInstalled}" +
                             (install.environment.pluginVersionName?.let { "@$it" } ?: "") + " " +
-                            "accessory=${install.environment.accessoryFrameworkAvailable}",
+                            "framework=${install.environment.frameworkVerdict} " +
+                            "agents=${install.environment.accessoryAgentCount}",
                         "peers=${install.peersCached} " +
                             "bytes=${install.acknowledgedBytes}/${install.totalBytes} " +
                             "windows=${install.acknowledgedWindows}/${install.totalWindows}",

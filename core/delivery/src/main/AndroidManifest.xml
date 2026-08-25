@@ -11,9 +11,36 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="com.samsung.accessory.permission.ACCESSORY_FRAMEWORK" />
 
+    <!--
+      Package visibility. Everything named here is invisible without a declaration on
+      Android 11+, and two of these entries are load-bearing rather than cosmetic.
+
+      `com.samsung.accessory` is the accessory framework itself. The SDK reaches it by
+      name — `SASdkConfig` calls `getPackageInfo("com.samsung.accessory")` and `SAAdapter`
+      binds `Intent(ISAFrameworkManagerV2).setPackage("com.samsung.accessory")` — so
+      without this the SDK reports LIBRARY_NOT_INSTALLED and no channel can open, on a
+      phone where the framework is installed and serving the stock plugin. Samsung's own
+      plugin needs no declaration because it shares a signing certificate with the
+      framework; this app shares it with neither.
+
+      The companion app ships under two ids, split by device class: entry-level models
+      (SM-A107M, SM-A115M) are served `watchmanager2` and refused `watchmanager`, and
+      mainstream models the reverse. Knowing only the first told a reporter whose watch
+      was paired and working that their companion app was not installed. `watchmanagerstub`
+      is the firmware preload that fronts either.
+
+      The REGISTER_AGENT intent finds accessory-agent apps by capability instead of by
+      name, which is the only form of this check that survives Samsung forking an id again.
+    -->
     <queries>
+        <package android:name="com.samsung.accessory" />
         <package android:name="com.samsung.wearable.fit3plugin" />
         <package android:name="com.samsung.android.app.watchmanager" />
+        <package android:name="com.samsung.android.app.watchmanager2" />
+        <package android:name="com.samsung.android.app.watchmanagerstub" />
+        <intent>
+            <action android:name="com.samsung.accessory.action.REGISTER_AGENT" />
+        </intent>
     </queries>
 
     <application>

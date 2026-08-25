@@ -81,16 +81,13 @@ class DiagnosticsReporter @Inject constructor(
 
     fun crashFile(): File = File(context.filesDir, CrashFileName)
 
-    private fun appVersion(): String = runCatching {
-        val info = context.packageManager.getPackageInfo(context.packageName, 0)
-        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            info.longVersionCode
-        } else {
-            @Suppress("DEPRECATION")
-            info.versionCode.toLong()
-        }
-        "${info.versionName} ($code)"
-    }.getOrDefault("unknown")
+    /**
+     * Shared with the About dialog and the update check through
+     * [installedVersionLabel], so the three cannot disagree about what is running. It
+     * still answers `unknown` rather than throwing: a report that omits the version is
+     * worth more than no report.
+     */
+    private fun appVersion(): String = context.installedVersionLabel()
 
     /**
      * Both halves, because the difference between them is the bug: the device asks for

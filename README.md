@@ -1,5 +1,7 @@
 # FitFace Studio
 
+[![APK downloads](https://img.shields.io/github/downloads/satvikgosai/fitface-studio/total?label=APK%20downloads)](https://github.com/satvikgosai/fitface-studio/releases)
+
 An Android app for browsing, editing and installing Fit3 (SM-R390) watch faces.
 
 Pick a face from the catalogue, change its background or move its widgets around,
@@ -18,7 +20,7 @@ published to an app store. See [`NOTICE.md`](NOTICE.md) and [`LICENSE`](LICENSE)
 | | |
 | --- | --- |
 | Application ID | `dev.fitface.studio` |
-| Version | `0.1.1` (code `17`) |
+| Version | `0.1.2` (code `18`) |
 | Android | 9.0 (SDK 28) or newer |
 
 ## What it looks like
@@ -93,6 +95,9 @@ deletes its private copy of the package and the edited file.
 - One Fit3 paired and connected.
 - An Internet connection, for the catalogue and package downloads.
 
+A debug APK is attached to each tag on the
+[releases page](https://github.com/satvikgosai/fitface-studio/releases).
+
 To build it yourself: Android Studio with its bundled JBR, Android SDK 36, and the
 checked-in Gradle wrapper.
 
@@ -135,6 +140,19 @@ found on, so anything that breaks after step 4 needs the watch connected again:
 that button puts you back on step 3 with the checklist and the shortcuts you
 need, without redoing the whole setup. Failures that can only mean a lost peer
 take you back there on their own.
+
+### Watch someone do it
+
+VMG Channel recorded a walkthrough of the whole flow, from picking a face to it
+rendering on the watch:
+
+[**How to Install Custom Watchfaces on Galaxy Fit 3 (FINALLY!)**](https://youtu.be/ecUBemqNc9U)
+
+[![Watch the walkthrough on YouTube](https://img.youtube.com/vi/ecUBemqNc9U/hqdefault.jpg)](https://youtu.be/ecUBemqNc9U)
+
+It is a third-party video, made independently of this project and not endorsed by
+it — the checklist in the app is the authority if the two ever disagree, since the
+steps above change with the app and a recording does not.
 
 ## Scope and limits
 

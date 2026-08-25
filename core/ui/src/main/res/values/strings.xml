@@ -5,16 +5,87 @@
   module's would be silently overridden rather than reported.
 -->
 <resources>
+    <!-- FitTopBar's back affordance is the "‹" glyph, so its label lives here. -->
+    <string name="ui_back">Back</string>
+
     <!-- StatusBanner's default badge, one per FitStatus. -->
     <string name="ui_status_pass">OK</string>
     <string name="ui_status_warning">WARN</string>
     <string name="ui_status_fail">FAIL</string>
 
-    <!-- The pasteable bug report, reachable from both top bars. -->
+    <!--
+      The one action in either top bar. The control is a glyph, so this carries the whole
+      label for TalkBack. It is also what both layout tests find the button by and what the
+      catalogue-unavailable copy in :feature:library points the reader at, so the wording is
+      load-bearing in three places.
+    -->
+    <string name="ui_app_menu_a11y">More options</string>
+    <string name="ui_app_menu_about">About this app</string>
+    <string name="ui_app_menu_update">Check for update</string>
+
+    <!-- The pasteable bug report, the first entry in that menu. -->
     <string name="ui_diagnostics_action">Report a problem</string>
     <string name="ui_diagnostics_title">Report a problem</string>
-    <string name="ui_diagnostics_blurb">Copy this and paste it into your bug report. It holds the app version, this phone\'s Android version and model, its language setting, and what the app has done this session. It does not include your device identifiers, your watch\'s Bluetooth address, or anything about the images you picked.</string>
+    <!--
+      Says what the report holds, and stops. It used to end by listing what it leaves out —
+      device identifiers, the watch's Bluetooth address, the images you picked — which reads
+      as an inventory of things the app is holding back rather than things it never collects.
+      Do not reintroduce that list. The allowlist in DiagnosticsReporter is where the
+      exclusions belong, and it is documented there for whoever maintains it.
+    -->
+    <string name="ui_diagnostics_blurb">Copy this and paste it into your bug report. It holds the app version, this phone\'s Android version and model, its language setting, and what the app has done this session — nothing identifiable.</string>
     <string name="ui_diagnostics_copy">Copy</string>
     <string name="ui_diagnostics_close">Close</string>
     <string name="ui_diagnostics_copied">Report copied</string>
+    <!--
+      About. Says what the app is and what version is running — a sideloaded app has
+      nowhere else to put either. The second string is the short form of NOTICE.md and is
+      not optional; it names no vendor and no store, per the naming rule in CONTRIBUTING.md.
+    -->
+    <string name="ui_about_title">About this app</string>
+    <!--
+      Two sentences, and it is worth keeping them to two. The whole dialog has to fit the
+      height a landscape phone leaves an AlertDialog — about eleven lines — and this
+      paragraph is the biggest thing competing for it. The version and the link are the two
+      things the dialog exists for, so prose is what gives way when something has to.
+    -->
+    <string name="ui_about_what_it_is">Edits a Fit3 watch face on your phone and sends it to a paired watch. It changes only what is safe to change, and refuses to send anything that does not hold up.</string>
+    <!--
+      One line on purpose. The long form is NOTICE.md, which the link below reaches, and a
+      dialog is the wrong place to restate it — a wall of disclaimer stops being read at all,
+      which is the opposite of what it is for. What must survive any further trimming is the
+      words "independent" and "not affiliated": everything else here is context.
+    -->
+    <string name="ui_about_independent">Independent, experimental, and for personal use — not affiliated with any device or platform vendor.</string>
+    <string name="ui_about_version">Version %1$s</string>
+
+    <!--
+      The project page: source, full notices, releases. It has no label line of its own —
+      a GitHub address in an About dialog needs no introducing, and the line it would take
+      is the line the version needs to stay on screen in landscape. The label survives for
+      a screen reader as the link's own description.
+    -->
+    <string name="ui_about_source_a11y">Project page: source, notices and releases</string>
+    <string name="ui_about_source_url" translatable="false">https://github.com/satvikgosai/fitface-studio</string>
+
+    <!--
+      The update flow. Two things the copy has to be honest about, because both surprise
+      people: closing the dialog does not stop a download, and installing hands the file to
+      Android, which asks its own question and then replaces this app.
+    -->
+    <string name="ui_update_title">App update</string>
+    <string name="ui_update_checking">Looking for a newer version…</string>
+    <string name="ui_update_up_to_date">You are running the newest version.</string>
+    <string name="ui_update_available">Version %1$s is available to download (%2$s MB).</string>
+    <string name="ui_update_downloading">Downloading version %1$s. You can close this and it will keep going.</string>
+    <string name="ui_update_progress">%1$d%% of %2$s MB</string>
+    <string name="ui_update_ready">Version %1$s has been downloaded and checked. Installing it hands it to Android, which will ask you to confirm.</string>
+    <string name="ui_update_installing">Android is installing the update. This app will close if it accepts it.</string>
+    <string name="ui_update_failed_fallback">The update could not be checked.</string>
+    <string name="ui_update_installed">Installed: %1$s</string>
+    <string name="ui_update_download">Download</string>
+    <string name="ui_update_install">Install</string>
+    <string name="ui_update_cancel">Cancel</string>
+    <string name="ui_update_try_again">Try again</string>
+    <string name="ui_update_allow_installs">Allow installs</string>
 </resources>

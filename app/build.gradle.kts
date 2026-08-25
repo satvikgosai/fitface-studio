@@ -52,8 +52,8 @@ android {
         applicationId = "dev.fitface.studio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.1.1"
+        versionCode = 18
+        versionName = "0.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -97,6 +97,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
+    implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 

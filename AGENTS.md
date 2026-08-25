@@ -59,6 +59,28 @@ not add them back. The first build on a clean clone needs network to fetch them.
 No doc or build file may depend on a path outside this repository. `analysis/` is a
 local working area and is gitignored — findings that matter get written up in `docs/`.
 
+## Writing the changelog
+
+[`CHANGELOG.md`](CHANGELOG.md) is one entry per released version, newest first, headed
+`## <versionName> (code <versionCode>) — <tag date>`, grouped under `Fixed:` and `Added:`.
+A bullet is one or two lines, written in the words of someone using the app: a locale the
+store refuses, not `resultCode=1005`. Name what a reader needs to recognise their own case
+— the affected languages, the screen it happened on — and stop there.
+
+Keep it short on purpose. Why a change was made goes in [`docs/`](docs/README.md), and the
+trap behind it goes under "Traps that already bit this codebase" below; repeating either
+here turns the file into a second commit history nobody reads. Nothing invisible to the
+user earns an entry — refactors, tests, docs, dependency bumps. The version bump is not an
+entry either, it is the heading. An initial release is one line, with no list at all.
+
+A bug introduced and fixed inside the same unreleased cycle is not an entry either. A
+release is one step from where the reader stands, so a fault no build of theirs ever had
+gives them nothing to recognise — it describes the branch, not the app. The test is whether
+the *cause* shipped, not whether the fix is listed above it: the clipped editor subtitle
+earns its bullet, because the full-label **Report a problem** button that caused it went
+out in 0.1.1, even though the header menu that fixes it is an `Added:` line in the same
+release.
+
 ## Module map
 
 Module boundaries and what each one owns are in
@@ -224,6 +246,136 @@ The four that catch people fastest:
   `00003`'s 102,912 pixels — so filling it in squares off the corners. Only the
   indexed path re-emits opacity, deliberately, and face `00002` is the one raster
   that pays for it. `BackgroundReplacementSweepTest` pins both.
+* **The top bar's actions slot is a width budget, and the title column pays for it.**
+  `FitTopBar` gives its title/subtitle `Column` a `weight(1f)`, so it is the flexible
+  child and every dp an action takes comes out of the title. "Report a problem" went in
+  as a full-label `TextButton` — 109dp of a 360dp bar, wider than the title beside it —
+  and the subtitle was ellipsized on **every editor page** with no exception, no lint
+  warning and nothing in any test: `face 00112 · style0` rendered `face 00112 · styl…`
+  and `reparse of the edited container` rendered `reparse of the edited conta…`. An
+  action in this bar is a `FitIconButton`, 38dp square, and its label lives in the
+  `contentDescription`. `FitTopBarLayoutTest` pins the budget.
+  Two corollaries the same bug taught: **emit the always-present action last**, because
+  as the final child its right edge is pinned to the padding and it stops sliding
+  sideways when a conditional neighbour appears (the library's moved 189px on a tab
+  switch); and **do not put an action in a Row that centres against a two-line Column**,
+  or it aligns with neither line — the library's straddled the brand label above it and
+  most of the headline below.
+* **The top bar's three global actions are one menu, and a `DropdownMenu` is why that is
+  affordable.** The width budget above is the reason there is a menu at all: report a
+  problem, about and check for update cannot be three buttons in a bar whose title column
+  is the flexible child. A `DropdownMenu` is a `Popup` — its own window, measured outside
+  the anchoring composition — so the `Row` measures only the anchoring `Box`, which wraps
+  to one 38dp square. Replacing it with an inline column would re-ellipsize every editor
+  subtitle and nothing would look wrong until a device was in someone's hand, so
+  `FitTopBarLayoutTest.theOpenMenuCostsTheBarNoWidth` measures the anchor and the title
+  column with the menu open. Two corollaries. **Every entry closes the menu before it
+  invokes its callback** — all three open a dialog, and a popup left standing behind one is
+  the first thing to go wrong here. And the glyph is `≡` rather than the platform's `⋮`,
+  because Canvas already carries a `⋯` that *navigates to a page*: two ellipses side by
+  side read as one control with two behaviours. `⚙` and `ℹ` are worse — U+2699 and U+2139
+  fall through to the emoji font on many builds and would be the only colour glyphs in the
+  app.
+* **`/releases/latest` returns 404 for this repository, and always will.** The release
+  workflow publishes with `gh release create --prerelease`, and that endpoint skips
+  prereleases — so the obvious URL reports that the app has never been released.
+  `GitHubReleaseFeed.Endpoint` is `/releases?per_page=10` and the newest is chosen by
+  **comparing parsed versions, not by taking the first element**: the API happens to
+  return newest-created first, but that is not a contract and a re-cut tag breaks it.
+  `AppVersion` compares part by part for a related reason — as strings, `0.1.10` sorts
+  below `0.1.9`, so the release people most need would be the one never offered — and it
+  refuses to parse anything that is not plain dotted digits, so `v0.2.0-rc1` is skipped
+  rather than mis-ordered. And `newest == null` is **not** "up to date": a renamed asset
+  or a reshaped response would otherwise leave a reader told they were current for as long
+  as the mistake lasted.
+* **An APK signed with a different key cannot update this app, so the archive's signers
+  are compared before the package manager is ever asked.** CI signs with a keystore
+  restored from a secret and a local build uses the one AGP generated on that machine, so
+  a development build and the published one routinely disagree — and the package manager's
+  own answer, `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, sends people to the one action that
+  destroys their work: uninstalling, which takes every saved project. `inspect` compares
+  the package name, the archive's `longVersionCode` (the feed carries no version code at
+  all, so this is the only place a re-cut tag is caught) and the SHA-256 of every signer,
+  and turns a mismatch into a sentence that names the cost. **An unreadable certificate
+  must not block**, though: the package manager is the real gate, and refusing on our own
+  failed read would make the feature unusable for no gain in safety.
+* **Cancelling the download has to be cooperative, and the progress callback has to be
+  guarded.** `work?.cancel()` looked like it worked and did nothing: the read loop is
+  blocking OkHttp I/O that never suspends, so a cancelled coroutine ran on to the last of
+  the 36 MiB while the dialog claimed it had stopped. The loop now checks `job.isActive`
+  each iteration and throws, which also lets the streaming write delete its `.tmp` on the
+  way out. **That fix alone is not enough**, and this is the part worth remembering: a
+  cancel lands *between two reads*, so one more `onProgress` follows it and writes
+  `Downloading` back over the state `cancel()` has just restored — the dialog goes on
+  counting up from a cancelled transfer. The callback checks the same job before it
+  publishes. Two smaller rules fell out of it: `CancellationException` must be rethrown
+  rather than caught by the `catch (error: Exception)` that turns everything else into "the
+  download failed", in the fetcher *and* in the installer (where the session is abandoned
+  first); and cancelling back to the offer re-reads the install permission instead of
+  defaulting it, or it quietly tells someone installs are allowed when they are not.
+  Verified on hardware the only way it can be: watch the `.tmp` grow, cancel, and confirm
+  it is gone and nothing more arrives.
+* **The updater owns its own `CoroutineScope`, and the install permission has to be
+  re-read.** The APK is 36 MiB and the menu is in both bars, so a download begun in the
+  library has to survive opening a face; in a `viewModelScope` it dies with the nav entry.
+  Two things that were wrong on the first pass and are worth not redoing: the permission
+  verdict was baked in when the check ran, so after granting it in Settings and coming
+  back the dialog still said "Android needs your permission" and the only way on was to
+  close and start again (`recheckInstallPermission` fixes it without a second network
+  round trip); and the stale-download sweep kept "the newest release", which after that
+  release was installed meant keeping the 36 MiB file for ever — it has to keep only the
+  release that is actually **newer than installed**. Progress is reported per whole
+  percent, not per read: a 36 MiB download emits about 4,600 times otherwise, and each one
+  is a state change the dialog recomposes on. Also: no `callTimeout` on that client, or a
+  slow connection kills the download partway; and never put a redirected release-asset URL
+  in a message, because it carries a signed access token and that string reaches the bug
+  report.
+* **`:core:data` has a manifest now, and it declares a permission and nothing else.**
+  `REQUEST_INSTALL_PACKAGES` lives there because the code that needs it does, following
+  `:core:delivery`. The install-status receiver is registered **at runtime** on purpose: a
+  manifest receiver would add a component to the merged manifest of every module that
+  depends on `:core:data`, which is the hazard that already stops `:feature:editor` running
+  under Robolectric, and it would buy nothing — a successful self-install replaces this
+  process before any receiver could report it. `STATUS_PENDING_USER_ACTION` is **not**
+  terminal: it means the system wants to ask, and returning there would report an outcome
+  before the reader had been shown anything. `FLAG_MUTABLE` is mandatory from API 31 or the
+  `PendingIntent` throws, and the confirmation `Intent` is handed up to an Activity to
+  launch rather than started from the updater, because a background activity start is what
+  recent Android versions drop.
+* **A header shared by two pages is as tall as the taller page, or its tabs move under the
+  finger that switched them.** The library header sizes itself from the page it is showing,
+  and the pages do not carry the same content: Watch faces has a REFRESH `TextButton`, which
+  brings the 48dp touch target with it, and a longer subtitle that wraps to two lines on a
+  narrow phone. Projects has neither, so the tab row sat 26px higher there on a 411dp phone
+  and a further line higher on a 360dp one — you tapped a tab and it jumped away as the page
+  changed. The actions row now keeps `ACTION_TOUCH_TARGET` as a floor whether or not REFRESH
+  is in it, and the subtitle lays out **both** pages' strings, the one not showing at
+  `alpha(0f)` with `clearAndSetSemantics`, so the box is as tall as the longer one wraps to at
+  that width, font scale and translation. Reserving a fixed two lines instead would only be
+  right at the widths someone checked by hand. `LibraryHeaderLayoutTest` pins both halves, and
+  it asserts positions rather than line counts for the reason `FitTopBarLayoutTest` explains.
+* **`onSurfaceVariant` is already the dim role — do not dim it again.** Nineteen call sites
+  reached for `.copy(alpha = .68f)`, or `.72f`, or `.66f`, or `.48f`, each picked by hand,
+  and on the small styles the second dimming took the text under the readable floor:
+  `MicroLabel` at 9.5sp measured 4.08:1 in the dark theme and **3.38:1** in the light one,
+  and a project's timestamp 2.58:1, against a 4.5:1 minimum that none of those sizes are
+  large enough to be exempt from. A reader called the editor's small text almost unreadable.
+  `MaterialTheme.fitText.secondary` and `.tertiary` are now the only ways to dim text and
+  neither takes an alpha; `SmallTextContrastTest` holds both to the floor in both schemes.
+  Disabled controls keep their own alphas and are exempt — an inoperable control should look
+  inert. Note this is a different complaint from the tiny teal text buttons, which measure
+  12.77:1: their problem is 11sp mono at Medium weight, so it needs a type change, not a
+  colour one, and it is still open.
+* **Robolectric's text metrics are not the device's, so do not assert on truncation.**
+  `:core:ui` is the one module that can measure composables — it depends on nothing the
+  JVM verifier chokes on, unlike `:feature:editor`. Two gotchas. The default graphics
+  mode has stub fonts that collapse every string to a few pixels, so a text-labelled
+  button measures tiny and a title column measures enormous; `@GraphicsMode(NATIVE)` is
+  required for any layout assertion. And even in native mode the metrics differ enough
+  that the very subtitle which clipped on a real phone measures as *fitting* — so a
+  "the text is not ellipsized" assertion would have passed while the device still
+  clipped. Assert layout geometry instead: declared sizes and the positions they
+  produce.
 * **`RepeatingNudgeButton` cannot step from the press alone.** The press-driven
   effect is launched by the recomposition the press causes and runs a frame later, so
   a tap shorter than that frame was cancelled before its first step — a control whose
@@ -282,6 +434,39 @@ The four that catch people fastest:
   are opposite requirements in that order, which is the thing users get stuck on.
   Discovery without the plugin connected must land in the recoverable
   `NEEDS_WATCH_CONNECTION`, never in `FAILED`.
+* **What is installed does not decide whether the channel opens — discovery does.** The
+  Install page used to AND three package names and replace the whole checklist with a dead
+  end if any were absent, and every part of that was wrong. **The companion app has no
+  single package name**: it ships as `com.samsung.android.app.watchmanager` on mainstream
+  models and `…watchmanager2` on the entry-level ones (SM-A107M, SM-A115M), with the
+  distribution exactly complementary, plus a firmware preload and two retired ids —
+  `CompanionResolution` holds the list. Knowing one name told a reporter whose watch was
+  paired, connected and holding a live accessory session that their companion app was not
+  installed. **And the companion app was never the right question anyway**: neither
+  `watchmanager` build declares a `REGISTER_AGENT` receiver or `AccessoryServicesLocation`,
+  so it carries no accessory code at all — it is a launcher and setup shell, and the stock
+  plugin is what owns the channel. That is why `accessoryFrameworkAvailable` counting the
+  companion as a provider was unsound in both directions, and why the environment is an
+  advisory (`EnvironmentAdvisory`) now and nothing anywhere may gate on it. Detect agents
+  by capability — `queryBroadcastReceivers` on `REGISTER_AGENT` — not by name, or the next
+  id Samsung forks reads as an empty phone. Two corollaries: an agent that fails to
+  initialize must land in the recoverable `NEEDS_PLUGIN`, and it arrives through the
+  **discovery listener's `agent_error`**, not through `requestAgent`'s own callback, which
+  is where a first attempt at this fix put it and still ended in `FAILED`; and the plugin
+  has **no launchable activity** — every activity in it is unexported — so
+  `getLaunchIntentForPackage` on it is always null and `openCompanionApp` must fall back to
+  the plugin's app-info screen.
+* **`com.samsung.accessory` has to stay in `<queries>`.** Not for the app's own probe —
+  for the SDK's. `SASdkConfig` calls `getPackageInfo("com.samsung.accessory")` and
+  `SAAdapter` binds `Intent(ISAFrameworkManagerV2).setPackage("com.samsung.accessory")`,
+  so without the declaration the SDK reports `LIBRARY_NOT_INSTALLED` and no channel opens
+  at all, on a phone where the framework is installed and serving the stock plugin
+  (`AppsFilter: dev.fitface.studio -> com.samsung.accessory BLOCKED`). Samsung's own
+  plugin needs no declaration because it shares a signing certificate with the framework;
+  this app shares it with neither. Do not use `SA.initialize()` as the presence check
+  either — it sends a usage-survey broadcast carrying this app's package name to
+  `com.samsung.android.providers.context`, and the verdict it computes is the one
+  `getPackageInfo` already gives.
 * **The handover has to be rewindable, or a failed transfer is a dead end.** A peer
   handle does not outlive the connection it was found on, so a transfer that fails
   after the plugin let go is only retryable by reconnecting, rediscovering and handing
@@ -312,6 +497,36 @@ The four that catch people fastest:
   toggle only ever took away the ability to select a widget. Both chips are gone and
   `EditorUiState` no longer carries `showLayout`; what survived is
   `markPreviewReviewed()`, because install is still gated on having seen Validate.
+* **A dialog has no height to give in landscape either, and an `AlertDialog` clips rather
+  than scrolls.** It caps its own height and hands the text slot whatever is left, which on
+  a landscape phone is a few lines: the diagnostics blurb was cut mid-sentence, and About
+  lost the link and the version — the two things it exists to show — entirely, with no
+  scrollbar and nothing to suggest anything was missing. **The text slot of every dialog in
+  this app scrolls**, and it is the slot that scrolls, not something inside it: the
+  diagnostics report used to carry its own `verticalScroll` under a `heightIn(max = 320.dp)`,
+  which left the blurb above it clipped and would fight the outer gesture if both were
+  present. Scrolling is the guarantee, not the fix — About was also trimmed until it *fits*
+  a landscape phone without scrolling, because content a reader has to go looking for is
+  content most of them will not see. That is why its prose has a length bound in
+  `AboutCopyTest` and why the project link has no label line of its own: the version needs
+  that line. None of this can be caught by a test — an `AlertDialog` never reaches idle in
+  this harness, so `createComposeRule` throws `AppNotIdleException` before it can measure
+  one — so a dialog whose content grows has to be looked at in landscape by hand.
+* **A stacked page has no height to give in landscape.** `CanvasWorkspace` handed the face
+  `weight(1f)` under the hint and the selection panel, and a landscape phone leaves the
+  three of them about 340dp: the face came out a third of its portrait size, and tapping a
+  widget — which is what adds the panel — squeezed it to a dot with the hint clipped behind
+  the panel's top edge. Under `CanvasStackedMinHeight` the page splits into two columns
+  instead, where the face keeps the whole height; `canvasPageSplits` is the decision and
+  `CanvasPageLayoutTest` pins it, because `:feature:editor` is the module that cannot
+  measure a composable. The same arithmetic clipped `EditorUnavailable`: its 176x276dp
+  placeholder is taller than a landscape phone leaves under the top bar, so the spinner and
+  "decoding images" fell off the bottom edge and the screen read as a blank grey slab. Both
+  fits derive the width from the height that is left, never the other way round. Still
+  cramped rather than broken, and unfixed: the library header takes 41% of a landscape phone
+  before a single face row, and Background and Validate put a full-height preview above
+  every control they own — in the wide layout that preview is the second one on screen,
+  since `CanvasSidePane` is already showing the same face.
 * **A canvas sized only by width gets clipped.** `fillMaxWidth().aspectRatio(…)`
   ignores the height it was given, so the selection panel appearing under the face cut
   the top and bottom off it. `CanvasWorkspace` fits against `maxWidth`, `maxHeight ×
@@ -357,6 +572,18 @@ is the only path to the watch.** Nothing may route around it.
   runs. Its ViewModel tests own `Dispatchers.Main` with a test dispatcher instead, and the
   module sets `unitTests.isReturnDefaultValues` so `android.util.Log` does not throw out
   of the failure path.
+* **The update flow's UI has no automated coverage, by construction.** Every *decision*
+  in it is pure and tested below `:app` — version comparison, feed parsing, the host
+  allowlist, the signing verdict — but the two dialogs and the single `when` that maps
+  `AppUpdateState` onto them live in `:app`, which has no test source set and is only
+  linted. What has been exercised by hand on an emulator, end to end against the real
+  GitHub release: the offer, the 36 MiB download, the signature and version checks, the
+  system installer's confirmation, cancelling it (which must return to "ready to install"
+  and not a stuck spinner), the unknown-sources hand-off, the unreachable-network message,
+  and a real self-install from 0.1.0 to 0.1.1 that left every saved project in place. What
+  has **not** been exercised is a signing-key mismatch on a real device — this machine's
+  debug keystore happens to be the one CI signs with, so the `SIGNATURE_DIFFERS` path has
+  only its unit test.
 * The canvas gestures still have no test: `hitWidget`, `constrainDragCoordinate` and
   `stepDragAxis` are pure and covered, but nothing drives a real drag. Two canvas bugs
   came through that gap — the `pointerInput` block holding a stale `EditorSnapshot`,

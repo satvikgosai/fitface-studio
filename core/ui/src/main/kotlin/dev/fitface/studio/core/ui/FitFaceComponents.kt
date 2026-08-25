@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +32,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -139,13 +142,89 @@ fun FitChip(
     }
 }
 
+/**
+ * A square, bordered action for a top bar: the one shape a bar action is allowed to be.
+ *
+ * This is the back button's geometry, lifted out so everything in an actions slot shares it.
+ * The rule it exists to enforce is in `FitTopBarLayoutTest`: `FitTopBar` gives the title
+ * `weight(1f)`, so a text-labelled action takes its width out of the title and ellipsizes the
+ * subtitle. 38dp is what the design specifies and what the back button has always been.
+ *
+ * `contentDescription` is required rather than optional because the child is a glyph: without
+ * it TalkBack reads the literal character, which is how the `⋯` overflow announced itself as
+ * "midline ellipsis".
+ *
+ * 38dp is under Material's 48dp touch-target guideline, and deliberately so: it is what the
+ * design specifies, what the back button has always been, and the same order as `FitChip`'s
+ * 42dp minimum. Raising this one control alone would make it the widest thing in the actions
+ * slot and reopen the crowding on the narrow bars; raising all of them is a separate change.
+ */
+@Composable
+fun FitIconButton(
+    glyph: String,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tint: Color? = null,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.size(ICON_BUTTON_SIZE).semantics {
+            this.contentDescription = contentDescription
+        },
+        shape = MaterialTheme.shapes.small,
+        contentPadding = PaddingValues(0.dp),
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (enabled) 1f else .45f),
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = tint ?: MaterialTheme.colorScheme.onSurface,
+            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = .28f),
+        ),
+    ) {
+        Text(glyph, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+/** The design's square-action size, and what the back button has always measured. */
+internal val ICON_BUTTON_SIZE = 38.dp
+
+/**
+ * A state marker for a top bar: EDITED, UNAPPLIED.
+ *
+ * It says that something is outstanding, and it lives in the bar because the bar is the one
+ * part of a page that does not scroll. The Background page is why: its commit buttons are the
+ * last children of a long scrolling column, so someone positioned an image, never saw
+ * "Use positioned image", and lost the edit. Moving the buttons up fixed that and looked
+ * wrong; a badge says the same thing from somewhere always visible.
+ *
+ * The label is passed already cased, unlike [MicroLabel] — these are single words that live in
+ * `strings.xml` in the form they are read, and `uppercase()` on a translated string is a trap
+ * in Turkish. Keep them to one short word: this sits in the actions slot and so spends the
+ * width budget `FitTopBarLayoutTest` guards.
+ */
+@Composable
+fun FitBadge(text: String, color: Color, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier = modifier
+            .background(color.copy(alpha = .13f), MaterialTheme.shapes.extraSmall)
+            .padding(horizontal = 7.dp, vertical = 4.dp),
+        color = color,
+        style = FitFaceType.micro,
+    )
+}
+
 @Composable
 fun MicroLabel(text: String, modifier: Modifier = Modifier, color: Color? = null) {
     Text(
         text = text.uppercase(),
         modifier = modifier,
         style = FitFaceType.micro,
-        color = color ?: MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .68f),
+        color = color ?: MaterialTheme.fitText.secondary,
     )
 }
 
@@ -206,13 +285,11 @@ fun FitTopBar(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (onBack != null) {
-            OutlinedButton(
+            FitIconButton(
+                glyph = "‹",
+                contentDescription = stringResource(R.string.ui_back),
                 onClick = onBack,
-                modifier = Modifier.size(38.dp),
-                shape = MaterialTheme.shapes.small,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) { Text("‹", style = MaterialTheme.typography.titleLarge) }
+            )
         }
         Column(Modifier.weight(1f)) {
             Text(
@@ -227,7 +304,7 @@ fun FitTopBar(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .72f),
+                    color = MaterialTheme.fitText.secondary,
                 )
             }
         }

@@ -49,6 +49,7 @@ The APK lands in `app/build/outputs/apk/debug/`.
 ./gradlew -Dorg.gradle.java.home="$JBR" \
   :core:model:testDebugUnitTest :core:format:testDebugUnitTest \
   :core:delivery:testDebugUnitTest :core:data:testDebugUnitTest \
+  :core:ui:testDebugUnitTest \
   :feature:editor:testDebugUnitTest :feature:library:testDebugUnitTest \
   :app:lintDebug
 ```

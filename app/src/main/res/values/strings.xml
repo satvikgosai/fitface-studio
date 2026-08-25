@@ -1,3 +1,21 @@
+<!--
+  App-shell copy. Names are prefixed `app_` for the reason the `ui_` prefix exists in
+  :core:ui: every module's resources merge into one table here, and at the app level a
+  colliding name silently overrides the library's rather than being reported.
+-->
 <resources>
     <string name="app_name">FitFace Studio</string>
+
+    <!--
+      Why a downloaded update will not be installed. Each of these is decided before the
+      package manager is asked, because its own errors for them are unreadable — and the
+      thing a reader tries next is uninstalling, which deletes every saved project. The
+      first one therefore says outright what the cost would be, and the app never offers
+      to do it.
+    -->
+    <string name="app_update_blocked_signature">This update was signed with a different key from the copy you have, so Android will not install it over the top. Getting it would mean uninstalling first, which deletes every project saved on this device.</string>
+    <string name="app_update_blocked_permission">Android needs your permission to let this app install an update.</string>
+    <string name="app_update_blocked_space">There is not enough free space on this device to download and install the update.</string>
+    <string name="app_update_blocked_not_newer">The published build is not newer than the one you are running.</string>
+    <string name="app_update_no_settings">This device has no screen for allowing app installs, so the update cannot be installed from here.</string>
 </resources>
