@@ -9,6 +9,8 @@ import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.FaceCatalogRepository
+import dev.fitface.studio.core.model.ProjectSort
+import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.WatchFaceException
@@ -18,10 +20,8 @@ import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -34,8 +34,30 @@ data class LibraryUiState(
     val catalogFetchedAtEpochMillis: Long = 0,
     val query: String = "",
     val sort: CatalogSort = CatalogSort.RECENT,
+    /** Whether [sort] runs against the order its own label names, or backwards. */
+    val sortReversed: Boolean = false,
+    /**
+     * Every saved project.
+     *
+     * In the state rather than beside it, because the face sheet has to derive from projects
+     * and the catalogue at once — "which of these are mine, and has the store moved past
+     * them" is a question neither flow can answer alone.
+     */
+    val projects: List<ProjectSummary> = emptyList(),
+    val projectQuery: String = "",
+    val projectSort: ProjectSort = ProjectSort.RECENT,
+    val projectSortReversed: Boolean = false,
+    /** The project a rename dialog is open for, and the one a delete confirmation is. */
+    val renaming: ProjectSummary? = null,
+    val deleting: ProjectSummary? = null,
     val selectedFace: CatalogFace? = null,
     val selectedStyleId: Int? = null,
+    /**
+     * Whether [selectedFace]'s current package is already on disk. Resolved when the sheet
+     * opens, and false until it is — a caption that promises no download has to be checked,
+     * not assumed.
+     */
+    val selectedFaceCached: Boolean = false,
     val downloadingProductId: String? = null,
     val downloadFraction: Float = 0f,
     /**
@@ -94,8 +116,65 @@ data class LibraryUiState(
                         face.appId.contains(needle, ignoreCase = true)
                 }
             }
-            return sort.apply(matched)
+            return sort.apply(matched, sortReversed)
         }
+
+    val visibleProjects: List<ProjectSummary>
+        get() {
+            val needle = projectQuery.trim()
+            val matched = if (needle.isEmpty()) {
+                projects
+            } else {
+                projects.filter { project ->
+                    project.name.contains(needle, ignoreCase = true) ||
+                        project.faceName?.contains(needle, ignoreCase = true) == true ||
+                        project.faceId.contains(needle) ||
+                        project.displayName.contains(needle, ignoreCase = true)
+                }
+            }
+            return projectSort.apply(matched, projectSortReversed)
+        }
+
+    /**
+     * The projects started on one face, most recently edited first.
+     *
+     * Deliberately not [projectSort]: this is the list inside the face sheet, and it answers
+     * "which of these was I last working on". The Projects page's chosen order is about that
+     * page, and carrying it here would put an A–Z sort in front of someone who came to the
+     * sheet to carry on where they left off.
+     */
+    fun projectsFor(faceId: String): List<ProjectSummary> =
+        ProjectSort.RECENT.apply(projects.filter { it.faceId == faceId })
+}
+
+/**
+ * What the one button at the bottom of the face sheet does.
+ *
+ * Pure, and separate from the composable, because the priority order is the whole point and
+ * a rule about which of five states wins should be readable without a screen attached.
+ */
+internal enum class FaceAction { OPENING, DOWNLOADING, NOT_EDITABLE, UPDATE, NEW_PROJECT, DOWNLOAD }
+
+internal fun faceAction(
+    downloading: Boolean,
+    uneditable: Boolean,
+    packageOnDevice: Boolean,
+    projects: List<ProjectSummary>,
+    storeVersionCode: Long,
+): FaceAction = when {
+    // "Downloading…" over a caption saying nothing would be downloaded is the same
+    // dishonesty this screen is being fixed for. Opening a cached package still takes a
+    // moment — the bytes are copied beside the project and the container is parsed — so it
+    // is a state, just not that one.
+    downloading && packageOnDevice -> FaceAction.OPENING
+    downloading -> FaceAction.DOWNLOADING
+    uneditable -> FaceAction.NOT_EDITABLE
+    // Before NEW_PROJECT: both start a new project on whatever the store serves now, and
+    // they differ only in what the button says. Saying "start a new project" while a newer
+    // version is what would actually arrive is the half of this that was wrong.
+    projects.any { it.isOutdated(storeVersionCode) } -> FaceAction.UPDATE
+    projects.isNotEmpty() -> FaceAction.NEW_PROJECT
+    else -> FaceAction.DOWNLOAD
 }
 
 sealed interface LibraryEvent {
@@ -109,9 +188,6 @@ class LibraryViewModel @Inject constructor(
     private val diagnostics: DiagnosticsLog,
     private val reporter: DiagnosticsReporter,
 ) : ViewModel() {
-    val projects = repository.observeProjects()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
     private val mutableState = MutableStateFlow(LibraryUiState())
     val state = mutableState.asStateFlow()
     private val messageIds = AtomicLong()
@@ -120,6 +196,11 @@ class LibraryViewModel @Inject constructor(
     val events = eventChannel.receiveAsFlow()
 
     init {
+        viewModelScope.launch {
+            repository.observeProjects().collect { saved ->
+                mutableState.update { it.copy(projects = saved) }
+            }
+        }
         viewModelScope.launch {
             if (reporter.hasPreviousCrash()) {
                 mutableState.update { it.copy(previousCrash = true) }
@@ -182,8 +263,29 @@ class LibraryViewModel @Inject constructor(
         mutableState.update { it.copy(query = value) }
     }
 
+    /**
+     * Picking a different sort always starts in the direction that sort's label names.
+     * Carrying a reversal across would land someone on "Face number ↓" having asked for
+     * face number, with nothing but the chip to say why the list is upside down.
+     */
     fun setSort(value: CatalogSort) {
-        mutableState.update { it.copy(sort = value) }
+        mutableState.update { it.copy(sort = value, sortReversed = false) }
+    }
+
+    fun reverseSort() {
+        mutableState.update { it.copy(sortReversed = !it.sortReversed) }
+    }
+
+    fun setProjectQuery(value: String) {
+        mutableState.update { it.copy(projectQuery = value) }
+    }
+
+    fun setProjectSort(value: ProjectSort) {
+        mutableState.update { it.copy(projectSort = value, projectSortReversed = false) }
+    }
+
+    fun reverseProjectSort() {
+        mutableState.update { it.copy(projectSortReversed = !it.projectSortReversed) }
     }
 
     fun selectFace(face: CatalogFace) {
@@ -192,15 +294,34 @@ class LibraryViewModel @Inject constructor(
             it.copy(
                 selectedFace = face,
                 selectedStyleId = face.styles.firstOrNull()?.id,
+                selectedFaceCached = false,
                 sheetError = uneditableMessage.takeIf { _ -> face.appId in it.uneditableAppIds },
             )
+        }
+        viewModelScope.launch {
+            val cached = runCatching { catalog.isPackageCached(face) }.getOrDefault(false)
+            mutableState.update {
+                // The sheet may have been dismissed, or another face chosen, while this
+                // touched the disk. Landing the answer on whatever is open now would tell
+                // someone about a face they are no longer looking at.
+                if (it.selectedFace?.productId == face.productId) {
+                    it.copy(selectedFaceCached = cached)
+                } else {
+                    it
+                }
+            }
         }
     }
 
     fun dismissFace() {
         if (mutableState.value.downloadingProductId != null) return
         mutableState.update {
-            it.copy(selectedFace = null, selectedStyleId = null, sheetError = null)
+            it.copy(
+                selectedFace = null,
+                selectedStyleId = null,
+                selectedFaceCached = false,
+                sheetError = null,
+            )
         }
     }
 
@@ -235,6 +356,7 @@ class LibraryViewModel @Inject constructor(
                         downloadFraction = 0f,
                         selectedFace = null,
                         selectedStyleId = null,
+                        selectedFaceCached = false,
                     )
                 }
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
@@ -284,7 +406,40 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    fun deleteProject(project: ProjectSummary) {
+    fun startRename(project: ProjectSummary) {
+        mutableState.update { it.copy(renaming = project) }
+    }
+
+    fun dismissRename() {
+        mutableState.update { it.copy(renaming = null) }
+    }
+
+    fun confirmRename(name: String) {
+        val project = mutableState.value.renaming ?: return
+        mutableState.update { it.copy(renaming = null) }
+        viewModelScope.launch {
+            runCatching { repository.renameProject(project.id, name) }
+                .onFailure { error ->
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
+     * Deleting asks first. It discards every edit in the project and cannot be undone, and
+     * with more than one project on a face the rows beside it look very much alike.
+     */
+    fun startDelete(project: ProjectSummary) {
+        mutableState.update { it.copy(deleting = project) }
+    }
+
+    fun dismissDelete() {
+        mutableState.update { it.copy(deleting = null) }
+    }
+
+    fun confirmDelete() {
+        val project = mutableState.value.deleting ?: return
+        mutableState.update { it.copy(deleting = null) }
         viewModelScope.launch {
             runCatching { repository.deleteProject(project.id) }
                 .onFailure { error ->

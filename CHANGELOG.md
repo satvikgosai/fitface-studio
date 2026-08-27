@@ -4,6 +4,28 @@ User-visible changes per version. APKs are on the
 [releases page](https://github.com/satvikgosai/fitface-studio/releases); the reasoning
 behind a change lives in [`docs/`](docs/README.md).
 
+## 0.1.3 (code `19`) — 2026-08-27
+
+Added:
+
+- More than one project on the same watch face. Each is named when you start it, and you
+  can rename it from the projects list or from the editor's **Project** page.
+- Opening a face you have already worked on lists your projects on it, so you can carry
+  on with the right one instead of guessing.
+- **Update** on a face the store has published a newer version of. It starts a fresh
+  project on the new version and leaves the ones you already have exactly as they were.
+- Search and sort on **Your projects**, and every sort now reverses — tap the one already
+  chosen to flip it.
+- Deleting a project asks first, and names the one it would remove.
+
+Fixed:
+
+- A face already on your device still offered to download it, then reopened the project
+  you already had without saying so.
+- Two projects on the same face looked identical in the list and traded places every time
+  you opened either one. They now carry their own name and the style they were started
+  on, and the list is ordered by when you last edited them.
+
 ## 0.1.2 (code `18`) — 2026-08-25
 
 Added:

@@ -27,6 +27,7 @@ import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.format.Fit3NoContainerException
 import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.PreviewFrame
+import dev.fitface.studio.core.model.ProjectNaming
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.ReplacementImage
@@ -82,18 +83,25 @@ class WatchFaceRepositoryImpl @Inject constructor(
         context.editorPreferences.edit { it[ImageFitKey] = value.name }
     }
 
+    /**
+     * Starts a **new** project on a downloaded package, always.
+     *
+     * It used to look the package's `sourceKey` up first and re-enter the project it found,
+     * which is what limited a face to one project and what made "Download & edit" open work
+     * that was already in progress without saying so. Continuing an existing project is
+     * [openProject]'s job, and the face sheet lists them so there is something to tap.
+     */
     override suspend fun openPackage(
         download: FacePackage,
     ): EditorSnapshot = withContext(Dispatchers.IO) {
         mutex.withLock {
             val apkBytes = download.copyBytes()
-            val existing = projectDao.findBySourceUri(download.sourceKey)
             val desiredStyle = "style${download.selectedStyleId}.bin"
             val loaded = loadSession(
                 apkBytes = apkBytes,
                 fallbackName = download.displayName,
-                projectId = existing?.id ?: 0,
-                editedBinPath = existing?.editedBinPath,
+                projectId = 0,
+                editedBinPath = null,
                 selectedStyle = desiredStyle,
             )
             if (loaded.apk.faceId != download.expectedFaceId) {
@@ -103,16 +111,29 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 )
             }
             val now = System.currentTimeMillis()
+            // Named against the face's other projects, so the second one is "Aurora 2" and
+            // not a second row reading exactly like the first. The face's own names are
+            // identical across every project started on it, which is why the name is stored
+            // rather than derived on the way to the screen.
+            val siblings = projectDao.findByFaceId(loaded.apk.faceId)
             val project = ProjectEntity(
-                id = existing?.id ?: 0,
+                id = 0,
                 displayName = loaded.sourceName,
                 sourceUri = download.sourceKey,
                 faceId = loaded.apk.faceId,
                 faceName = loaded.apk.faceName,
                 importedAtEpochMillis = now,
-                localApkPath = existing?.localApkPath,
-                editedBinPath = existing?.editedBinPath,
+                localApkPath = null,
+                editedBinPath = null,
                 selectedStyle = desiredStyle,
+                projectName = ProjectNaming.defaultName(
+                    base = loaded.apk.faceName?.takeIf(String::isNotBlank) ?: loaded.sourceName,
+                    taken = siblings.map(ProjectEntity::resolvedName),
+                ),
+                productId = download.source?.productId,
+                packageVersionCode = download.versionCode,
+                styleId = download.selectedStyleId,
+                updatedAtEpochMillis = now,
             )
             val projectId = projectDao.insert(project)
             val projectDirectory = projectDirectory(projectId).apply { mkdirs() }
@@ -125,6 +146,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 ),
             )
             loaded.projectId = projectId
+            loaded.projectName = project.projectName ?: loaded.sourceName
             loaded.stylePreviewFiles = writeStylePreviews(projectId, loaded.apk)
             loaded.also { session = it }.snapshot()
         }
@@ -163,9 +185,30 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         localApkPath = localApk.absolutePath,
                     ),
                 )
+                loaded.projectName = project.resolvedName
                 loaded.stylePreviewFiles = writeStylePreviews(project.id, loaded.apk)
                 loaded.also { session = it }.snapshot()
             }
+        }
+
+    override suspend fun renameProject(projectId: Long, name: String) =
+        withContext(Dispatchers.IO) {
+            val trimmed = name.trim()
+            // Silently ignored rather than refused. The only caller is a dialog, and a
+            // dialog that can fail on an empty field is a dialog someone gets stuck in;
+            // an empty title would also leave a row with nothing to identify it by.
+            if (trimmed.isEmpty()) return@withContext
+            mutex.withLock {
+                // A targeted UPDATE, not an insert of a whole row: the editor may be
+                // holding an older copy of this project, and writing that back would undo
+                // the commit it has not seen.
+                projectDao.rename(projectId, trimmed)
+                // The open session holds its own copy, and every snapshot is built from it.
+                // Without this the editor goes on showing the old name until it is closed
+                // and reopened — which is most of the time, since the rename is made there.
+                session?.takeIf { it.projectId == projectId }?.projectName = trimmed
+            }
+            Unit
         }
 
     override suspend fun deleteProject(projectId: Long) = withContext(Dispatchers.IO) {
@@ -893,6 +936,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
             project.copy(
                 editedBinPath = editedFile.absolutePath.takeIf { keepEdited },
                 selectedStyle = current.selectedStyle,
+                // The Projects page sorts on this. `importedAtEpochMillis` is bumped by
+                // merely opening a project, so it cannot answer "which did I work on last"
+                // — and with two projects on one face, that was the only thing telling
+                // otherwise identical rows apart.
+                updatedAtEpochMillis = System.currentTimeMillis(),
             ),
         )
         if (keepEdited) {
@@ -1069,6 +1117,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val originalContainer: Fit3Container,
         var currentContainer: Fit3Container,
         val sourceName: String,
+        /** Read from the project row, and rewritten in place by a rename. */
+        var projectName: String = sourceName,
         var audit: EditAuditSummary? = null,
         var selectedStyle: String? = null,
         /** Style index → the package's preview for it, extracted to app storage. */
@@ -1409,6 +1459,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 faceId = apk.faceId,
                 faceName = apk.faceName,
                 sourceName = sourceName,
+                projectName = projectName,
                 styleNames = styles.map { it.basename },
                 selectedStyle = selected.basename,
                 preview = currentBackground,
@@ -1525,6 +1576,18 @@ private val PreviewFileNamePattern = Regex("""style(\d+)\.png""")
 private fun styleIndexOf(basename: String): Int? =
     StyleNamePattern.matchEntire(basename)?.groupValues?.get(1)?.toIntOrNull()
 
+/**
+ * The name to show for a project.
+ *
+ * [ProjectEntity.projectName] is null only on a row that predates schema 5 and that its
+ * backfill could not name, so the fallbacks are the face's own names — identical across
+ * every project on the face, but better than a blank row.
+ */
+internal val ProjectEntity.resolvedName: String
+    get() = projectName?.takeIf(String::isNotBlank)
+        ?: faceName?.takeIf(String::isNotBlank)
+        ?: displayName
+
 private fun ProjectEntity.toSummary(previewImagePath: String?) = ProjectSummary(
     id = id,
     displayName = displayName,
@@ -1533,6 +1596,12 @@ private fun ProjectEntity.toSummary(previewImagePath: String?) = ProjectSummary(
     faceName = faceName,
     importedAtEpochMillis = importedAtEpochMillis,
     previewImagePath = previewImagePath,
+    name = resolvedName,
+    styleId = styleId ?: selectedStyle?.let(::styleIndexOf),
+    packageVersionCode = packageVersionCode,
+    // Zero for a row written before schema 5 whose migration could not recover one; falling
+    // back to the import time keeps it out of the bottom of a "recently edited" sort.
+    updatedAtEpochMillis = updatedAtEpochMillis.takeIf { it > 0 } ?: importedAtEpochMillis,
 )
 
 private fun StructuralEdit.audit(operation: String) = EditAuditSummary(

@@ -23,7 +23,6 @@
     <string name="editor_reopen">Reopen from library</string>
 
     <!-- Page titles, reused as the navigation rail's labels -->
-    <string name="editor_page_face_fallback">Face %1$s</string>
     <string name="editor_page_widgets">Widgets</string>
     <string name="editor_page_widget_number">Widget #%1$s</string>
     <string name="editor_page_background">Background</string>
@@ -34,6 +33,9 @@
     <!-- The "⋯" that opens the page above. A glyph needs its label spelled out for TalkBack,
          which otherwise announces the ellipsis character itself. -->
     <string name="editor_project_a11y">Project and reset</string>
+    <string name="editor_project_name_heading">Project name</string>
+    <string name="editor_project_rename">Rename project</string>
+    <string name="editor_project_rename_title">Rename project</string>
     <string name="editor_widget_index_unknown">—</string>
 
     <!-- Page subtitles -->

@@ -49,6 +49,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -215,6 +216,7 @@ fun EditorRoute(
         onDiscardImage = viewModel::cancelBackground,
         onApplyImage = viewModel::applyBackground,
         onReset = viewModel::reset,
+        onRename = viewModel::renameProject,
         onGrantNearby = {
             val permissions = buildList {
                 if (Build.VERSION.SDK_INT >= 31) {
@@ -302,6 +304,7 @@ private fun EditorScreen(
     onDiscardImage: () -> Unit,
     onApplyImage: () -> Unit,
     onReset: () -> Unit,
+    onRename: (String) -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -398,6 +401,7 @@ private fun EditorScreen(
                         onDiscardImage = onDiscardImage,
                         onApplyImage = onApplyImage,
                         onReset = onReset,
+                        onRename = onRename,
                         onGrantNearby = onGrantNearby,
                         onOpenCompanion = onOpenCompanion,
                         onInitializeAndDiscover = onInitializeAndDiscover,
@@ -517,8 +521,11 @@ private fun EditorHeader(
     onCheckForUpdate: () -> Unit,
 ) {
     val title = when (page) {
-        EditorPage.Canvas -> snapshot.faceName
-            ?: stringResource(R.string.editor_page_face_fallback, snapshot.faceId)
+        // The project's name, not the face's. Two projects on one face carry the same
+        // `faceName`, so titling the editor with it left no way to tell from this screen
+        // which of them was open — and the subtitle below is the face and style, which are
+        // identical too.
+        EditorPage.Canvas -> snapshot.projectName
         EditorPage.Widgets -> stringResource(R.string.editor_page_widgets)
         EditorPage.Inspector -> stringResource(
             R.string.editor_page_widget_number,
@@ -686,6 +693,7 @@ private fun EditorPageContent(
     onDiscardImage: () -> Unit,
     onApplyImage: () -> Unit,
     onReset: () -> Unit,
+    onRename: (String) -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -734,7 +742,7 @@ private fun EditorPageContent(
             onOpenPluginSettings, onConfirmPluginReleased, onRediscover, onSendBin,
             onResetDelivery, { onNavigate(EditorPage.Canvas) }, modifier,
         )
-        EditorPage.Project -> ProjectWorkspace(snapshot, onReset, modifier)
+        EditorPage.Project -> ProjectWorkspace(snapshot, onReset, onRename, modifier)
     }
 }
 
@@ -2451,12 +2459,48 @@ private fun ValidationCheck(label: String, ok: Boolean) {
 private fun ProjectWorkspace(
     snapshot: EditorSnapshot,
     onReset: () -> Unit,
+    onRename: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var renaming by rememberSaveable { mutableStateOf(false) }
+    if (renaming) {
+        RenameProjectDialog(
+            current = snapshot.projectName,
+            onDismiss = { renaming = false },
+            onConfirm = { renaming = false; onRename(it) },
+        )
+    }
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // The name is the project's own, not the face's, and this is where it is changed.
+        // Two projects on one face read identically everywhere else in the editor.
+        Column(
+            Modifier.fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                .padding(14.dp),
+        ) {
+            MicroLabel(stringResource(R.string.editor_project_name_heading))
+            Text(
+                snapshot.projectName,
+                Modifier.fillMaxWidth().padding(top = 9.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            // A labelled button rather than a pencil glyph. This page has the width for a
+            // word, and the glyphs that would fit — U+270E and its neighbours — are exactly
+            // the class that falls through to the emoji font on some builds, which would
+            // make it the only colour character in the app.
+            FitButton(
+                stringResource(R.string.editor_project_rename),
+                { renaming = true },
+                Modifier.fillMaxWidth().padding(top = 12.dp),
+                style = FitButtonStyle.Secondary,
+            )
+        }
         Column(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
@@ -3677,4 +3721,44 @@ private fun fittedRect(
     val centerX = targetWidth / 2f + placement.offsetX * targetWidth
     val centerY = targetHeight / 2f + placement.offsetY * targetHeight
     return Offset(centerX - width / 2f, centerY - height / 2f) to Size(width, height)
+}
+
+/**
+ * Renames the open project.
+ *
+ * A second copy of the library's dialog rather than a shared one: the two modules have no
+ * component layer between them, and one small `AlertDialog` in each is less than a new
+ * shared surface would cost. Both scroll their text slot for the same reason — an
+ * `AlertDialog` caps its own height and clips rather than scrolls in landscape.
+ */
+@Composable
+private fun RenameProjectDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var name by rememberSaveable(current) { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.editor_project_rename_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.editor_project_name_heading)) },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) {
+                Text(stringResource(R.string.editor_project_rename))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
+        },
+    )
 }

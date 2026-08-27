@@ -603,6 +603,59 @@ The four that catch people fastest:
   `rememberUpdatedState` — `latestSnapshot`, `latestSelectedGlobalIndex`, `latestEnabled`.
   Adding `snapshot` to the keys is **not** the fix: that restarts the detector mid-gesture
   and cancels the drag in progress.
+* **`openPackage` always creates a project; resuming one goes through `openProject`.** It
+  used to look the package's `sourceKey` up first and silently re-enter whatever it found,
+  which is what limited a face to one project and what made **Download & edit** open work
+  already in progress while promising a download that never happened. Schema 4 pinned that
+  with a UNIQUE index on `sourceUri`; `Migration4To5` drops it, and `findBySourceUri` is
+  gone from the DAO on purpose — leaving it is an invitation to reinstate one project per
+  face. The identity key is unchanged and still `fit3-catalog://<productId>/<versionCode>/<styleId>`,
+  now also stored split across `productId`, `packageVersionCode` and `styleId` so nothing
+  has to parse a string to compare it.
+* **A `sourceUri` may not parse, and NULL is the answer.** Schema 1 rows came from the file
+  picker and hold a `content://` document URI. `FacePackage.parseSourceKey` returns null for
+  those and the schema 5 backfill leaves their three columns NULL — a migration that threw
+  would strand the database on version 4 for good and the app would not open at all. NULL
+  must read as "say nothing": `ProjectSummary.isOutdated` is false for an unknown version,
+  never true, or a project that is already current gets badged and sent to re-download.
+* **A project's name is stored, never derived.** `faceName` and `displayName` are the
+  *face's* names and read identically on every project started from it, which is what made
+  two projects on one face impossible to tell apart — same title, same face line, same
+  vendor thumbnail, and they traded places on every open because the list sorted on
+  `importedAtEpochMillis`, which `openProject` bumps. `projectName` is written once by
+  `ProjectNaming.defaultName` against the face's other projects and thereafter only by a
+  rename; nothing derived may overwrite it, or the next open would undo the rename. Sorting
+  moved to `updatedAtEpochMillis`, which only a commit touches.
+* **The face sheet's project list is a plain `Column`, never a `LazyColumn`.** That region
+  is already inside a `verticalScroll`, and nesting a vertical lazy list in one throws at
+  measure time. The `LazyRow` of style thumbnails beside it is fine because it scrolls the
+  other way.
+* **"Update" starts a *new* project on the newer version and leaves the old one alone.** An
+  edit cannot be carried across a version change — the container may have changed shape — so
+  `UPDATE` and `NEW_PROJECT` run exactly the same code and differ only in what the button
+  says. That wording is the whole feature: `downloadPackage` always fetches
+  `face.versionCode`, which *is* the newest, so the old button was already doing the right
+  thing while describing it wrong.
+* **A caption that promises no download has to check, not infer.** "Already on your device"
+  was first derived from the projects on the face, which is nearly always right and wrong
+  exactly when it matters: `PackageCache.readPackage` deletes a package it cannot read, so a
+  project can still record a version whose bytes are gone. It reads `PackageCache.hasPackage`
+  now — a file check, not a 32 MiB read. The same run is why there is a `FaceAction.OPENING`:
+  "Downloading…" over a caption saying nothing would be downloaded is the same dishonesty
+  the screen was being fixed for.
+* **The watch keeps one face per slot, and no code can change that.**
+  `DirectInstallPayload` requires `fileName == "SM-R390_<faceId>_256x402.bin"` and a single
+  faceId protocol byte, so two projects on one face replace each other on the wrist however
+  separate they are on the phone. The Projects page says so once, above the list, when any
+  two projects share a face. Do not try to fix it in code; it is firmware.
+* **Reverse the comparator, never the sorted list — and reverse only the primary key.**
+  `Comparator.reversed()` flips the tiebreak with it, so faces sharing a name swapped places
+  for a reason nothing on screen explains. Every sort is
+  `compareBy(primary).maybeReversed(reversed).thenBy(stable)`, with the tiebreak outside the
+  reversal. `CatalogSort.RECENT` reversed genuinely reverses the list: the store already
+  serves newest first, so treating it as a no-op in both directions leaves the chip inert.
+  The labels are **not** on the enums — `:core:model` has no resources, and a reversible sort
+  needs two labels per option in the reader's language.
 * **A drag accumulates the finger's position, never the clamped one.** Folding
   `constrainDragCoordinate` into the running total made a widget stick: pushed past an
   edge and brought back, it resumed from the edge instead of from under the finger, so it

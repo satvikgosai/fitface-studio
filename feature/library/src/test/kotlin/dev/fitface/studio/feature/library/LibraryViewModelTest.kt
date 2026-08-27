@@ -252,6 +252,8 @@ class LibraryViewModelTest {
 
         override suspend fun markUneditable(appId: String) = Unit
 
+        override suspend fun isPackageCached(face: CatalogFace): Boolean = false
+
         override suspend fun downloadPackage(
             face: CatalogFace,
             styleId: Int,

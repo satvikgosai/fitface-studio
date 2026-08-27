@@ -157,6 +157,9 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             allowEmpty = allowEmpty,
         )
 
+    override suspend fun isPackageCached(face: CatalogFace): Boolean =
+        withContext(Dispatchers.IO) { cache.hasPackage(face.appId, face.versionCode) }
+
     override suspend fun downloadPackage(
         face: CatalogFace,
         styleId: Int,

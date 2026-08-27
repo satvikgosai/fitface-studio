@@ -142,7 +142,61 @@ data class ProjectSummary(
      * one row would parse the whole library on the way into the screen.
      */
     val previewImagePath: String? = null,
+    /**
+     * What to call this project on screen — the name someone gave it, or the best one
+     * that could be derived when it was created.
+     *
+     * Never blank, and the only field the UI should title a row with. [faceName] and
+     * [displayName] are the *face's* names and are identical across every project started
+     * on it, which is what made two projects on one face impossible to tell apart.
+     */
+    val name: String = faceName ?: displayName,
+    val styleId: Int? = null,
+    /**
+     * The store version this project was built from, or null when it cannot be known.
+     * Null must read as "say nothing", never as "out of date" — see [isOutdated].
+     */
+    val packageVersionCode: Long? = null,
+    /** When a commit last changed this project. Zero on a row written before schema 5. */
+    val updatedAtEpochMillis: Long = 0,
 )
+
+/**
+ * Whether the store has published a newer version of this project's face than the one it
+ * was built from.
+ *
+ * Fail-quiet on an unknown version: a project imported before the app recorded one, or from
+ * a source that is not the catalogue, has nothing to compare and must not be badged. The
+ * comparison is `<` and not `!=` on purpose — a catalogue served from a stale cache can name
+ * an older version than a project already holds, and that is not an update to offer.
+ */
+fun ProjectSummary.isOutdated(storeVersionCode: Long): Boolean =
+    packageVersionCode != null && packageVersionCode < storeVersionCode
+
+/** How a new project gets a name that is not already in use on the same face. */
+object ProjectNaming {
+    /**
+     * [base] with `.apk` dropped, followed by the lowest free counter if that is taken.
+     *
+     * The counter starts at 2 and steps over what is already there, so a face holding
+     * "Aurora" and "Aurora 2" names the next one "Aurora 3" rather than reusing a gap — a
+     * name people have seen should not come back attached to different work.
+     *
+     * Matching is exact, including case: "aurora" and "Aurora" are two names, because
+     * deciding they are one would mean silently renaming what someone typed.
+     *
+     * @param base a non-blank name to build on. Blank is returned unchanged rather than
+     *   numbered — " 2" is not a name — and callers guarantee it cannot happen.
+     */
+    fun defaultName(base: String, taken: Collection<String>): String {
+        val root = base.trim().removeSuffix(".apk").trim()
+        if (root.isEmpty()) return base
+        if (root !in taken) return root
+        var counter = 2
+        while ("$root $counter" in taken) counter++
+        return "$root $counter"
+    }
+}
 
 /** One selectable colourway of a catalogue face; maps to a `styleN.bin` entry. */
 data class FaceStyleOption(
@@ -173,21 +227,84 @@ data class FaceCatalog(
     val fromCache: Boolean = false,
 )
 
-enum class CatalogSort(val label: String) {
-    RECENT("Newest"),
-    NAME("Name A–Z"),
-    NUMBER("Face number"),
+/**
+ * How the catalogue grid is ordered.
+ *
+ * The labels are **not** here. They used to be, as a `label` property, which made them the
+ * only user-facing copy in the app outside a `strings.xml` — and a reversible sort needs two
+ * labels per entry, in the reader's language. `:core:model` has no resources, so the wording
+ * belongs to the screen that draws the chips.
+ */
+enum class CatalogSort {
+    RECENT,
+    NAME,
+    NUMBER,
     ;
 
-    fun apply(faces: List<CatalogFace>): List<CatalogFace> = when (this) {
-        RECENT -> faces
-        NAME -> faces.sortedWith(
-            compareBy(String.CASE_INSENSITIVE_ORDER, CatalogFace::name)
-                .thenBy(CatalogFace::faceNumber),
-        )
-        NUMBER -> faces.sortedBy(CatalogFace::faceNumber)
-    }
+    /**
+     * @param reversed flips the order this entry names. `RECENT` reversed is oldest first,
+     *   which means genuinely reversing the catalogue's own order — unreversed it is a no-op
+     *   because the store already serves newest first, and reading that as "nothing to do"
+     *   in both directions is what would leave the chip inert.
+     */
+    fun apply(faces: List<CatalogFace>, reversed: Boolean = false): List<CatalogFace> =
+        when (this) {
+            // Not `sortedWith(...)`: there is no key to sort on, only the order it arrived
+            // in, so the reversal is of the list itself.
+            RECENT -> if (reversed) faces.reversed() else faces
+            // Only the *name* comparator is reversed, and the tiebreak is appended after.
+            // Reversing the whole thing — or the sorted list — would flip the tiebreak with
+            // it, so two faces sharing a name would swap places for a reason nothing on
+            // screen explains.
+            NAME -> faces.sortedWith(
+                compareBy(String.CASE_INSENSITIVE_ORDER, CatalogFace::name)
+                    .maybeReversed(reversed)
+                    .thenBy(CatalogFace::faceNumber),
+            )
+            NUMBER -> faces.sortedWith(
+                compareBy(CatalogFace::faceNumber).maybeReversed(reversed),
+            )
+        }
 }
+
+/** How the projects list is ordered. Labels live with the screen, as for [CatalogSort]. */
+enum class ProjectSort {
+    RECENT,
+    NAME,
+    NUMBER,
+    ;
+
+    fun apply(projects: List<ProjectSummary>, reversed: Boolean = false): List<ProjectSummary> =
+        when (this) {
+            // `updatedAtEpochMillis`, not `importedAtEpochMillis`: the latter is bumped by
+            // merely opening a project, so sorting on it made two projects on one face
+            // trade places every time either was looked at.
+            //
+            // Every entry ends `.thenBy(id)`, outside the reversal. Two projects can hold
+            // the same name and the same timestamps — legacy rows the schema 5 backfill
+            // could not name, most of all — and without a stable last resort they would
+            // swap places between recompositions.
+            RECENT -> projects.sortedWith(
+                compareByDescending(ProjectSummary::updatedAtEpochMillis)
+                    .maybeReversed(reversed)
+                    .thenByDescending(ProjectSummary::importedAtEpochMillis)
+                    .thenBy(ProjectSummary::id),
+            )
+            NAME -> projects.sortedWith(
+                compareBy(String.CASE_INSENSITIVE_ORDER, ProjectSummary::name)
+                    .maybeReversed(reversed)
+                    .thenBy(ProjectSummary::id),
+            )
+            NUMBER -> projects.sortedWith(
+                compareBy<ProjectSummary> { it.faceId.toIntOrNull() ?: Int.MAX_VALUE }
+                    .maybeReversed(reversed)
+                    .thenBy(ProjectSummary::id),
+            )
+        }
+}
+
+private fun <T> Comparator<T>.maybeReversed(reversed: Boolean): Comparator<T> =
+    if (reversed) reversed() else this
 
 class FacePackage(
     val sourceKey: String,
@@ -211,13 +328,41 @@ class FacePackage(
 
     fun copyBytes(): ByteArray = payload.copyOf()
 
+    /** The three parts of [sourceKey], for the project row this package will become. */
+    val source: FaceSource? get() = parseSourceKey(sourceKey)
+
     companion object {
         const val SOURCE_SCHEME = "fit3-catalog://"
 
         fun sourceKey(productId: String, versionCode: Long, styleId: Int): String =
             "$SOURCE_SCHEME$productId/$versionCode/$styleId"
+
+        /**
+         * [sourceKey] read back, or null for anything that is not one.
+         *
+         * Kept beside the writer because the two have to agree by construction. Null is a
+         * real case and not an error: rows written before this app minted its own keys hold
+         * a `content://` document URI from the file picker, and schema 5's backfill has to
+         * leave those alone rather than throw halfway through a migration.
+         */
+        fun parseSourceKey(key: String): FaceSource? {
+            if (!key.startsWith(SOURCE_SCHEME)) return null
+            val parts = key.removePrefix(SOURCE_SCHEME).split('/')
+            if (parts.size != 3) return null
+            val productId = parts[0].ifEmpty { return null }
+            val versionCode = parts[1].toLongOrNull() ?: return null
+            val styleId = parts[2].toIntOrNull() ?: return null
+            return FaceSource(productId, versionCode, styleId)
+        }
     }
 }
+
+/** What a project was opened from: which catalogue product, at which version, which style. */
+data class FaceSource(
+    val productId: String,
+    val versionCode: Long,
+    val styleId: Int,
+)
 
 data class UserMessage(
     val id: Long,
@@ -379,6 +524,14 @@ data class EditorSnapshot(
     val faceId: String,
     val faceName: String?,
     val sourceName: String,
+    /**
+     * What this project is called, which is not what the *face* is called.
+     *
+     * [faceName] and [sourceName] come from the package and read identically on every
+     * project started from it. This one is the reader's, and it is why the editor can say
+     * which of two projects on one face is open.
+     */
+    val projectName: String = sourceName,
     val styleNames: List<String>,
     val selectedStyle: String,
     val preview: PreviewFrame,
@@ -556,6 +709,12 @@ interface WatchFaceRepository {
 
     suspend fun openProject(projectId: Long): EditorSnapshot
 
+    /**
+     * Renames a project. A blank name is ignored rather than refused: a rename dialog is
+     * not a place to fail, and an empty title would leave a row nothing could identify.
+     */
+    suspend fun renameProject(projectId: Long, name: String)
+
     suspend fun deleteProject(projectId: Long)
 
     suspend fun currentSnapshot(styleName: String? = null): EditorSnapshot
@@ -688,6 +847,12 @@ interface FaceCatalogRepository {
      * Returns the signed package for [face]. A package already cached for the same
      * `versionCode` is reused; anything else is downloaded and then cached.
      */
+    /**
+     * Whether this face's *current* package is already on disk, so opening it needs no
+     * network. Cheap: a file check, not a read.
+     */
+    suspend fun isPackageCached(face: CatalogFace): Boolean
+
     suspend fun downloadPackage(
         face: CatalogFace,
         styleId: Int,

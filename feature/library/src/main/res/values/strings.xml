@@ -22,7 +22,21 @@
     <!-- Catalogue grid -->
     <string name="library_catalogue_a11y">Watch face catalogue</string>
     <string name="library_search_placeholder">Search faces or ID</string>
+    <string name="library_search_clear">Clear the search</string>
     <string name="library_sort_label">Sort</string>
+    <!-- Sort chips. The selected one shows the direction it is in and reverses on a second
+         tap; the rest name the order they would put the list in. Two of the three say their
+         direction in words; face number has no such pair, so it carries an arrow. -->
+    <string name="library_sort_newest">Newest</string>
+    <string name="library_sort_oldest">Oldest</string>
+    <string name="library_sort_edited_newest">Edited last</string>
+    <string name="library_sort_edited_oldest">Edited first</string>
+    <string name="library_sort_name_az">Name A–Z</string>
+    <string name="library_sort_name_za">Name Z–A</string>
+    <string name="library_sort_number_asc">Face number ↑</string>
+    <string name="library_sort_number_desc">Face number ↓</string>
+    <!-- Only the label can say what a second tap does; the chip looks the same either way. -->
+    <string name="library_sort_reverse_a11y">Sorted by %1$s. Tap to reverse.</string>
     <string name="library_source_cached">Cached catalogue</string>
     <string name="library_source_live">Live catalogue</string>
     <string name="library_face_and_style_count">%1$d faces · %2$d styles</string>
@@ -48,6 +62,10 @@
     <!-- name, face id, style count -->
     <string name="library_face_card_a11y">%1$s, face %2$s, %3$s</string>
     <string name="library_face_card_a11y_not_editable">%1$s, face %2$s, %3$s, not editable</string>
+    <plurals name="library_face_card_projects">
+        <item quantity="one">%1$d project</item>
+        <item quantity="other">%1$d projects</item>
+    </plurals>
 
     <!-- Face sheet -->
     <string name="library_sheet_kind">Watch face</string>
@@ -59,8 +77,22 @@
     <string name="library_sheet_uneditable_label">N/A</string>
     <string name="library_download">Download &amp; edit</string>
     <string name="library_download_in_progress">Downloading…</string>
+    <!-- The package is already on disk; only the copy beside the project and the parse
+         are left, and saying "downloading" over a caption promising none would be a lie. -->
+    <string name="library_open_in_progress">Opening…</string>
     <string name="library_download_not_editable">Not editable</string>
     <string name="library_download_cache_note">Packages are cached on this device and only re-downloaded when the store publishes a new version.</string>
+    <!-- The face sheet, once this face already has projects of its own. -->
+    <string name="library_sheet_your_projects">Your projects on this face</string>
+    <string name="library_sheet_start_new">Start something new</string>
+    <string name="library_new_project">Start a new project</string>
+    <string name="library_new_project_note">This face is already on your device, so nothing will be downloaded.</string>
+    <!-- version name -->
+    <string name="library_update_to">Update to %1$s</string>
+    <string name="library_update_note">Starts a new project on the newer version. The projects you already have are left exactly as they are — an edit cannot be carried across a version change.</string>
+    <string name="library_project_outdated">OUTDATED</string>
+    <!-- project name, style, how long ago it was edited -->
+    <string name="library_sheet_project_a11y">Open %1$s, %2$s, edited %3$s</string>
     <string name="library_style_thumb_a11y">%1$s style %2$d</string>
     <string name="library_style_thumb_a11y_selected">%1$s style %2$d, selected</string>
 
@@ -70,8 +102,26 @@
     <string name="library_projects_empty_title">No projects yet</string>
     <string name="library_projects_empty_detail">Download a face from Watch faces. Your original package and every committed edit will be kept privately here.</string>
     <string name="library_browse">Browse watch faces</string>
-    <string name="library_unnamed_face">Unnamed face</string>
     <string name="library_project_face_line">face %1$s · %2$s</string>
+    <string name="library_project_face_line_plain">face %1$s</string>
+    <string name="library_project_style">style %1$s</string>
+    <string name="library_projects_search_placeholder">Search your projects</string>
+    <string name="library_projects_no_matches_title">No matching projects</string>
+    <string name="library_projects_no_matches_detail">Try a project name or a numeric face ID.</string>
+    <!-- Two projects on one face are the same face to the watch, which keeps one per face. -->
+    <string name="library_projects_shared_face_note">More than one project shares a face. The watch keeps one face per slot, so installing one replaces the other on your wrist.</string>
+    <!-- project name -->
+    <string name="library_project_more_a11y">More options for %1$s</string>
+    <string name="library_project_rename">Rename</string>
+    <string name="library_project_delete">Delete</string>
+    <string name="library_rename_title">Rename project</string>
+    <string name="library_rename_label">Project name</string>
+    <string name="library_rename_confirm">Rename</string>
+    <string name="library_delete_title">Delete this project?</string>
+    <!-- project name -->
+    <string name="library_delete_message">%1$s and every edit saved in it will be removed from this device. The watch face itself can be downloaded again.</string>
+    <string name="library_delete_confirm">Delete</string>
+    <string name="library_cancel">Cancel</string>
 
     <!-- Package size -->
     <string name="library_size_unavailable">size unavailable</string>

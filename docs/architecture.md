@@ -130,6 +130,20 @@ a file already on disk at exactly the declared size is reused rather than fetche
 again, which is the difference between retrying a failed install and spending
 another 36 MiB.
 
+A face may carry **more than one project**, and each one keeps its own `source.apk`.
+The shared `catalog-cache/packages/` entry is what the second project is opened from,
+so starting one costs no network — but it does cost another full copy of the package
+beside it, because that copy is what `openProject` reads and the shared cache is
+evicted the moment a newer version lands. `PackageCache.hasPackage` is the check
+behind the face sheet's promise that nothing will be downloaded.
+
+The project row records the three facts that tell one project from its siblings: the
+name someone gave it, the style it was started on, and the store `versionCode` it was
+built from — which is what "the store has published a newer version of this face"
+compares against, with no network call. A row written before schema 5 whose
+`sourceUri` was not one of this app's keys keeps NULL for the parsed columns, and NULL
+means "say nothing", never "out of date".
+
 ### Why the style previews are files
 
 The Styles page and the projects list both have to show a watch face per row, and

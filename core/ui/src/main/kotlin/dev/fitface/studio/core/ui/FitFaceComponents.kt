@@ -104,6 +104,16 @@ fun FitButton(
     }
 }
 
+/**
+ * A pill that is one of a set.
+ *
+ * @param role defaults to [Role.RadioButton], which is what a pick-one chip is. A sort chip
+ *   that also reverses its own order on a second tap is **not** one — announcing it as a
+ *   radio button tells a screen reader the only thing it can do is become selected, and it
+ *   is already selected. Those pass [Role.Button].
+ * @param contentDescription replaces the label for a screen reader. A sort chip uses it to
+ *   say what a second tap does, which the label alone cannot.
+ */
 @Composable
 fun FitChip(
     text: String,
@@ -111,6 +121,8 @@ fun FitChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    role: Role = Role.RadioButton,
+    contentDescription: String? = null,
 ) {
     val selectedColor = MaterialTheme.colorScheme.primary
     val border = if (selected) selectedColor else MaterialTheme.colorScheme.outlineVariant
@@ -130,10 +142,17 @@ fun FitChip(
             .border(1.dp, border.copy(alpha = if (enabled) 1f else .45f), RoundedCornerShape(999.dp))
             .clickable(
                 enabled = enabled,
-                role = Role.RadioButton,
+                role = role,
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
+            )
+            .then(
+                if (contentDescription == null) {
+                    Modifier
+                } else {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                },
             )
             .padding(horizontal = 14.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,

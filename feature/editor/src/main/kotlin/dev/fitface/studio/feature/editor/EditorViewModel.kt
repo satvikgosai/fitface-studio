@@ -132,6 +132,26 @@ class EditorViewModel @Inject constructor(
         operate { repository.openProject(projectId) }
     }
 
+    /**
+     * Renames the open project.
+     *
+     * Not an `operate {}`: a rename touches one column and no container, so it must not put
+     * the editor into its working state or produce a new snapshot through the commit path.
+     * The repository updates the open session in place, and the reload below is what carries
+     * the new name onto this screen.
+     */
+    fun renameProject(name: String) {
+        val projectId = loadedProjectId ?: return
+        viewModelScope.launch {
+            runCatching {
+                repository.renameProject(projectId, name)
+                repository.currentSnapshot()
+            }.onSuccess { snapshot ->
+                mutableState.value = mutableState.value.copy(snapshot = snapshot)
+            }.onFailure(::showFailure)
+        }
+    }
+
     fun selectStyle(style: String) {
         mutableState.value = mutableState.value.copy(
             selectedWidgetIndex = null,
