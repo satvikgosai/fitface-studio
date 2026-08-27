@@ -62,6 +62,24 @@ data class EditorUiState(
     val pendingImage: ReplacementImage? = null,
     val placement: ImagePlacement = ImagePlacement(),
     val selectedWidgetIndex: Int? = null,
+    /**
+     * How many widget removals have committed.
+     *
+     * A counter and not a flag: the screen acts on it *changing*, which is what makes it
+     * safe to act on at all. The obvious rule — "the Inspector has no widget, so leave" —
+     * races the opposite way: `page` is local Compose state and updates synchronously, while
+     * the selection arrives through `collectAsStateWithLifecycle` a frame later, so tapping
+     * a widget in the list would land on an Inspector that had not been told which widget
+     * yet and bounce straight back.
+     */
+    val widgetRemovals: Int = 0,
+    /**
+     * The project this editor was showing has been deleted, so the screen has to leave.
+     *
+     * One-way: nothing after it can act on the project, and clearing it would only give the
+     * editor a chance to draw a session that no longer exists.
+     */
+    val projectDeleted: Boolean = false,
     val applyWidgetEditsToAllStyles: Boolean = true,
     val previewReviewed: Boolean = false,
     val pendingWidgetMove: WidgetMovePreview? = null,
@@ -149,6 +167,25 @@ class EditorViewModel @Inject constructor(
             }.onSuccess { snapshot ->
                 mutableState.value = mutableState.value.copy(snapshot = snapshot)
             }.onFailure(::showFailure)
+        }
+    }
+
+    /**
+     * Deletes the open project and asks the screen to leave.
+     *
+     * The repository drops the row, the directory and — because this is the open one — the
+     * session, so there is nothing left for this ViewModel to show. The flag is what the
+     * route navigates on; it is never cleared, because the only thing that happens after it
+     * is set is going back.
+     */
+    fun deleteProject() {
+        val projectId = loadedProjectId ?: return
+        viewModelScope.launch {
+            runCatching { repository.deleteProject(projectId) }
+                .onSuccess {
+                    mutableState.value = mutableState.value.copy(projectDeleted = true)
+                }
+                .onFailure(::showFailure)
         }
     }
 
@@ -514,7 +551,12 @@ class EditorViewModel @Inject constructor(
             it.globalIndex == mutableState.value.selectedWidgetIndex
         } ?: return
         operate(
-            onSuccess = { current -> current.copy(selectedWidgetIndex = null) },
+            onSuccess = { current ->
+                current.copy(
+                    selectedWidgetIndex = null,
+                    widgetRemovals = current.widgetRemovals + 1,
+                )
+            },
         ) {
             repository.removeWidget(
                 snapshot.selectedStyle,

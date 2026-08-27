@@ -24,13 +24,15 @@
     <string name="library_search_placeholder">Search faces or ID</string>
     <string name="library_search_clear">Clear the search</string>
     <string name="library_sort_label">Sort</string>
-    <!-- Sort chips. The selected one shows the direction it is in and reverses on a second
-         tap; the rest name the order they would put the list in. Two of the three say their
-         direction in words; face number has no such pair, so it carries an arrow. -->
+    <!-- Sort chips, shared by both library pages so switching tabs does not reword them.
+         The selected one shows the direction it is in and reverses on a second tap; the
+         rest name the order they would put the list in. Two of the three say their
+         direction in words; face number has no such pair, so it carries an arrow.
+         Both labels of a pair MUST stay the same number of characters: labelMedium is
+         monospace, so equal length is equal width, and that is what stops the chip
+         resizing when it is reversed and shoving the row sideways. -->
     <string name="library_sort_newest">Newest</string>
     <string name="library_sort_oldest">Oldest</string>
-    <string name="library_sort_edited_newest">Edited last</string>
-    <string name="library_sort_edited_oldest">Edited first</string>
     <string name="library_sort_name_az">Name A–Z</string>
     <string name="library_sort_name_za">Name Z–A</string>
     <string name="library_sort_number_asc">Face number ↑</string>

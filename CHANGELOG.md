@@ -16,9 +16,13 @@ Added:
   project on the new version and leaves the ones you already have exactly as they were.
 - Search and sort on **Your projects**, and every sort now reverses — tap the one already
   chosen to flip it.
-- Deleting a project asks first, and names the one it would remove.
+- Deleting a project asks first and names the one it would remove, from the projects list
+  or from inside the project itself.
 
 Fixed:
+
+- Removing a widget left the editor on a page describing nothing, with the back arrow as
+  the only way out. It returns you to the widget list.
 
 - A face already on your device still offered to download it, then reopened the project
   you already had without saying so.

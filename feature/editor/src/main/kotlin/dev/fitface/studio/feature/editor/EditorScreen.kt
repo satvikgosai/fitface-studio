@@ -166,6 +166,9 @@ fun EditorRoute(
     }
 
     LaunchedEffect(projectId) { viewModel.loadProject(projectId) }
+    // Deleting the open project takes its row, its directory and its session with it, so
+    // there is nothing left for this screen to draw.
+    LaunchedEffect(state.projectDeleted) { if (state.projectDeleted) onBack() }
     // The message is cleared *after* it has been shown, not before. Clearing first
     // changed this effect's key while `showSnackbar` was still suspended, which
     // cancelled it — so every editor failure appeared for one frame and vanished, and
@@ -217,6 +220,7 @@ fun EditorRoute(
         onApplyImage = viewModel::applyBackground,
         onReset = viewModel::reset,
         onRename = viewModel::renameProject,
+        onDelete = viewModel::deleteProject,
         onGrantNearby = {
             val permissions = buildList {
                 if (Build.VERSION.SDK_INT >= 31) {
@@ -305,6 +309,7 @@ private fun EditorScreen(
     onApplyImage: () -> Unit,
     onReset: () -> Unit,
     onRename: (String) -> Unit,
+    onDelete: () -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -337,6 +342,24 @@ private fun EditorScreen(
     val goBack: () -> Unit = {
         val parent = page.parent
         if (parent == null) onBack() else page = parent
+    }
+    // Removing a widget left the Inspector describing nothing — no name, no rectangle, no
+    // control that did anything — and the back arrow was the only way out. It falls back to
+    // the list the widget was opened from instead.
+    //
+    // Driven by the removal *count* changing, not by "the Inspector has no widget". That
+    // rule reads better and is wrong: `page` is local Compose state and moves in the same
+    // frame as the tap, while the selection comes through `collectAsStateWithLifecycle` a
+    // frame later, so opening a widget from the list would find an Inspector that had not
+    // been told which widget yet and bounce straight back to it. The counter only advances
+    // on a removal that committed, which also leaves a failed one on the page it happened
+    // on, where its message is.
+    var removalsSeen by rememberSaveable { mutableIntStateOf(state.widgetRemovals) }
+    LaunchedEffect(state.widgetRemovals) {
+        if (state.widgetRemovals != removalsSeen) {
+            removalsSeen = state.widgetRemovals
+            if (page == EditorPage.Inspector) page = EditorPage.Widgets
+        }
     }
 
     BackHandler(enabled = page != EditorPage.Canvas) { goBack() }
@@ -402,6 +425,7 @@ private fun EditorScreen(
                         onApplyImage = onApplyImage,
                         onReset = onReset,
                         onRename = onRename,
+                        onDelete = onDelete,
                         onGrantNearby = onGrantNearby,
                         onOpenCompanion = onOpenCompanion,
                         onInitializeAndDiscover = onInitializeAndDiscover,
@@ -694,6 +718,7 @@ private fun EditorPageContent(
     onApplyImage: () -> Unit,
     onReset: () -> Unit,
     onRename: (String) -> Unit,
+    onDelete: () -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -742,7 +767,7 @@ private fun EditorPageContent(
             onOpenPluginSettings, onConfirmPluginReleased, onRediscover, onSendBin,
             onResetDelivery, { onNavigate(EditorPage.Canvas) }, modifier,
         )
-        EditorPage.Project -> ProjectWorkspace(snapshot, onReset, onRename, modifier)
+        EditorPage.Project -> ProjectWorkspace(snapshot, onReset, onRename, onDelete, modifier)
     }
 }
 
@@ -2460,14 +2485,23 @@ private fun ProjectWorkspace(
     snapshot: EditorSnapshot,
     onReset: () -> Unit,
     onRename: (String) -> Unit,
+    onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var renaming by rememberSaveable { mutableStateOf(false) }
+    var deleting by rememberSaveable { mutableStateOf(false) }
     if (renaming) {
         RenameProjectDialog(
             current = snapshot.projectName,
             onDismiss = { renaming = false },
             onConfirm = { renaming = false; onRename(it) },
+        )
+    }
+    if (deleting) {
+        DeleteProjectDialog(
+            name = snapshot.projectName,
+            onDismiss = { deleting = false },
+            onConfirm = { deleting = false; onDelete() },
         )
     }
     Column(
@@ -2529,6 +2563,21 @@ private fun ProjectWorkspace(
         )
         Text(
             stringResource(R.string.editor_reset_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Deleting from here as well as from the projects list, because this is where you
+        // are when you decide a project is not worth keeping — and with more than one
+        // project per face, going back to find the right row is where you delete the wrong
+        // one.
+        FitButton(
+            stringResource(R.string.editor_delete_project),
+            { deleting = true },
+            Modifier.fillMaxWidth(),
+            style = FitButtonStyle.Danger,
+        )
+        Text(
+            stringResource(R.string.editor_delete_project_note),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -3755,6 +3804,43 @@ private fun RenameProjectDialog(
         confirmButton = {
             TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) {
                 Text(stringResource(R.string.editor_project_rename))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
+        },
+    )
+}
+
+/**
+ * Confirms deleting the open project, from inside it.
+ *
+ * The same guarantee the library's copy gives: the text slot scrolls, because an
+ * `AlertDialog` caps its own height and clips rather than scrolls in landscape.
+ */
+@Composable
+private fun DeleteProjectDialog(
+    name: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.editor_delete_project_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    stringResource(R.string.editor_delete_project_message, name),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    stringResource(R.string.editor_delete_project_confirm),
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         },
         dismissButton = {

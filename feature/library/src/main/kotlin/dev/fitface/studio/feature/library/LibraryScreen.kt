@@ -424,58 +424,41 @@ private fun WatchFaceGrid(
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 148.dp),
         modifier = modifier.semantics { contentDescription = catalogueDescription },
-        contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 28.dp),
+        contentPadding = LibraryPageInsets,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Column {
-                LibrarySearchField(
-                    value = state.query,
-                    onValueChange = onQuery,
-                    placeholder = stringResource(R.string.library_search_placeholder),
-                    enabled = state.downloadingProductId == null,
-                )
-                LibrarySortRow(
-                    options = CatalogSort.entries,
-                    selected = state.sort,
-                    reversed = state.sortReversed,
-                    // `canSelectFace`, not `isWorking`. The grid is painted from the on-disk
-                    // cache before the network is touched, so `isLoadingCatalog` is true for
-                    // the whole opening window of every launch while the screen already looks
-                    // ready — and re-sorting a list conflicts with a refresh no more than
-                    // opening the sheet does.
-                    enabled = state.canSelectFace,
-                    label = { option, reversed -> catalogSortLabel(option, reversed) },
-                    onSelect = onSort,
-                    onReverse = onReverseSort,
-                    modifier = Modifier.padding(top = 11.dp),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 3.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MicroLabel(
-                        stringResource(
-                            if (state.catalogFromCache) {
-                                R.string.library_source_cached
-                            } else {
-                                R.string.library_source_live
-                            },
-                        ),
-                    )
-                    Text(
-                        stringResource(
-                            R.string.library_face_and_style_count,
-                            state.visibleFaces.size,
-                            state.styleCount,
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.fitText.secondary,
-                    )
-                }
-            }
+            LibraryPageControls(
+                query = state.query,
+                onQuery = onQuery,
+                searchPlaceholder = stringResource(R.string.library_search_placeholder),
+                searchEnabled = state.downloadingProductId == null,
+                sortOptions = CatalogSort.entries,
+                sort = state.sort,
+                sortReversed = state.sortReversed,
+                // `canSelectFace`, not `isWorking`. The grid is painted from the on-disk
+                // cache before the network is touched, so `isLoadingCatalog` is true for the
+                // whole opening window of every launch while the screen already looks ready
+                // — and re-sorting a list conflicts with a refresh no more than opening the
+                // sheet does.
+                sortEnabled = state.canSelectFace,
+                sortLabel = { option, reversed -> catalogSortLabel(option, reversed) },
+                onSort = onSort,
+                onReverseSort = onReverseSort,
+                sourceLabel = stringResource(
+                    if (state.catalogFromCache) {
+                        R.string.library_source_cached
+                    } else {
+                        R.string.library_source_live
+                    },
+                ),
+                countLabel = stringResource(
+                    R.string.library_face_and_style_count,
+                    state.visibleFaces.size,
+                    state.styleCount,
+                ),
+            )
         }
 
         if (state.isLoadingCatalog && state.faces.isEmpty()) {
@@ -972,7 +955,10 @@ private fun ProjectsList(
     }
     LazyColumn(
         modifier = modifier,
-        contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 28.dp),
+        // The catalogue's insets, not its own. They used to differ by 4dp horizontally and
+        // 2dp vertically, which is why the search field and every sort chip stepped sideways
+        // and up when you switched tabs.
+        contentPadding = LibraryPageInsets,
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         if (state.projects.isEmpty()) {
@@ -982,34 +968,24 @@ private fun ProjectsList(
         // The same controls the catalogue has, in the same place, scrolling with the list.
         item {
             Column {
-                LibrarySearchField(
-                    value = state.projectQuery,
-                    onValueChange = onQuery,
-                    placeholder = stringResource(R.string.library_projects_search_placeholder),
-                    enabled = true,
+                LibraryPageControls(
+                    query = state.projectQuery,
+                    onQuery = onQuery,
+                    searchPlaceholder = stringResource(R.string.library_projects_search_placeholder),
+                    searchEnabled = true,
+                    sortOptions = ProjectSort.entries,
+                    sort = state.projectSort,
+                    sortReversed = state.projectSortReversed,
+                    sortEnabled = true,
+                    sortLabel = { option, reversed -> projectSortLabel(option, reversed) },
+                    onSort = onSort,
+                    onReverseSort = onReverseSort,
+                    sourceLabel = stringResource(R.string.library_projects_saved),
+                    countLabel = stringResource(
+                        R.string.library_projects_local_count,
+                        projects.size,
+                    ),
                 )
-                LibrarySortRow(
-                    options = ProjectSort.entries,
-                    selected = state.projectSort,
-                    reversed = state.projectSortReversed,
-                    enabled = true,
-                    label = { option, reversed -> projectSortLabel(option, reversed) },
-                    onSelect = onSort,
-                    onReverse = onReverseSort,
-                    modifier = Modifier.padding(top = 11.dp),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 3.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MicroLabel(stringResource(R.string.library_projects_saved))
-                    Text(
-                        stringResource(R.string.library_projects_local_count, projects.size),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.fitText.secondary,
-                    )
-                }
                 if (sharesAFace) {
                     Text(
                         stringResource(R.string.library_projects_shared_face_note),

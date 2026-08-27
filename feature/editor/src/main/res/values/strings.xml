@@ -36,6 +36,12 @@
     <string name="editor_project_name_heading">Project name</string>
     <string name="editor_project_rename">Rename project</string>
     <string name="editor_project_rename_title">Rename project</string>
+    <string name="editor_delete_project">Delete this project</string>
+    <string name="editor_delete_project_note">Deleting removes this project and every edit saved in it from your device. The watch face itself can be downloaded again.</string>
+    <string name="editor_delete_project_title">Delete this project?</string>
+    <!-- project name -->
+    <string name="editor_delete_project_message">%1$s and every edit saved in it will be removed from this device. The watch face itself can be downloaded again.</string>
+    <string name="editor_delete_project_confirm">Delete</string>
     <string name="editor_widget_index_unknown">—</string>
 
     <!-- Page subtitles -->

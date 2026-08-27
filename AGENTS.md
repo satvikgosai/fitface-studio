@@ -603,6 +603,33 @@ The four that catch people fastest:
   `rememberUpdatedState` — `latestSnapshot`, `latestSelectedGlobalIndex`, `latestEnabled`.
   Adding `snapshot` to the keys is **not** the fix: that restarts the detector mid-gesture
   and cancels the drag in progress.
+* **Both library pages lay their controls out with one composable and one set of insets.**
+  Assembled twice, they had already drifted: the catalogue inset its grid by 16dp and the
+  projects list by 20dp, with 2dp between their top paddings, so the search field and every
+  sort chip stepped sideways and up when you switched tabs. `LibraryPageControls` and
+  `LibraryPageInsets` make that impossible rather than merely fixed.
+* **Both labels of a sort direction pair are the same number of characters, and that is
+  load-bearing.** `labelMedium` is `FontFamily.Monospace`, so equal length is equal width —
+  which is what stops the selected chip resizing when it is reversed and shoving every chip
+  after it sideways under the finger that just tapped it. The two pages also share one set
+  of labels, because wording the same chip differently moved the whole row on a tab switch.
+  `SortChipLayoutTest` measures the *neighbours* of the reversed chip, not the chip itself:
+  the selected one is first in the row, so its own left edge cannot move whatever it does,
+  and an assertion on it passes while the bug is present.
+* **The editor leaves the Inspector on a removal *count*, never on "no widget is selected".**
+  The second rule reads better and is wrong: `page` is local Compose state and moves in the
+  same frame as the tap, while the selection arrives through `collectAsStateWithLifecycle` a
+  frame later — so opening a widget from the list would find an Inspector that had not been
+  told which widget yet and bounce straight back to the list. The counter only advances on a
+  removal that committed, which also leaves a *failed* removal on the page it happened on,
+  where its message is.
+* **The database version numbers start at 4 and can never be renumbered.** `v0.1.0`, the
+  first public release, already shipped at version 4, so schemas 1–3 exist on no device and
+  renumbering 4 to 1 looks free. It is the opposite: every install holds
+  `PRAGMA user_version = 4`, a build declaring a lower number opens that as a **downgrade**,
+  and the builder answers a downgrade with
+  `fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)` — every saved project on
+  every phone, gone on first launch. The reasoning is kept on `FitFaceDatabase` itself.
 * **`openPackage` always creates a project; resuming one goes through `openProject`.** It
   used to look the package's `sourceKey` up first and silently re-enter whatever it found,
   which is what limited a face to one project and what made **Download & edit** open work

@@ -155,8 +155,10 @@ class EditPersistenceTest {
 
         override suspend fun findById(id: Long): ProjectEntity? = delegate.findById(id)
 
-        override suspend fun findBySourceUri(sourceUri: String): ProjectEntity? =
-            delegate.findBySourceUri(sourceUri)
+        override suspend fun findByFaceId(faceId: String): List<ProjectEntity> =
+            delegate.findByFaceId(faceId)
+
+        override suspend fun rename(id: Long, name: String): Int = delegate.rename(id, name)
 
         override suspend fun insert(project: ProjectEntity): Long {
             if (failNextInsert) {
