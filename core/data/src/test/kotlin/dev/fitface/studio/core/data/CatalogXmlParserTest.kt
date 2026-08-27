@@ -2,6 +2,8 @@ package dev.fitface.studio.core.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,6 +67,44 @@ class CatalogXmlParserTest {
         assertTrue(page.faces.isEmpty())
         assertTrue(page.endOfList)
         assertEquals(0, page.rawCount)
+    }
+
+    /**
+     * The truncation bug. Every non-1007 code on a follow-up page used to return a clean
+     * terminal page, so the faces gathered so far were cached as a successful refresh and
+     * served for a week — and no `CatalogRejected` escaped for the locale retry or the
+     * stale-cache fallback to act on.
+     */
+    @Test
+    fun aFollowUpPageEndsPaginationOnlyForNoItems() {
+        listOf(
+            CatalogRejected.LocaleNotSupported to "locale not supported",
+            1000 to "internal server error",
+            9999 to "something else entirely",
+        ).forEach { (code, message) ->
+            val rejection = assertThrows(CatalogRejected::class.java) {
+                CatalogXmlParser.parseCatalogPage(
+                    "<result><resultCode>$code</resultCode><resultMsg>$message</resultMsg></result>",
+                    allowEmpty = true,
+                )
+            }
+            assertEquals(code, rejection.resultCode)
+        }
+    }
+
+    /**
+     * `toIntOrNull()` returns null for a missing or unparseable element, which also fails
+     * `!= 0` — so a response shaped like nothing at all read as the end of the list too.
+     */
+    @Test
+    fun aFollowUpPageWithNoResultCodeIsARejectionNotAnEndOfList() {
+        val rejection = assertThrows(CatalogRejected::class.java) {
+            CatalogXmlParser.parseCatalogPage(
+                "<result><resultMsg>who knows</resultMsg></result>",
+                allowEmpty = true,
+            )
+        }
+        assertNull(rejection.resultCode)
     }
 
     @Test

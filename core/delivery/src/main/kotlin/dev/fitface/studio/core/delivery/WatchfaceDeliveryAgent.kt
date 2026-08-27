@@ -33,28 +33,48 @@ class WatchfaceDeliveryAgent(context: Context) :
             // Band replies target the stock plugin's reserved local component ID 6 in
             // the proven coexistence architecture. Handle a direct response if
             // a future framework version routes it here, but do not require it.
-            val payload = pendingInstall
-            pendingInstall = null
-            installInFlight.set(false)
-            if (payload != null) {
-                installListener?.onInstallDelivered(payload)
-            }
+            val payload = claimPendingInstall() ?: return
+            installListener?.onInstallDelivered(payload)
         }
 
         override fun onSent(peerAgent: SAPeerAgent, transactionId: Int) {
-            val payload = pendingInstall
-            pendingInstall = null
-            installInFlight.set(false)
-            if (payload != null) {
-                installListener?.onInstallDelivered(payload)
-            }
+            val payload = claimPendingInstall() ?: return
+            installListener?.onInstallDelivered(payload)
         }
 
         override fun onError(peerAgent: SAPeerAgent?, transactionId: Int, errorCode: Int) {
-            pendingInstall = null
-            installInFlight.set(false)
+            // Guarded like the two above it. This used to report unconditionally, so an
+            // error arriving for an install the watchdog had already given up on
+            // overwrote whatever the reader was being shown instead.
+            claimPendingInstall() ?: return
             installListener?.onInstallFailed("Install message failed with code $errorCode")
         }
+    }
+
+    /**
+     * The in-flight payload, taken exactly once, or null if this attempt is over.
+     *
+     * The accessory framework answers whenever it gets round to it, and by then the
+     * install watchdog may have fired or the reader may have rewound to the checklist.
+     * A late `onSent` used to turn a timed-out install into `COMPLETE` — a face the
+     * watch never got, reported as installed.
+     */
+    private fun claimPendingInstall(): DirectInstallPayload? {
+        val payload = pendingInstall ?: return null
+        pendingInstall = null
+        installInFlight.set(false)
+        return payload
+    }
+
+    /**
+     * Abandons the in-flight install request, so nothing it reports later is believed.
+     *
+     * The one-shot command is already gone by the time this can be called — there is no
+     * unsending it — so this only says that its answer is no longer wanted.
+     */
+    internal fun cancelInstall() {
+        pendingInstall = null
+        installInFlight.set(false)
     }
 
     internal fun install(payload: DirectInstallPayload) {
@@ -76,8 +96,7 @@ class WatchfaceDeliveryAgent(context: Context) :
             installListener?.onInstallRequested(payload)
             installMessage.send(peer, WatchfaceInstallProtocol.request(payload))
         } catch (error: IOException) {
-            pendingInstall = null
-            installInFlight.set(false)
+            claimPendingInstall() ?: return
             // The bytes are already on the watch; only the peer that carries the
             // one-shot command is gone, so discovery is what has to be repeated.
             installListener?.onInstallFailed(
@@ -85,8 +104,7 @@ class WatchfaceDeliveryAgent(context: Context) :
                 peerLost = true,
             )
         } catch (error: RuntimeException) {
-            pendingInstall = null
-            installInFlight.set(false)
+            claimPendingInstall() ?: return
             installListener?.onInstallFailed(
                 error.message ?: "Install send failed",
                 peerLost = true,

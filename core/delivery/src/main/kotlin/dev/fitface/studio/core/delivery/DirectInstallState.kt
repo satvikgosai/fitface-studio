@@ -277,3 +277,62 @@ internal object TimeoutRecovery {
         else -> current.failed(TRANSFER)
     }
 }
+
+/** What a delivery agent has just reported, reduced to what the phase gate needs. */
+internal enum class DeliveryEvent {
+    PAYLOAD_VERIFIED,
+    TRANSFER_PROGRESS,
+    TRANSFER_COMPLETE,
+    INSTALL_REQUESTED,
+    INSTALL_DELIVERED,
+    FAILURE,
+}
+
+/**
+ * Whether a callback from a delivery agent may still change the state.
+ *
+ * The agents outlive the attempt that started them. A transfer thread is blocking
+ * RFCOMM I/O that no coroutine can interrupt, the OTA agent posts two delayed handler
+ * callbacks of its own, and an accessory `onSent` arrives whenever the framework gets
+ * round to it — so a watchdog that has already given up, or a user who has already
+ * rewound to the checklist, is routinely still holding a live worker. Every one of
+ * those callbacks used to write [DirectInstallState.phase] unconditionally, which is
+ * three distinct wrong answers:
+ *
+ *  * a window acknowledged after the transfer watchdog fired dragged `FAILED` back to
+ *    `TRANSFERRING`, and the transfer went on to report success;
+ *  * a late accessory `onSent` turned an install timeout into `COMPLETE`;
+ *  * and the abort the *user* asked for, by tapping "Reconnect the watch and discover
+ *    again" on the failure panel, made the old thread throw immediately — so its
+ *    failure landed microseconds after the rewind and put the page straight back into
+ *    `FAILED`. That left `reset()` as the only way out of a timed-out transfer, which
+ *    is the whole setup again.
+ *
+ * The rule is that a callback may only move the machine on from the phase that was
+ * waiting for it. Nothing here rejects a *timely* callback: each event names the phase
+ * its own caller has just set.
+ *
+ * Pure and separate from the agents for the reason [TimeoutRecovery] is: none of this
+ * is assertable through a `Context` and the accessory SDK.
+ */
+internal object DeliveryProgress {
+    fun accepts(current: DirectInstallPhase, event: DeliveryEvent): Boolean = when (event) {
+        // `install()` sets VERIFYING and then calls straight into the agent.
+        DeliveryEvent.PAYLOAD_VERIFIED -> current == DirectInstallPhase.VERIFYING
+        // Status lines and window acknowledgements. VERIFYING is accepted because the
+        // agent reports the channel it acquired before the first window lands.
+        DeliveryEvent.TRANSFER_PROGRESS ->
+            current == DirectInstallPhase.VERIFYING ||
+                current == DirectInstallPhase.TRANSFERRING
+        DeliveryEvent.TRANSFER_COMPLETE -> current == DirectInstallPhase.TRANSFERRING
+        // The install request is sent from the completion callback, so the phase is
+        // still TRANSFERRING when the agent reports it has asked.
+        DeliveryEvent.INSTALL_REQUESTED ->
+            current == DirectInstallPhase.TRANSFERRING ||
+                current == DirectInstallPhase.INSTALLING
+        DeliveryEvent.INSTALL_DELIVERED -> current == DirectInstallPhase.INSTALLING
+        // A failure for an attempt nobody is waiting on any more is noise. The reason
+        // the reader needs is already on screen — the watchdog's, or the checklist's.
+        DeliveryEvent.FAILURE -> current in DirectInstallState.ActivePhases
+    }
+}

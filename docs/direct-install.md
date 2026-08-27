@@ -65,8 +65,16 @@ the user needed was unreachable.
 flags, drops the release acknowledgement, keeps the probed environment and the
 granted permissions, and keeps the failure text in `failure` so the checklist can
 say why it rewound. `Fit3DirectInstaller.restartDiscovery()` wraps it, also
-clearing each agent's cached `SAPeerAgent` and cancelling any transfer in flight.
-It is not `reset()`: nothing the phone told us about itself is re-probed.
+clearing each agent's cached `SAPeerAgent` and abandoning any transfer or install
+in flight. It is not `reset()`: nothing the phone told us about itself is re-probed.
+
+**Abandoned is not stopped, and the difference is the whole of the next section.**
+`cancelTransfer()` bumps an attempt token, closes the socket and interrupts the
+worker; it does not wait for it. It cannot: the worker is blocking on RFCOMM with
+half a second of teardown sleep behind it, and `reset()` is called from the main
+thread, so joining would freeze the UI for exactly as long as the failure the
+reader is trying to leave. So a rewind routinely leaves a live thread behind, and
+everything below is about that thread being unable to do any harm.
 
 Three things reach it:
 
@@ -80,6 +88,37 @@ Three things reach it:
 - **`install()`'s pre-flight**, which regresses to the step that came undone
   instead of failing. Neither a missing peer nor an unreleased channel is a
   failed transfer.
+
+An abandoned attempt cannot speak. Two mechanisms, because each covers what the
+other cannot:
+
+- **The attempt token, in the agents.** `OtaTransferDeliveryAgent` stamps every
+  attempt, and every listener call, every poll of the SPP response wait and both
+  of its delayed handler callbacks compare against the one they started with.
+  This replaced a single `transferAborted` flag that the *next* attempt cleared,
+  so an abandoned worker that had not noticed yet quietly un-aborted itself.
+  `WatchfaceDeliveryAgent.cancelInstall()` does the same by dropping the pending
+  payload, which is what a late accessory `onSent` then finds missing.
+- **The phase gate, in the installer.** `DeliveryProgress.accepts` decides whether
+  a callback may still change the state at all, inside the atomic update so a
+  worker thread cannot read one phase and write against another. A callback may
+  only move the machine on from the phase that was waiting for it.
+
+The watchdog uses both: `armWatchdog` calls `abandonInFlight()` before it writes
+the timeout, because giving up has to stop the work and not merely describe it.
+Three things went wrong when it did not, and all three were reachable on
+arithmetic rather than on bad luck — `MAX_WINDOW_RETRIES` is 3 over a `0..3` loop,
+so one window can spend four `WINDOW_TIMEOUT_MS` waits, 48 s against a 20 s
+watchdog:
+
+- an acknowledged window dragged `FAILED` back to `TRANSFERRING`, and the transfer
+  went on to report success;
+- a late `onSent` turned an install timeout into `COMPLETE` — a face the watch
+  never got, reported as installed;
+- and tapping **Reconnect the watch and discover again** made the abandoned worker
+  throw within milliseconds, so its failure landed just *after* the rewind and put
+  the page straight back into `FAILED`. That left `reset()` — the whole four-step
+  setup — as the only way out of a transfer that had timed out.
 
 Two rules keep the rewound state honest:
 

@@ -859,28 +859,58 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
+    /**
+     * Writes an edit — or a reset — as one commit across the database and the disk.
+     *
+     * **The database pointer goes first, and that ordering is the whole fix.** It used to
+     * come last: `edited.bin` was replaced, then `session.json`, then the row, and the row
+     * is the only one of the three behind a cancellable suspension. So a commit that threw
+     * or was cancelled at the DAO left the new container on disk while [commit] rolled
+     * only memory back — and because an already-edited project's row names that same
+     * pathname, the next open loaded the edit that had just been reported as failed.
+     *
+     * With the row first, every failure lands consistent instead, because
+     * [writeAtomically] leaves the previous file intact when it throws and [loadSession]
+     * treats a path that is not a file as no edit at all:
+     *
+     *  * row written, container write fails — the row names `edited.bin`, which still
+     *    holds the previous edit, or does not exist yet on a first edit. Memory rolls
+     *    back to exactly that.
+     *  * row write fails — nothing on disk has been touched, and memory rolls back.
+     *  * resetting, row written, delete fails — the row says there is no edit, so the
+     *    file left behind is never read again.
+     *
+     * It also closes the cancellation window outright rather than compensating for it:
+     * once the DAO returns, everything left is blocking I/O with no suspension point for
+     * a cancellation to land on.
+     */
     private suspend fun persistEdited(current: Session, keepEdited: Boolean) {
         if (current.projectId <= 0) return
         val project = projectDao.findById(current.projectId) ?: return
         val directory = projectDirectory(current.projectId)
         val editedFile = File(directory, "edited.bin")
-        if (keepEdited) {
-            writeAtomically(editedFile, current.currentContainer.toByteArray())
-        } else {
-            editedFile.delete()
-        }
-        persistSessionState(directory, current, keepEdited)
         projectDao.insert(
             project.copy(
                 editedBinPath = editedFile.absolutePath.takeIf { keepEdited },
                 selectedStyle = current.selectedStyle,
             ),
         )
+        if (keepEdited) {
+            writeAtomically(editedFile, current.currentContainer.toByteArray())
+        } else {
+            editedFile.delete()
+        }
+        persistSessionState(directory, current, keepEdited)
     }
 
     /**
      * Removed widget records live beside the edited BIN so "restore" survives
      * process death, exactly like the edit itself does.
+     *
+     * Failures propagate. They used to be swallowed by a bare `runCatching`, which broke
+     * the guarantee in the line above without saying so: the container and the row could
+     * both commit a removal while this file stayed missing or stale, and the widget came
+     * back from the next launch with no way to restore it and nothing reported.
      */
     private fun persistSessionState(directory: File, current: Session, keepEdited: Boolean) {
         val file = File(directory, "session.json")
@@ -888,17 +918,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
             file.delete()
             return
         }
-        runCatching {
-            writeAtomically(
-                file,
-                json.encodeToString(
-                    StoredSessionState(
-                        thumbnailRefreshed = current.thumbnailRefreshed,
-                        removed = current.removedWidgets.map(::StoredRemovedWidget),
-                    ),
-                ).toByteArray(),
-            )
-        }
+        writeAtomically(
+            file,
+            json.encodeToString(
+                StoredSessionState(
+                    thumbnailRefreshed = current.thumbnailRefreshed,
+                    removed = current.removedWidgets.map(::StoredRemovedWidget),
+                ),
+            ).toByteArray(),
+        )
     }
 
     private fun restoreSessionState(directory: File, current: Session) {

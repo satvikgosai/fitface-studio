@@ -24,7 +24,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -168,11 +171,16 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             "face=${face.faceId} style=$styleId version=${face.versionCode} " +
                 "size=${face.packageSize}",
         )
+        // Cancellation is cooperative and the read loop below never suspends, so it has
+        // to be handed the Job to ask. The updater's download learnt this first: without
+        // it, cancelling cancels the coroutine and leaves the loop running to the last of
+        // the bytes.
+        val job = currentCoroutineContext()[Job]
         val packageBytes = cache.readPackage(face.appId, face.versionCode) ?: run {
             checkUpdate(face)
             val metadata = requestDownload(face)
             val expected = metadata.contentSize.takeIf { it > 0 } ?: face.packageSize
-            downloadBoundedPackage(metadata.downloadUri, expected, onProgress).also {
+            downloadBoundedPackage(metadata.downloadUri, expected, job, onProgress).also {
                 cache.writePackage(face.appId, face.versionCode, it)
             }
         }
@@ -308,6 +316,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
     private fun downloadBoundedPackage(
         url: String,
         expectedSize: Long,
+        job: Job?,
         onProgress: (DownloadProgress) -> Unit,
     ): ByteArray {
         if (expectedSize > MaxPackageBytes) {
@@ -317,8 +326,12 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             )
         }
         val request = Request.Builder().url(url).get().build()
+        val call = client.newCall(request)
+        // The blocking read below cannot be interrupted from outside, so cancellation
+        // reaches the socket this way and the loop itself this way too.
+        job?.invokeOnCompletion { runCatching { call.cancel() } }
         return try {
-            client.newCall(request).execute().use { response ->
+            call.execute().use { response ->
                 if (!response.isSuccessful) {
                     throw WatchFaceException(
                         "The watch-face package download failed.",
@@ -346,6 +359,9 @@ class FaceCatalogRepositoryImpl @Inject constructor(
                 var received = 0L
                 body.byteStream().use { input ->
                     while (true) {
+                        if (job?.isActive == false) {
+                            throw CancellationException("the package download was cancelled")
+                        }
                         val count = input.read(buffer)
                         if (count < 0) break
                         received += count
@@ -367,6 +383,10 @@ class FaceCatalogRepositoryImpl @Inject constructor(
                 output.toByteArray()
             }
         } catch (error: WatchFaceException) {
+            throw error
+        } catch (error: CancellationException) {
+            // Not a failure, and it must not be dressed up as one by the branch below —
+            // which is what turns everything else into "the download failed".
             throw error
         } catch (error: Exception) {
             throw WatchFaceException(
@@ -472,6 +492,12 @@ internal class CatalogRejected(
     companion object {
         /** The pair in `locale` is not on the store's whitelist. */
         const val LocaleNotSupported = 1005
+
+        /**
+         * "No Items" — the only code that means the previous page was the last one, and
+         * so the only one a follow-up page is allowed to end pagination on.
+         */
+        const val NoItems = 1007
     }
 }
 
@@ -483,8 +509,18 @@ internal object CatalogXmlParser {
         val root = parse(xml)
         val resultCode = root.directText("resultCode").toIntOrNull()
         if (resultCode != 0) {
-            // 1007 "No Items" just means the previous page was the last one.
-            if (allowEmpty) return CatalogPage(emptyList(), 0, endOfList = true)
+            // Only 1007 "No Items" means the previous page was the last one. This used
+            // to accept *every* non-zero code on a follow-up page — and a null one too,
+            // since a missing or unparseable element also fails `!= 0` — so a locale
+            // rejection or a server error on page two read as a clean end of list. The
+            // faces already collected were then cached as a successful refresh and
+            // served for a week, with no CatalogRejected escaping for the locale retry
+            // or the stale-cache fallback to act on. The catalogue is over one page
+            // long, so page two is fetched on every cold refresh: this is the normal
+            // path, not a corner of it.
+            if (allowEmpty && resultCode == CatalogRejected.NoItems) {
+                return CatalogPage(emptyList(), 0, endOfList = true)
+            }
             throw CatalogRejected(resultCode, root.directText("resultMsg"))
         }
         val entries = root.directChildren("appInfo")

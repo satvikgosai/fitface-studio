@@ -29,7 +29,8 @@ val accessorySdkDirectory: File = rootProject.layout.projectDirectory.dir("libs"
 
 val fetchAccessorySdk = tasks.register("fetchAccessorySdk") {
     group = "build setup"
-    description = "Fetches the accessory SDK JARs into libs/ when absent, verifying each SHA-256."
+    description = "Fetches the accessory SDK JARs into libs/ when absent, enforcing each " +
+        "download's SHA-256."
 
     // Only plain values cross into the task action: the configuration cache is on.
     val mirror = accessorySdkMirror

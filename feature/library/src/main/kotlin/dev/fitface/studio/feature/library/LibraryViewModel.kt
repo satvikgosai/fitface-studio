@@ -239,6 +239,11 @@ class LibraryViewModel @Inject constructor(
                 }
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
             }.onFailure { error ->
+                // `runCatching` catches Throwable, so it catches the cancellation that
+                // tearing this ViewModel down throws — and reporting that as a failed
+                // download would write an error into a screen that is going away, and
+                // swallow the cancellation the coroutine machinery is owed.
+                if (error is CancellationException) throw error
                 val message = error.userMessage()
                 // A package with no container will never become editable, so record
                 // it and stop offering the download.

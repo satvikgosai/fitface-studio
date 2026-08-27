@@ -314,7 +314,12 @@ The four that catch people fastest:
   first); and cancelling back to the offer re-reads the install permission instead of
   defaulting it, or it quietly tells someone installs are allowed when they are not.
   Verified on hardware the only way it can be: watch the `.tmp` grow, cancel, and confirm
-  it is gone and nothing more arrives.
+  it is gone and nothing more arrives. The **face-package** download had none of this and
+  now does — the Job check, the `Call.cancel()`, the `CancellationException` rethrow — plus
+  the `runCatching` in `LibraryViewModel` that caught the cancellation and reported it as a
+  failed download into a screen that was already going away. Nothing user-visible hangs on
+  it, since that download has no cancel button, but two paths reading differently is how
+  the next one gets written wrong.
 * **The updater owns its own `CoroutineScope`, and the install permission has to be
   re-read.** The APK is 36 MiB and the menu is in both bars, so a download begun in the
   library has to survive opening a face; in a `viewModelScope` it dies with the nav entry.
@@ -430,6 +435,61 @@ The four that catch people fastest:
   rather than a flag so a later edit marks it stale on its own.
   `replacePreviewThumbnail` returns null — not an exception — when the stored
   raster already matches.
+* **An abandoned delivery worker is not a stopped one, and it used to still be able to
+  speak.** `armWatchdog` changed the state and nothing else, so the transfer it had just
+  declared dead went on transferring — and every delivery callback wrote `phase`
+  unconditionally. Three wrong answers followed, all reachable on arithmetic rather than
+  bad luck, since `MAX_WINDOW_RETRIES` is 3 over a `0..3` loop and one window can spend
+  four `WINDOW_TIMEOUT_MS` waits — 48 s against a 20 s watchdog. An acknowledged window
+  dragged `FAILED` back to `TRANSFERRING` and the transfer then reported success; a late
+  accessory `onSent` turned an install timeout into `COMPLETE`, which is a face the watch
+  never got reported as installed; and tapping **Reconnect the watch and discover again**
+  cancelled the transfer, which made the abandoned worker throw within milliseconds — so
+  its failure landed just *after* the rewind and put the page straight back into `FAILED`,
+  leaving the whole four-step setup as the only way out of a timed-out transfer. Two
+  mechanisms now, because neither covers the other's half: an **attempt token** in each
+  agent — which replaced a shared `transferAborted` flag that the *next* attempt cleared,
+  so an abandoned worker quietly un-aborted itself — and `DeliveryProgress.accepts` in the
+  installer, tested inside the atomic update so a worker thread cannot read one phase and
+  write against another. `abandonInFlight()` is what a timeout, a rewind and a reset all
+  call. Cancelling deliberately does **not** join the worker: it is blocking on RFCOMM with
+  half a second of teardown sleep behind it and `reset()` runs on the main thread, so
+  joining would freeze the UI for as long as the failure being escaped. The token is what
+  makes an unterminated worker harmless instead of waiting for one.
+* **Only `1007` ends catalogue pagination.** The follow-up-page branch accepted *every*
+  non-zero `resultCode` as "No Items" — and a null one too, since a missing or unparseable
+  element also fails `!= 0`. So a locale rejection or a server error on page two read as a
+  clean end of list: the faces gathered so far were written to `cache.writeCatalog()` as a
+  successful refresh and served for the full seven-day TTL, with no `CatalogRejected`
+  escaping for `CatalogRetry` or the stale-cache fallback to act on. This is the normal
+  path, not a corner of it — `PageSize` is 100 and the catalogue is longer than that, so
+  page two is fetched on every cold refresh.
+* **The database pointer is written first, and the container second.** `persistEdited` did
+  it the other way — `edited.bin`, then `session.json`, then the row — and the row is the
+  only one of the three behind a cancellable suspension. A commit that threw or was
+  cancelled at the DAO left the new container on disk while `commit()` rolled only memory
+  back, and an already-edited project's row names that same pathname, so reopening it
+  loaded the edit the app had just reported as failed. Row-first makes every failure land
+  consistent instead, with no compensation machinery, because `writeAtomically` leaves the
+  previous file intact when it throws and `loadSession` reads a path that is not a file as
+  no edit at all. It also closes the cancellation window outright rather than compensating
+  for it: past the DAO there is nothing left but blocking I/O. `EditPersistenceTest` pins
+  it — and fails against the old order, which is the only reason to believe it. The other
+  half of the same bug: `persistSessionState` swallowed every write failure in a bare
+  `runCatching`, so the container and the row could commit a removal while `session.json`
+  stayed stale, and the widget came back from the next launch with no way to restore it and
+  nothing reported. Failures propagate now.
+* **A dynamic receiver is exported below API 33, so the action string has to be the
+  secret.** `RECEIVER_NOT_EXPORTED` arrived in Tiramisu; before it a dynamic receiver takes
+  a matching broadcast from any app on the phone, and `UpdateInstaller`'s action was a
+  constant sitting in the APK. `minSdk` is 28, so on API 28–32 any installed app could
+  report an install success the package manager never gave while an update was running —
+  or send `STATUS_PENDING_USER_ACTION` carrying an `Intent` of its own, which `AppMenuHost`
+  then launched as though it were Android's install confirmation. The action carries a
+  per-install `UUID` now and `awaitOutcome` checks the session id the genuine
+  `PendingIntent` has always carried and nothing ever read. A receiver permission is **not**
+  an option here: the sender is the package manager running as the system, and it holds no
+  permission this app could define.
 * **Discovery needs the plugin's channel; the transfer needs it released.** Those
   are opposite requirements in that order, which is the thing users get stuck on.
   Discovery without the plugin connected must land in the recoverable

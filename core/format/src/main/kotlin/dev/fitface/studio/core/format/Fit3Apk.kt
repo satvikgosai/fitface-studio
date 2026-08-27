@@ -83,6 +83,20 @@ data class Fit3Apk(
     }
 
     companion object {
+        /**
+         * Ceilings no real package comes near, so reaching one means something is wrong
+         * with the package rather than unusual about it.
+         *
+         * A measured face package is 2.6 MiB compressed, 5.9 MiB inflated across 571
+         * members — a ratio of 2.25 — and the largest catalogue container inside one is
+         * 4,149,034 bytes. 64 MiB is ten times the largest inflated package seen, and it
+         * has to stay well under the heap rather than merely over the legitimate maximum:
+         * the source archive is held in memory the whole time these are being inflated
+         * beside it, and a phone is where that has to fit.
+         */
+        private const val MAX_INFLATED_BYTES = 64L * 1024 * 1024
+        private const val MAX_MEMBERS = 4_096
+
         private val facePattern =
             Regex("""(?:^|/)SM-R390_(\d{5})_256x402\.bin$""")
 
@@ -97,11 +111,22 @@ data class Fit3Apk(
 
         fun parse(apkBytes: ByteArray, retainMembers: Boolean = true): Fit3Apk {
             val members = mutableListOf<Member>()
+            var inflated = 0L
             try {
                 ZipInputStream(ByteArrayInputStream(apkBytes)).use { zip ->
                     while (true) {
                         val entry = zip.nextEntry ?: break
-                        val payload = if (entry.isDirectory) byteArrayOf() else zip.readBytes()
+                        if (members.size >= MAX_MEMBERS) {
+                            throw Fit3FormatException(
+                                "APK holds more than $MAX_MEMBERS members",
+                            )
+                        }
+                        val payload = if (entry.isDirectory) {
+                            byteArrayOf()
+                        } else {
+                            readBounded(zip, MAX_INFLATED_BYTES - inflated)
+                        }
+                        inflated += payload.size
                         members += Member(
                             name = entry.name,
                             method = entry.method,
@@ -114,6 +139,11 @@ data class Fit3Apk(
                         zip.closeEntry()
                     }
                 }
+            } catch (error: Fit3FormatException) {
+                // Already the right shape and the right message. Falling into the branch
+                // below would rewrite "this package inflates past the limit" as "not a
+                // readable ZIP", which is the opposite of what happened.
+                throw error
             } catch (error: Exception) {
                 throw Fit3FormatException("APK is not a readable ZIP: ${error.message}", error)
             }
@@ -153,6 +183,35 @@ data class Fit3Apk(
                 stylePreviews = parseStylePreviews(members),
                 members = if (retainMembers) members else emptyList(),
             )
+        }
+
+        /**
+         * One member, refusing to inflate past what is left of the budget.
+         *
+         * `readBytes()` inflates whatever the entry claims, and every member was retained
+         * until parsing finished — `retainMembers = false` only drops the list *after*
+         * that. So the download ceiling bounded the compressed bytes and nothing bounded
+         * the decompressed ones, and a package that was corrupt or hostile could exhaust
+         * the heap before its container had even been looked at. `OutOfMemoryError` is an
+         * Error, so the `catch (Exception)` around the loop would not have caught it
+         * either.
+         */
+        private fun readBounded(zip: ZipInputStream, budget: Long): ByteArray {
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var remaining = budget
+            while (true) {
+                val count = zip.read(buffer)
+                if (count < 0) break
+                remaining -= count
+                if (remaining < 0) {
+                    throw Fit3FormatException(
+                        "APK inflates past the ${MAX_INFLATED_BYTES / (1024 * 1024)} MiB limit",
+                    )
+                }
+                output.write(buffer, 0, count)
+            }
+            return output.toByteArray()
         }
 
         private fun parseStylePreviews(members: List<Member>): Map<Int, ByteArray> = members
