@@ -88,6 +88,9 @@
     <string name="library_sheet_your_projects">Your projects on this face</string>
     <string name="library_sheet_start_new">Start something new</string>
     <string name="library_new_project">Start a new project</string>
+    <!-- The package is cached but no project was ever kept from it, so there is nothing to
+         download and no sibling for "new" to be new beside. -->
+    <string name="library_open_edit">Open &amp; edit</string>
     <string name="library_new_project_note">This face is already on your device, so nothing will be downloaded.</string>
     <!-- version name -->
     <string name="library_update_to">Update to %1$s</string>
@@ -95,6 +98,11 @@
     <string name="library_project_outdated">OUTDATED</string>
     <!-- project name, style, how long ago it was edited -->
     <string name="library_sheet_project_a11y">Open %1$s, %2$s, edited %3$s</string>
+    <!-- The same, for a row carrying the OUTDATED badge. The row sets its own
+         contentDescription, which replaces the label a screen reader would otherwise build
+         from the text in it — so the badge has to be said here or it is not said at all,
+         and it is the one thing distinguishing this row from its siblings. -->
+    <string name="library_sheet_project_a11y_outdated">Open %1$s, %2$s, edited %3$s, outdated</string>
     <string name="library_style_thumb_a11y">%1$s style %2$d</string>
     <string name="library_style_thumb_a11y_selected">%1$s style %2$d, selected</string>
 

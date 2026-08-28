@@ -5,7 +5,7 @@ import com.samsung.android.sdk.accessory.SAMessage
 import com.samsung.android.sdk.accessory.SAPeerAgent
 import dev.fitface.studio.core.model.DirectInstallPayload
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 internal interface InstallListener {
     fun onInstallRequested(payload: DirectInstallPayload)
@@ -23,10 +23,7 @@ class WatchfaceDeliveryAgent(context: Context) :
     @Volatile
     internal var installListener: InstallListener? = null
 
-    private val installInFlight = AtomicBoolean(false)
-
-    @Volatile
-    private var pendingInstall: DirectInstallPayload? = null
+    private val pendingInstall = PendingInstallSlot()
 
     private val installMessage = object : SAMessage(this) {
         override fun onReceive(peerAgent: SAPeerAgent, data: ByteArray) {
@@ -59,12 +56,7 @@ class WatchfaceDeliveryAgent(context: Context) :
      * A late `onSent` used to turn a timed-out install into `COMPLETE` — a face the
      * watch never got, reported as installed.
      */
-    private fun claimPendingInstall(): DirectInstallPayload? {
-        val payload = pendingInstall ?: return null
-        pendingInstall = null
-        installInFlight.set(false)
-        return payload
-    }
+    private fun claimPendingInstall(): DirectInstallPayload? = pendingInstall.claim()
 
     /**
      * Abandons the in-flight install request, so nothing it reports later is believed.
@@ -72,10 +64,7 @@ class WatchfaceDeliveryAgent(context: Context) :
      * The one-shot command is already gone by the time this can be called — there is no
      * unsending it — so this only says that its answer is no longer wanted.
      */
-    internal fun cancelInstall() {
-        pendingInstall = null
-        installInFlight.set(false)
-    }
+    internal fun cancelInstall() = pendingInstall.abandon()
 
     internal fun install(payload: DirectInstallPayload) {
         val peer = discoveredPeer
@@ -87,11 +76,10 @@ class WatchfaceDeliveryAgent(context: Context) :
             )
             return
         }
-        if (!installInFlight.compareAndSet(false, true)) {
+        if (!pendingInstall.offer(payload)) {
             installListener?.onInstallFailed("An install request is already in flight")
             return
         }
-        pendingInstall = payload
         try {
             installListener?.onInstallRequested(payload)
             installMessage.send(peer, WatchfaceInstallProtocol.request(payload))
@@ -114,5 +102,39 @@ class WatchfaceDeliveryAgent(context: Context) :
 
     companion object {
         const val PROFILE: String = "/system/WatchfaceSerevice"
+    }
+}
+
+/**
+ * The one in-flight install request, claimable exactly once.
+ *
+ * It replaces an `AtomicBoolean` beside a `@Volatile` field, which could not do this job
+ * however carefully each half was written: the framework answers on its own thread and
+ * `onReceive`, `onSent` and `onError` all raced to take the payload with a read followed by
+ * a write, so two of them could read the same non-null value and both report on it. That was
+ * survivable only because `DeliveryProgress` threw the second report away — a guard one
+ * layer up, doing a job this one had failed to do.
+ *
+ * A single [AtomicReference] makes the payload itself the token, so exactly one caller can
+ * ever win. The ordering matters as much as the atomicity: [offer] publishes the payload
+ * *and* claims the slot in one write, where the old pair set the boolean first and the
+ * payload a line later — so a callback landing in between would have cleared the guard while
+ * finding nothing to report, leaving the send unprotected.
+ *
+ * Kept out of the agent, and out of reach of a `Context`, because that is the only way any
+ * of this is assertable: instantiating [WatchfaceDeliveryAgent] needs the accessory SDK.
+ */
+internal class PendingInstallSlot {
+    private val slot = AtomicReference<DirectInstallPayload?>(null)
+
+    /** @return false if a request is already in flight, which is not this one's to replace. */
+    fun offer(payload: DirectInstallPayload): Boolean = slot.compareAndSet(null, payload)
+
+    /** The payload, to exactly one caller. Every later call gets null until the next [offer]. */
+    fun claim(): DirectInstallPayload? = slot.getAndSet(null)
+
+    /** Forgets the request, so nothing it reports later is believed. */
+    fun abandon() {
+        slot.set(null)
     }
 }

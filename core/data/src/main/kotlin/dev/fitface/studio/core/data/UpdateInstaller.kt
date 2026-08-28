@@ -205,6 +205,15 @@ internal class UpdateInstaller @Inject constructor(
     /**
      * `FLAG_MUTABLE` is required from API 31: the system fills `EXTRA_STATUS` and
      * `EXTRA_INTENT` into this intent, and an immutable `PendingIntent` throws instead.
+     *
+     * `FLAG_UPDATE_CURRENT` is **inert here and kept anyway.** It dates from when [action]
+     * was a constant; the action now carries a per-install nonce, so no two of these ever
+     * match and there is never a current one to update. Dropping it would be a behaviour
+     * change — however certain the reasoning — in the one path with no automated coverage
+     * and no way to exercise it short of a real newer release, so it stays and says so.
+     * `FLAG_ONE_SHOT` is not a substitute either: the package manager may send more than one
+     * status for a session, and `STATUS_PENDING_USER_ACTION` is exactly the case where a
+     * second one has to follow.
      */
     private fun statusSender(sessionId: Int, action: String): PendingIntent {
         val intent = Intent(action)

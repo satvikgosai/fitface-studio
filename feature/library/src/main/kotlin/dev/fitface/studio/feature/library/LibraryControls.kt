@@ -157,7 +157,7 @@ internal fun <T> LibrarySortRow(
  * **Both labels of a pair are the same number of characters, and that is load-bearing.**
  * `labelMedium` is `FontFamily.Monospace`, so equal length is equal width — which is what
  * stops the selected chip from resizing when it is reversed and shoving every chip after it
- * sideways under the finger that just tapped it. `SortChipWidthTest` holds it. A translation
+ * sideways under the finger that just tapped it. `SortChipLayoutTest` holds it. A translation
  * has to keep the pairs equal too, or it reintroduces the shove.
  */
 @Composable

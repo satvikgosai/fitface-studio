@@ -114,6 +114,66 @@ class EditPersistenceTest {
         assertEquals(position(opened), position(repository.openProject(opened.projectId)))
     }
 
+    /**
+     * Creating a project is two writes — the row, then the package it names, because the
+     * id is what names the directory — and they have to land as one commit.
+     *
+     * A row whose `localApkPath` is null is one [WatchFaceRepositoryImpl.openProject] can
+     * only refuse. That used to heal itself: `openPackage` looked the row up by `sourceKey`
+     * and reused it, so a second attempt filled in what the first had not. It always starts
+     * a new project now, so a half-written row would sit in the list forever while every
+     * retry added a numbered sibling beside it — "Aurora 2", "Aurora 3" — none of them
+     * openable.
+     */
+    @Test
+    fun aFailedCreateLeavesNoProjectBehindForTheListToShow() = runBlocking {
+        // The second insert, the one that fills in the package path. The first has to
+        // succeed for there to be a row to strand.
+        dao.failInsertAfter = 1
+
+        val failure = runCatching { repository.openPackage(facePackage()) }
+        dao.failInsertAfter = null
+
+        assertTrue("the create was expected to fail", failure.isFailure)
+        // Both halves, or the assertion below passes for the wrong reason: the row has to
+        // have been written before the failure, and then taken away again.
+        assertEquals("the row was never claimed, so nothing was stranded", 2, dao.insertAttempts)
+        assertEquals("the stranded row was not cleaned up", 1, dao.deletes)
+        assertEquals(
+            "a row naming no package was left in the library",
+            emptyList<ProjectEntity>(),
+            dao.findByFaceId("00046"),
+        )
+    }
+
+    /** And the directory it had started to fill goes with it. */
+    @Test
+    fun aFailedCreateLeavesNoProjectDirectoryBehind() = runBlocking {
+        dao.failInsertAfter = 1
+
+        runCatching { repository.openPackage(facePackage()) }
+        dao.failInsertAfter = null
+
+        val projects = File(context.filesDir, "projects")
+        val leftovers = projects.listFiles()?.filter { it.isDirectory }.orEmpty()
+        assertEquals("orphaned project directories: $leftovers", emptyList<File>(), leftovers)
+    }
+
+    /**
+     * Two projects on one face is the point of the feature, so the successful path must
+     * still mint a second row rather than re-entering the first.
+     */
+    @Test
+    fun asecondOpenOfTheSamePackageStartsASecondProject() = runBlocking {
+        val first = repository.openPackage(facePackage())
+        val second = repository.openPackage(facePackage())
+
+        assertNotEquals(first.projectId, second.projectId)
+        assertEquals(2, dao.findByFaceId("00046").size)
+        // Named apart, or the two rows read identically everywhere they are listed.
+        assertNotEquals(first.projectName, second.projectName)
+    }
+
     private suspend fun nudge(snapshot: EditorSnapshot, by: Int): EditorSnapshot {
         val widget = snapshot.widgets.first { it.width > 0 && it.height > 0 }
         return repository.moveWidget(
@@ -151,6 +211,20 @@ class EditPersistenceTest {
     private class FailableProjectDao(private val delegate: ProjectDao) : ProjectDao {
         var failNextInsert = false
 
+        /**
+         * Fail the insert this many writes from now, instead of the very next one.
+         * `openPackage` writes the row twice — once to claim an id, once to record the
+         * package path — and it is the second that has to be made to fail.
+         */
+        var failInsertAfter: Int? = null
+
+        /** How many writes were attempted, so a test can prove the row existed to strand. */
+        var insertAttempts = 0
+            private set
+
+        var deletes = 0
+            private set
+
         override fun observeAll(): Flow<List<ProjectEntity>> = delegate.observeAll()
 
         override suspend fun findById(id: Long): ProjectEntity? = delegate.findById(id)
@@ -161,13 +235,24 @@ class EditPersistenceTest {
         override suspend fun rename(id: Long, name: String): Int = delegate.rename(id, name)
 
         override suspend fun insert(project: ProjectEntity): Long {
+            insertAttempts++
             if (failNextInsert) {
                 failNextInsert = false
                 throw IOException("the project row could not be written")
             }
+            failInsertAfter?.let { remaining ->
+                if (remaining <= 0) {
+                    failInsertAfter = null
+                    throw IOException("the project row could not be written")
+                }
+                failInsertAfter = remaining - 1
+            }
             return delegate.insert(project)
         }
 
-        override suspend fun deleteById(id: Long): Int = delegate.deleteById(id)
+        override suspend fun deleteById(id: Long): Int {
+            deletes++
+            return delegate.deleteById(id)
+        }
     }
 }

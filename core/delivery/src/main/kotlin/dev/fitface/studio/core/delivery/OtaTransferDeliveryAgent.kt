@@ -187,7 +187,7 @@ class OtaTransferDeliveryAgent(context: Context) :
                 }
             } finally {
                 sendBtClose(peer)
-                SystemClock.sleep(500L)
+                SystemClock.sleep(TEARDOWN_PAUSE_MS)
                 runCatching { socket?.close() }
                 // Only if this thread is still the live attempt. A cancelled one unwinds
                 // through half a second of teardown sleep, by which time the next attempt
@@ -201,7 +201,7 @@ class OtaTransferDeliveryAgent(context: Context) :
                 if (transferComplete) {
                     Handler(Looper.getMainLooper()).postDelayed(
                         { report(token) { listener -> listener.onTransferComplete(payload) } },
-                        1_000L,
+                        COMPLETION_POST_MS,
                     )
                 }
             }
@@ -235,8 +235,15 @@ class OtaTransferDeliveryAgent(context: Context) :
         fileName: String,
         identity: ByteArray,
     ) {
+        // Each handshake reports as soon as it lands. Not for the reader's benefit — for
+        // the watchdog's: the three waits between the channel opening and the first
+        // acknowledged window are 8 s + 8 s + 12 s, and none of them used to say anything,
+        // so a slow-but-working watch could spend 28 s inside a 20 s budget. Every gap in
+        // this method is now shorter than TRANSFER_WATCHDOG_MS, which is what
+        // `TransferWatchdogBudgetTest` holds.
         writeFixed(output, SPP_NEGOTIATION_REQUEST)
         requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_NEGOTIATION_RESPONSE)
+        report(token) { it.onTransferStatus("Fit3 accepted the transfer negotiation") }
 
         writeFixed(
             output,
@@ -246,6 +253,7 @@ class OtaTransferDeliveryAgent(context: Context) :
             ),
         )
         requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_DESCRIPTOR_RESPONSE)
+        report(token) { it.onTransferStatus("Fit3 accepted the file descriptor") }
 
         val windowCount = IdentityTransferProtocol.windowCount(identity.size)
         var acknowledgedBytes = 0
@@ -277,7 +285,18 @@ class OtaTransferDeliveryAgent(context: Context) :
                         break
                     }
 
-                    response.contentEquals(SPP_WINDOW_RETRY) -> Unit
+                    // Reported, where it used to be swallowed. A re-sent window is the one
+                    // stretch of a working transfer that produced no callback at all, so
+                    // the installer's watchdog counted it as silence — and now that a
+                    // fired watchdog abandons the worker, four retries of one window
+                    // (4 × WINDOW_TIMEOUT_MS) would kill a transfer the retry ladder
+                    // exists to rescue. It is also the only way a reader learns the watch
+                    // asked again.
+                    response.contentEquals(SPP_WINDOW_RETRY) -> report(token) {
+                        it.onTransferStatus(
+                            "Fit3 asked for window ${windowIndex + 1} of $windowCount again",
+                        )
+                    }
                 }
             }
             if (!acknowledged) {
@@ -294,7 +313,7 @@ class OtaTransferDeliveryAgent(context: Context) :
         requireToken(token, input, RESULT_TIMEOUT_MS, SPP_RESULT_RESPONSE)
         report(token) { it.onTransferStatus("Fit3 verified the complete BIN") }
 
-        SystemClock.sleep(250L)
+        SystemClock.sleep(RESULT_TO_CLOSE_PAUSE_MS)
         writeFixed(output, SPP_CLOSE_REQUEST)
         requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_CLOSE_RESPONSE)
         report(token) { it.onTransferStatus("Fit3 closed the transfer cleanly") }
@@ -428,9 +447,31 @@ class OtaTransferDeliveryAgent(context: Context) :
         private val SPP_CLOSE_REQUEST = "34".toByteArray()
         private val SPP_CLOSE_RESPONSE = "340".toByteArray()
 
-        private const val COMMAND_TIMEOUT_MS = 8_000L
-        private const val WINDOW_TIMEOUT_MS = 12_000L
-        private const val RESULT_TIMEOUT_MS = 15_000L
+        // Internal, not private, because `TransferWatchdogBudgetTest` measures the gaps
+        // between progress reports against `TRANSFER_WATCHDOG_MS`. The arithmetic is the
+        // thing that broke; leaving it as literals scattered through the state machine is
+        // what let it break unnoticed.
+        internal const val COMMAND_TIMEOUT_MS = 8_000L
+        internal const val WINDOW_TIMEOUT_MS = 12_000L
+        internal const val RESULT_TIMEOUT_MS = 15_000L
+
+        /** Between the watch verifying the BIN and being asked to close the channel. */
+        internal const val RESULT_TO_CLOSE_PAUSE_MS = 250L
+
+        /** Socket teardown, after the last thing the watch says. */
+        internal const val TEARDOWN_PAUSE_MS = 500L
+
+        /** How long after teardown the transfer reports itself complete. */
+        internal const val COMPLETION_POST_MS = 1_000L
+
+        // The timeline these budgets form — every stretch of `runTransferStateMachine`
+        // between one report and the next — is `TRANSFER_PROGRESS_GAPS`, in
+        // DirectInstallState.kt. It cannot live here: a non-const `val` in this companion
+        // forces the JVM to load this class, which extends the accessory SDK's `SAAgentV2`,
+        // and its pre-stackmap bytecode fails the verifier before any test runs. The
+        // `const val`s above are inlined at their use sites, which is why they can be read
+        // from a test at all.
+
         private val SPP_UUID: UUID =
             UUID.fromString("db764ac8-4b08-7f25-aafe-59d03c27bae3")
     }

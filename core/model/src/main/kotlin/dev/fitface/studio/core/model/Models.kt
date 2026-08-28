@@ -844,15 +844,15 @@ interface FaceCatalogRepository {
     suspend fun markUneditable(appId: String)
 
     /**
-     * Returns the signed package for [face]. A package already cached for the same
-     * `versionCode` is reused; anything else is downloaded and then cached.
-     */
-    /**
      * Whether this face's *current* package is already on disk, so opening it needs no
      * network. Cheap: a file check, not a read.
      */
     suspend fun isPackageCached(face: CatalogFace): Boolean
 
+    /**
+     * Returns the signed package for [face]. A package already cached for the same
+     * `versionCode` is reused; anything else is downloaded and then cached.
+     */
     suspend fun downloadPackage(
         face: CatalogFace,
         styleId: Int,

@@ -129,7 +129,15 @@ class Fit3DirectInstaller @Inject constructor(
         }
 
         override fun onTransferStatus(message: String) {
-            advance(DeliveryEvent.TRANSFER_PROGRESS) { it.copy(message = message) }
+            if (!advance(DeliveryEvent.TRANSFER_PROGRESS) { it.copy(message = message) }) return
+            // A status line is progress, and re-arming on it is what keeps the protocol's
+            // own tail — the 15 s BIN verification, the close handshake, the teardown —
+            // inside a watchdog that used to count nothing but acknowledged windows. See
+            // `transferProgressRearmsWatchdog` for why that mattered only once a fired
+            // watchdog began to actually stop the transfer, and why VERIFYING is excluded.
+            if (transferProgressRearmsWatchdog(state.value.phase)) {
+                armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
+            }
         }
 
         override fun onTransferComplete(payload: DirectInstallPayload) {
@@ -824,7 +832,9 @@ class Fit3DirectInstaller @Inject constructor(
         const val ACCESSORY_REGISTER_AGENT_ACTION = "com.samsung.accessory.action.REGISTER_AGENT"
         const val VENDOR_PACKAGE_PREFIX = "com.samsung."
         val ACTIVE_PHASES = DirectInstallState.ActivePhases
-        const val PHASE_WATCHDOG_MS = 20_000L
-        const val TRANSFER_WATCHDOG_MS = 20_000L
+        // PHASE_WATCHDOG_MS and TRANSFER_WATCHDOG_MS live in DirectInstallState.kt, beside
+        // `transferProgressRearmsWatchdog`, because the budget and the rule that keeps a
+        // live transfer inside it are one decision — and because this companion is private,
+        // which put the arithmetic that broke out of reach of any test.
     }
 }

@@ -456,6 +456,44 @@ The four that catch people fastest:
   half a second of teardown sleep behind it and `reset()` runs on the main thread, so
   joining would freeze the UI for as long as the failure being escaped. The token is what
   makes an unterminated worker harmless instead of waiting for one.
+* **A watchdog that stops the work has to be re-armed by every wait, not just by an
+  acknowledged window.** Making the transfer timeout real — `abandonInFlight()` from
+  `armWatchdog` — turned a 20 s budget that had only ever mislabelled a phase into one that
+  kills the transfer, and three stretches of a *healthy* transfer are longer than it. The
+  opening handshake is 8 s + 8 s + 12 s with nothing reported in between; one window may be
+  re-sent four times at 12 s each and an `SPP_WINDOW_RETRY` answer reported nothing at all;
+  and the tail after the last window is 15 s of BIN verification, a 250 ms pause, an 8 s
+  close handshake, 500 ms of teardown and a 1 s completion post — 24.75 s. Crossing the line
+  now bumps the attempt token, which discards the queued `onTransferComplete`, so the install
+  command is never sent and an install the watch **accepted and verified** reports as a
+  timeout. Every wait ends in a `report` now and `onTransferStatus` re-arms; the budget lives
+  in `TRANSFER_PROGRESS_GAPS` with `TransferWatchdogBudgetTest` on it. Do not "simplify" that
+  by raising the constant instead: `SppResponseWait` already bounds every individual wait, so
+  what this watchdog guards is the gaps between them, and stretching it to 48 s only delays
+  noticing a watch that really has gone. Two corollaries. `transferProgressRearmsWatchdog`
+  excludes `VERIFYING` — a status is *accepted* there, but `armWatchdog` replaces whatever is
+  armed, so arming a TRANSFERRING watchdog in VERIFYING is a disarm. And the gap list cannot
+  live in `OtaTransferDeliveryAgent`'s companion: a non-`const` `val` there forces the JVM to
+  load that class, which extends the accessory SDK's `SAAgentV2`, and its pre-stackmap
+  bytecode fails the verifier — so the test dies of `VerifyError` before asserting anything.
+  `const val`s are inlined at their use sites, which is the only reason the timeouts can be
+  read from a test at all.
+* **Creating a project is two writes, and the second one is where it used to be abandoned.**
+  The row goes in first because its id names the directory, so unlike `persistEdited` this
+  cannot be one write — and a row whose `localApkPath` is null is one `openProject` can only
+  refuse, with "This project's package is missing." It used to heal itself: `openPackage`
+  looked the row up by `sourceKey` and reused it. It always starts a new project now, so a
+  half-written row would sit in the list unopenable while every retry added a numbered
+  sibling beside it. `NonCancellable` closes the cancellation window — the second `insert` is
+  the only suspension point between the two writes, and backing out of the library while an
+  open finished landed exactly there — and the `catch` deletes the row for a write that
+  genuinely fails. Delete through **`projectDao.deleteById`, never `deleteProject`**: that
+  takes `mutex`, which the block already holds and which is not reentrant.
+* **A row that sets its own `contentDescription` says only what that string says.** The face
+  sheet's project rows replace the label a screen reader would have assembled from their own
+  text, so the OUTDATED badge was drawn and never announced — and it is the only thing
+  telling two projects on one face apart. The grid's cards already carried a second string
+  for this (`library_face_card_a11y_not_editable`); the sheet's rows now do too.
 * **Only `1007` ends catalogue pagination.** The follow-up-page branch accepted *every*
   non-zero `resultCode` as "No Items" — and a null one too, since a missing or unparseable
   element also fails `!= 0`. So a locale rejection or a server error on page two read as a
@@ -705,6 +743,13 @@ is the only path to the watch.** Nothing may route around it.
   timeout recovery is the one that is not. What a timeout *means* is now pinned in
   `TimeoutRecoveryTest` — the decision was lifted out of `armWatchdog` into a pure
   function so it could be — but no watch has yet been made to time out on purpose.
+  **The other half of that gap is what a timeout must *not* do.** Now that it stops the
+  worker, its budget has to cover every wait the protocol allows, and
+  `TransferWatchdogBudgetTest` can only check the arithmetic: whether the state machine
+  really reports after each wait is unassertable, because `OtaTransferDeliveryAgent`
+  extends the accessory SDK's `SAAgentV2` and cannot be instantiated in a JVM test. So
+  `TRANSFER_PROGRESS_GAPS` is maintained by hand, and a slow-but-healthy watch — the case
+  that turns an unreported wait into a lost install — has never been staged either.
 * No `androidTest` source set; the Room migration test runs under Robolectric.
   `:feature:editor` deliberately does **not** use Robolectric — it depends on
   `:core:delivery`, whose merged manifest declares a receiver from the accessory SDK JAR,

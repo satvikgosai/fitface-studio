@@ -120,6 +120,25 @@ watchdog:
   the page straight back into `FAILED`. That left `reset()` — the whole four-step
   setup — as the only way out of a transfer that had timed out.
 
+**That same arithmetic then pointed the other way.** Once the timeout actually
+stops the work, a budget the protocol can legitimately exceed no longer produces a
+cosmetic lie — it destroys a transfer the watch has accepted. The token the
+watchdog bumps discards the queued `onTransferComplete`, so the install command is
+never sent and a verified install reports as a timeout. Three stretches of a
+*healthy* transfer are longer than 20 s: the opening handshake (8 s negotiation,
+8 s descriptor, 12 s first window, none of which reported anything), one window
+re-sent four times at 12 s, and the tail after the last window — 15 s of BIN
+verification, a 250 ms pause, an 8 s close handshake, 500 ms of teardown and a 1 s
+completion post, 24.75 s in all.
+
+So the watchdog is a **silence threshold, not a duration**: every wait in
+`runTransferStateMachine` now ends in a report, `onTransferStatus` re-arms, and the
+budget is kept as `TRANSFER_PROGRESS_GAPS` beside the pure decision that reads it.
+Raising the constant instead would have been the wrong repair — `SppResponseWait`
+already bounds every individual wait, so what this watchdog guards is the gaps
+between them, and stretching it to cover 48 s only delays noticing a watch that
+really has stopped answering.
+
 Two rules keep the rewound state honest:
 
 - **Starting discovery voids an earlier release acknowledgement.** Discovery only

@@ -27,11 +27,11 @@ published to an app store. See [`NOTICE.md`](NOTICE.md) and [`LICENSE`](LICENSE)
 
 | Browse the catalogue | Edit the real layout | Every record, listed |
 | --- | --- | --- |
-| ![The watch-face catalogue, a grid of face previews with search and sort](docs/screenshots/catalogue.png) | ![The canvas with one widget selected, its outline highlighted and nudge controls below](docs/screenshots/canvas.png) | ![The widget list, each row showing the widget itself beside its type and coordinates](docs/screenshots/widgets.png) |
+| <img src="docs/screenshots/catalogue.png" alt="The watch-face catalogue, a grid of face previews with search and sort" width="260"> | <img src="docs/screenshots/canvas.png" alt="The canvas with one widget selected, its outline highlighted and nudge controls below" width="260"> | <img src="docs/screenshots/widgets.png" alt="The widget list, each row showing the widget itself beside its type and coordinates" width="260"> |
 
 | Styles, as pictures | Validate before install | Install over Bluetooth |
 | --- | --- | --- |
-| ![The styles page, each variant shown as a watch-face image](docs/screenshots/styles.png) | ![The validate page: reparsed container, structural checks all passing](docs/screenshots/validate.png) | ![The install page: the face to be sent, and the four-step setup checklist](docs/screenshots/install.png) |
+| <img src="docs/screenshots/styles.png" alt="The styles page, each variant shown as a watch-face image" width="260"> | <img src="docs/screenshots/validate.png" alt="The validate page: reparsed container, structural checks all passing" width="260"> | <img src="docs/screenshots/install.png" alt="The install page: the face to be sent, and the four-step setup checklist" width="260"> |
 
 The rest of the app is in [`docs/screenshots/`](docs/screenshots/): the face sheet
 with its style picker, the inspector, the background replacement page, and the

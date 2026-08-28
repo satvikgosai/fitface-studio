@@ -843,6 +843,7 @@ private fun FaceDetailsSheet(
                         FaceAction.UPDATE ->
                             stringResource(R.string.library_update_to, face.versionName)
                         FaceAction.NEW_PROJECT -> stringResource(R.string.library_new_project)
+                        FaceAction.OPEN -> stringResource(R.string.library_open_edit)
                         FaceAction.DOWNLOAD -> stringResource(R.string.library_download)
                     },
                     onClick = onDownload,
@@ -1205,17 +1206,32 @@ private fun ProjectMenu(
     }
 }
 
-/** One of this face's projects, inside the face sheet. */
+/**
+ * One of this face's projects, inside the face sheet.
+ *
+ * Internal so `SheetProjectRowA11yTest` can render it: this row builds its own
+ * `contentDescription`, which is the only thing a screen reader hears, so what it does and
+ * does not include is worth an assertion.
+ */
 @Composable
-private fun SheetProjectRow(
+internal fun SheetProjectRow(
     project: ProjectSummary,
     outdated: Boolean,
     enabled: Boolean,
     onOpen: () -> Unit,
 ) {
     val age = relativeAge(project.updatedAtEpochMillis)
+    // The badge has to be in the description, not merely beside it. This row sets its own
+    // `contentDescription`, which replaces whatever a screen reader would have assembled
+    // from the text inside it — so OUTDATED was drawn and never announced, and it is the
+    // only thing telling this row apart from the siblings above and below it. The grid's
+    // cards already carry a second string for exactly this reason.
     val description = stringResource(
-        R.string.library_sheet_project_a11y,
+        if (outdated) {
+            R.string.library_sheet_project_a11y_outdated
+        } else {
+            R.string.library_sheet_project_a11y
+        },
         project.name,
         projectFaceLine(project),
         age,

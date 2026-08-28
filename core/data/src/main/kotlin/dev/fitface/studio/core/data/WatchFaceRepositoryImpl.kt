@@ -43,6 +43,7 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -136,15 +137,39 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 updatedAtEpochMillis = now,
             )
             val projectId = projectDao.insert(project)
-            val projectDirectory = projectDirectory(projectId).apply { mkdirs() }
-            val localApk = File(projectDirectory, "source.apk")
-            writeAtomically(localApk, apkBytes)
-            projectDao.insert(
-                project.copy(
-                    id = projectId,
-                    localApkPath = localApk.absolutePath,
-                ),
-            )
+            // The row goes in first because the id is what names the directory, so unlike
+            // [persistEdited] this cannot be one write — but it can be one commit.
+            //
+            // `NonCancellable` closes the cancellation window rather than compensating for
+            // it: the only suspension point between the two writes is the second `insert`,
+            // and backing out of the library while an open finished used to be able to land
+            // exactly there. The catch is for a write that genuinely fails — a full disk —
+            // because a row naming no package is one `openProject` can only ever refuse,
+            // with "This project's package is missing. Download the face again."
+            //
+            // Leaving it behind used to be survivable: `openPackage` looked the row up by
+            // `sourceKey` and reused it, so the next attempt healed it. It always starts a
+            // new project now, so a half-written row would never be reused — it would sit
+            // in the list unopenable while every retry added a numbered sibling beside it.
+            try {
+                withContext(NonCancellable) {
+                    val projectDirectory = projectDirectory(projectId).apply { mkdirs() }
+                    val localApk = File(projectDirectory, "source.apk")
+                    writeAtomically(localApk, apkBytes)
+                    projectDao.insert(
+                        project.copy(
+                            id = projectId,
+                            localApkPath = localApk.absolutePath,
+                        ),
+                    )
+                }
+            } catch (error: Throwable) {
+                // The DAO directly, never `deleteProject`: that takes `mutex`, which this
+                // block is already holding and which is not reentrant.
+                withContext(NonCancellable) { projectDao.deleteById(projectId) }
+                projectDirectory(projectId).deleteRecursively()
+                throw error
+            }
             loaded.projectId = projectId
             loaded.projectName = project.projectName ?: loaded.sourceName
             loaded.stylePreviewFiles = writeStylePreviews(projectId, loaded.apk)

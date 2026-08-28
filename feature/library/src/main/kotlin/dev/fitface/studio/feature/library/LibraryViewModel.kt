@@ -151,9 +151,27 @@ data class LibraryUiState(
  * What the one button at the bottom of the face sheet does.
  *
  * Pure, and separate from the composable, because the priority order is the whole point and
- * a rule about which of five states wins should be readable without a screen attached.
+ * a rule about which of these wins should be readable without a screen attached.
  */
-internal enum class FaceAction { OPENING, DOWNLOADING, NOT_EDITABLE, UPDATE, NEW_PROJECT, DOWNLOAD }
+internal enum class FaceAction {
+    OPENING,
+    DOWNLOADING,
+    NOT_EDITABLE,
+    UPDATE,
+    NEW_PROJECT,
+
+    /**
+     * The package is already here but nothing has been started on it, so there is no
+     * download to offer and no sibling to be "new" beside.
+     *
+     * Its own case because [DOWNLOAD] promised one: a face whose projects have all been
+     * deleted, or whose package was cached by a download whose project is gone, sat under a
+     * "Download & edit" button above a caption saying nothing would be downloaded. Both
+     * halves could not be right, and the caption was the true one.
+     */
+    OPEN,
+    DOWNLOAD,
+}
 
 internal fun faceAction(
     downloading: Boolean,
@@ -174,6 +192,10 @@ internal fun faceAction(
     // version is what would actually arrive is the half of this that was wrong.
     projects.any { it.isOutdated(storeVersionCode) } -> FaceAction.UPDATE
     projects.isNotEmpty() -> FaceAction.NEW_PROJECT
+    // Last before DOWNLOAD, and only reachable with no projects at all: the package is
+    // here, so the button must not promise to fetch it. The caption already said so, which
+    // is how the two came to contradict each other.
+    packageOnDevice -> FaceAction.OPEN
     else -> FaceAction.DOWNLOAD
 }
 

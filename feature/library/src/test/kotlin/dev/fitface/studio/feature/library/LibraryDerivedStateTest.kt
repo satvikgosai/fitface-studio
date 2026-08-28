@@ -126,6 +126,54 @@ class LibraryDerivedStateTest {
         assertEquals(FaceAction.DOWNLOAD, action(projects = emptyList()))
     }
 
+    /**
+     * A face whose package is here but whose projects have all been deleted must not be
+     * offered as a download. It used to be: the button said "Download & edit" directly above
+     * a caption reading "This face is already on your device, so nothing will be
+     * downloaded", and only one of the two could be true.
+     */
+    @Test
+    fun aCachedFaceWithNoProjectsIsOpened_notDownloadedAgain() {
+        assertEquals(
+            FaceAction.OPEN,
+            action(packageOnDevice = true, projects = emptyList()),
+        )
+        assertEquals(
+            FaceAction.DOWNLOAD,
+            action(packageOnDevice = false, projects = emptyList()),
+        )
+    }
+
+    /** OPEN is the no-projects case only; a sibling makes it a new project beside it. */
+    @Test
+    fun aCachedFaceThatAlreadyHasAProjectStartsANewOneRatherThanOpening() {
+        assertEquals(
+            FaceAction.NEW_PROJECT,
+            action(packageOnDevice = true, projects = listOf(project(1, versionCode = 40001))),
+        )
+    }
+
+    /** And it never outranks the states that mean something is already happening. */
+    @Test
+    fun openNeverOutranksAnInFlightOrRefusedFace() {
+        assertEquals(
+            FaceAction.OPENING,
+            action(downloading = true, packageOnDevice = true, projects = emptyList()),
+        )
+        assertEquals(
+            FaceAction.NOT_EDITABLE,
+            action(uneditable = true, packageOnDevice = true, projects = emptyList()),
+        )
+        assertEquals(
+            FaceAction.UPDATE,
+            action(
+                packageOnDevice = true,
+                projects = listOf(project(1, versionCode = 40000)),
+                storeVersionCode = 40001,
+            ),
+        )
+    }
+
     @Test
     fun aFaceThatAlreadyHasAProjectDoesNotOfferToDownloadItAgain() {
         // The complaint this whole change starts from.
