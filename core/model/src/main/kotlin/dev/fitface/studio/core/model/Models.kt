@@ -161,6 +161,9 @@ data class ProjectSummary(
     val updatedAtEpochMillis: Long = 0,
 )
 
+/** A project just copied from another one: enough to say so, and to open it. */
+data class DuplicatedProject(val id: Long, val name: String)
+
 /**
  * Whether the store has published a newer version of this project's face than the one it
  * was built from.
@@ -175,12 +178,22 @@ fun ProjectSummary.isOutdated(storeVersionCode: Long): Boolean =
 
 /** How a new project gets a name that is not already in use on the same face. */
 object ProjectNaming {
+    /** A name already ending in a counter, e.g. `Aurora 2` -> stem `Aurora`. */
+    private val Numbered = Regex("""^(.*\S)\s+\d+$""")
+
     /**
      * [base] with `.apk` dropped, followed by the lowest free counter if that is taken.
      *
      * The counter starts at 2 and steps over what is already there, so a face holding
      * "Aurora" and "Aurora 2" names the next one "Aurora 3" rather than reusing a gap — a
      * name people have seen should not come back attached to different work.
+     *
+     * **A base that already ends in a counter is numbered from its stem.** Downloading only
+     * ever passes a face's own name, so this never came up until duplication started passing
+     * the name of an existing project: copying "Aurora 2" produced "Aurora 2 2", and a
+     * second copy "Aurora 2 3", which is a different series from the one beside it. Only the
+     * *taken* base takes this path — duplicating "Aurora 2" while no "Aurora 2" exists keeps
+     * it, rather than quietly promoting the copy to "Aurora".
      *
      * Matching is exact, including case: "aurora" and "Aurora" are two names, because
      * deciding they are one would mean silently renaming what someone typed.
@@ -192,9 +205,11 @@ object ProjectNaming {
         val root = base.trim().removeSuffix(".apk").trim()
         if (root.isEmpty()) return base
         if (root !in taken) return root
+        val stem = Numbered.matchEntire(root)?.groupValues?.get(1)?.takeIf(String::isNotBlank)
+            ?: root
         var counter = 2
-        while ("$root $counter" in taken) counter++
-        return "$root $counter"
+        while ("$stem $counter" in taken) counter++
+        return "$stem $counter"
     }
 }
 
@@ -714,6 +729,17 @@ interface WatchFaceRepository {
      * not a place to fail, and an empty title would leave a row nothing could identify.
      */
     suspend fun renameProject(projectId: Long, name: String)
+
+    /**
+     * Copies a project — its package, its edits, its removed-widget records and its style
+     * previews — into a new one beside it, named against the face's other projects.
+     *
+     * The copy is **independent**: editing or deleting either one leaves the other alone.
+     * That is the whole contract, and it is why this cannot be a plain row copy — a project
+     * row holds absolute paths into its own directory, so a duplicate that kept them would
+     * read the original's edits and write over the original's files.
+     */
+    suspend fun duplicateProject(projectId: Long): DuplicatedProject
 
     suspend fun deleteProject(projectId: Long)
 

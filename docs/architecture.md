@@ -130,7 +130,11 @@ a file already on disk at exactly the declared size is reused rather than fetche
 again, which is the difference between retrying a failed install and spending
 another 36 MiB.
 
-A face may carry **more than one project**, and each one keeps its own `source.apk`.
+A face may carry **more than one project**, and each one keeps its own `source.apk` —
+including one made by duplicating another, which copies the package, the edited container,
+the removed-widget records and the extracted style previews into a directory of its own. A
+duplicate costs the same disk as the project it came from and shares nothing with it: that
+is the point, and it is why it cannot be a row copy.
 The shared `catalog-cache/packages/` entry is what the second project is opened from,
 so starting one costs no network — but it does cost another full copy of the package
 beside it, because that copy is what `openProject` reads and the shared cache is

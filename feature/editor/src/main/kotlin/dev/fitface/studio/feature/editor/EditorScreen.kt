@@ -186,6 +186,21 @@ fun EditorRoute(
         viewModel.refreshDirectInstallEnvironment()
     }
 
+    // Show first, clear in a `finally` — the same shape as the error above, for the same
+    // reason: clearing first changes this effect's key mid-`showSnackbar` and cancels it.
+    val duplicated = state.duplicated
+    val duplicatedText = duplicated?.let {
+        stringResource(R.string.editor_project_duplicated, it.name)
+    }
+    LaunchedEffect(duplicated?.id) {
+        if (duplicated == null || duplicatedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(duplicatedText)
+        } finally {
+            viewModel.clearDuplicated(duplicated.id)
+        }
+    }
+
     state.diagnosticsReport?.let { report ->
         DiagnosticsDialog(report = report, onDismiss = viewModel::dismissDiagnostics)
     }
@@ -221,6 +236,7 @@ fun EditorRoute(
         onReset = viewModel::reset,
         onRename = viewModel::renameProject,
         onDelete = viewModel::deleteProject,
+        onDuplicate = viewModel::duplicateProject,
         onGrantNearby = {
             val permissions = buildList {
                 if (Build.VERSION.SDK_INT >= 31) {
@@ -310,6 +326,7 @@ private fun EditorScreen(
     onReset: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
+    onDuplicate: () -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -426,6 +443,7 @@ private fun EditorScreen(
                         onReset = onReset,
                         onRename = onRename,
                         onDelete = onDelete,
+                        onDuplicate = onDuplicate,
                         onGrantNearby = onGrantNearby,
                         onOpenCompanion = onOpenCompanion,
                         onInitializeAndDiscover = onInitializeAndDiscover,
@@ -719,6 +737,7 @@ private fun EditorPageContent(
     onReset: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
+    onDuplicate: () -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -767,7 +786,10 @@ private fun EditorPageContent(
             onOpenPluginSettings, onConfirmPluginReleased, onRediscover, onSendBin,
             onResetDelivery, { onNavigate(EditorPage.Canvas) }, modifier,
         )
-        EditorPage.Project -> ProjectWorkspace(snapshot, onReset, onRename, onDelete, modifier)
+        EditorPage.Project ->
+            ProjectWorkspace(
+                snapshot, !state.isWorking, onReset, onRename, onDelete, onDuplicate, modifier,
+            )
     }
 }
 
@@ -2483,9 +2505,11 @@ private fun ValidationCheck(label: String, ok: Boolean) {
 @Composable
 private fun ProjectWorkspace(
     snapshot: EditorSnapshot,
+    enabled: Boolean,
     onReset: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
+    onDuplicate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var renaming by rememberSaveable { mutableStateOf(false) }
@@ -2556,9 +2580,24 @@ private fun ProjectWorkspace(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // Non-destructive, so it sits above the two that are. Duplicating leaves the editor
+        // on the original: switching out from under an edit in progress would be worse than
+        // having to go and find the copy.
+        FitButton(
+            stringResource(R.string.editor_duplicate_project),
+            onDuplicate,
+            Modifier.fillMaxWidth(),
+            enabled,
+            style = FitButtonStyle.Secondary,
+        )
+        Text(
+            stringResource(R.string.editor_duplicate_project_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         FitButton(
             stringResource(R.string.editor_reset_edits),
-            onReset, Modifier.fillMaxWidth(), snapshot.isDirty,
+            onReset, Modifier.fillMaxWidth(), enabled && snapshot.isDirty,
             style = FitButtonStyle.Danger,
         )
         Text(
@@ -2574,6 +2613,7 @@ private fun ProjectWorkspace(
             stringResource(R.string.editor_delete_project),
             { deleting = true },
             Modifier.fillMaxWidth(),
+            enabled,
             style = FitButtonStyle.Danger,
         )
         Text(

@@ -661,6 +661,24 @@ The four that catch people fastest:
   told which widget yet and bounce straight back to the list. The counter only advances on a
   removal that committed, which also leaves a *failed* removal on the page it happened on,
   where its message is.
+* **A project row is nearly copyable, and the two fields that are not are what make a
+  duplicate independent.** `localApkPath` and `editedBinPath` are absolute paths into the
+  project's *own* directory. A duplicate that kept them reads the original's edits, and
+  stops opening at all the moment the original is deleted — and neither symptom appears
+  until after the copy has been made and named. `duplicateProject` clears both on the copy
+  and rewrites them once the new id names a directory. `session.json` and `previews/` are
+  found by convention rather than by a column, so they are copied by name; the session file
+  is not decoration, it holds the removed-widget records, and a copy without it shows a
+  widget missing with nothing offering to put it back. `ProjectDuplicationTest` holds all of
+  it, and the assertions that catch a shared path are the ones about editing the *original*
+  and deleting it — editing the copy writes to its own directory either way, because
+  `persistEdited` derives the path from the id rather than from the row.
+* **`ProjectNaming.defaultName` numbers from the stem, not from whatever it was handed.**
+  Downloading only ever passes a face's own name, so a base already ending in a counter
+  never came up until duplication started passing an existing *project* name: copying
+  "Aurora 2" produced "Aurora 2 2" and copying that "Aurora 2 3", a second series running
+  beside the first. Only a base that is already taken is re-stemmed — duplicating "Aurora 2"
+  onto a face with no "Aurora 2" keeps the name rather than promoting the copy to "Aurora".
 * **The database version numbers start at 4 and can never be renumbered.** `v0.1.0`, the
   first public release, already shipped at version 4, so schemas 1–3 exist on no device and
   renumbering 4 to 1 looks free. It is the opposite: every install holds

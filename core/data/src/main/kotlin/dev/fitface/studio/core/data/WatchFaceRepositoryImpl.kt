@@ -19,6 +19,7 @@ import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StructuralEdit
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
+import dev.fitface.studio.core.model.DuplicatedProject
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.EditorSnapshot
@@ -234,6 +235,98 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 session?.takeIf { it.projectId == projectId }?.projectName = trimmed
             }
             Unit
+        }
+
+    override suspend fun duplicateProject(projectId: Long): DuplicatedProject =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                val source = projectDao.findById(projectId)
+                    ?: throw WatchFaceException(
+                        "That project no longer exists.",
+                        "duplicate: no row for project $projectId",
+                    )
+                // Refused up front rather than half-done. A project whose package has gone
+                // missing cannot be opened, and copying the row would produce a second one
+                // that cannot be opened either — with a name suggesting it is a working
+                // copy of something.
+                val sourceApk = source.localApkPath
+                    ?.let(::File)
+                    ?.takeIf(File::isFile)
+                    ?: throw WatchFaceException(
+                        "This project's package is missing, so it cannot be copied. " +
+                            "Download the face again.",
+                        "duplicate: missing local APK for project $projectId",
+                    )
+                val now = System.currentTimeMillis()
+                val copy = source.copy(
+                    id = 0,
+                    projectName = ProjectNaming.defaultName(
+                        base = source.resolvedName,
+                        taken = projectDao.findByFaceId(source.faceId)
+                            .map(ProjectEntity::resolvedName),
+                    ),
+                    importedAtEpochMillis = now,
+                    updatedAtEpochMillis = now,
+                    // Both are absolute paths into the *original's* directory, and copying
+                    // them is the one mistake this whole function exists to avoid: the
+                    // duplicate would load the original's edit, and deleting the original
+                    // would take the duplicate's package with it. They are rewritten below,
+                    // once an id of its own names a directory.
+                    localApkPath = null,
+                    editedBinPath = null,
+                )
+                val newId = projectDao.insert(copy)
+                // The same shape as `openPackage`, and for the same reason: the id is what
+                // names the directory, so the row has to exist before the files can be
+                // written, and `NonCancellable` is what stops a cancellation landing between
+                // the two and leaving a row naming no package.
+                try {
+                    withContext(NonCancellable) {
+                        val target = projectDirectory(newId).apply { mkdirs() }
+                        val localApk = File(target, "source.apk")
+                        copyFileAtomically(sourceApk, localApk)
+                        val editedBin = source.editedBinPath
+                            ?.let(::File)
+                            ?.takeIf(File::isFile)
+                            ?.let { edited ->
+                                File(target, "edited.bin")
+                                    .also { copyFileAtomically(edited, it) }
+                            }
+                        // These two are found by convention rather than by a stored path,
+                        // so they are copied under the names the reader looks for. The
+                        // session file is not optional decoration: it holds the removed
+                        // widget records, and without it a duplicate of an edit that cut a
+                        // widget out would show it missing with no way to put it back.
+                        File(projectDirectory(projectId), "session.json")
+                            .takeIf(File::isFile)
+                            ?.let { copyFileAtomically(it, File(target, "session.json")) }
+                        previewsDirectory(projectId).listFiles().orEmpty()
+                            .filter(File::isFile)
+                            .forEach {
+                                copyFileAtomically(it, File(previewsDirectory(newId), it.name))
+                            }
+                        projectDao.insert(
+                            copy.copy(
+                                id = newId,
+                                localApkPath = localApk.absolutePath,
+                                editedBinPath = editedBin?.absolutePath,
+                            ),
+                        )
+                    }
+                } catch (error: Throwable) {
+                    // The DAO directly, never `deleteProject`: that takes `mutex`, which
+                    // this block is already holding and which is not reentrant.
+                    withContext(NonCancellable) { projectDao.deleteById(newId) }
+                    projectDirectory(newId).deleteRecursively()
+                    throw error
+                }
+                diagnostics.info(
+                    TAG,
+                    "Duplicated a project",
+                    "from=$projectId to=$newId face=${source.faceId}",
+                )
+                DuplicatedProject(newId, copy.resolvedName)
+            }
         }
 
     override suspend fun deleteProject(projectId: Long) = withContext(Dispatchers.IO) {
@@ -1121,6 +1214,28 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val selected = project.selectedStyle?.let(::styleIndexOf)
         val chosen = previews.firstOrNull { it.first == selected } ?: previews.first()
         return chosen.second.absolutePath
+    }
+
+    /**
+     * Copies one file, committing it under its final name only once it is whole.
+     *
+     * Streamed rather than read into a `ByteArray` and handed to [writeAtomically]: a
+     * project's `source.apk` is up to 32 MiB, and a copy that allocates all of it is the
+     * same hazard the package parser's inflate bounds exist for.
+     */
+    private fun copyFileAtomically(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        val temporary = File(target.parentFile, "${target.name}.tmp")
+        source.inputStream().use { input ->
+            temporary.outputStream().use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+        if (!temporary.renameTo(target)) {
+            temporary.delete()
+            throw IOException("Could not commit ${target.name}")
+        }
     }
 
     private fun writeAtomically(target: File, bytes: ByteArray) {

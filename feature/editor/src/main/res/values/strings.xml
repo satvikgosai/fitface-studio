@@ -36,6 +36,10 @@
     <string name="editor_project_name_heading">Project name</string>
     <string name="editor_project_rename">Rename project</string>
     <string name="editor_project_rename_title">Rename project</string>
+    <string name="editor_duplicate_project">Duplicate this project</string>
+    <string name="editor_duplicate_project_note">Duplicating makes an independent copy with these edits in it. You stay on this one.</string>
+    <!-- The name the copy was given. -->
+    <string name="editor_project_duplicated">Duplicated as “%1$s”</string>
     <string name="editor_delete_project">Delete this project</string>
     <string name="editor_delete_project_note">Deleting removes this project and every edit saved in it from your device. The watch face itself can be downloaded again.</string>
     <string name="editor_delete_project_title">Delete this project?</string>

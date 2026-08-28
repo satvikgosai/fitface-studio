@@ -68,6 +68,15 @@ data class LibraryUiState(
     val uneditableAppIds: Set<String> = emptySet(),
     val error: UserMessage? = null,
     /**
+     * A project was just copied, and nothing on screen proves it.
+     *
+     * Carries the name rather than a finished sentence, so the wording stays in
+     * `strings.xml` where the rest of this screen's copy is. Separate from [error] because
+     * the two are not the same kind of thing — and needed at all because under any sort but
+     * the default the new row can land anywhere in the list, or off the bottom of it.
+     */
+    val duplicated: DuplicateNotice? = null,
+    /**
      * Why the catalogue is empty, kept until the next successful load.
      *
      * Separate from [error] because that one is a snackbar: it is cleared the moment it
@@ -198,6 +207,9 @@ internal fun faceAction(
     packageOnDevice -> FaceAction.OPEN
     else -> FaceAction.DOWNLOAD
 }
+
+/** A copy was made and named. The screen turns it into a sentence. */
+data class DuplicateNotice(val id: Long, val name: String)
 
 sealed interface LibraryEvent {
     data class OpenEditor(val projectId: Long) : LibraryEvent
@@ -448,6 +460,34 @@ class LibraryViewModel @Inject constructor(
     }
 
     /**
+     * Copies a project, and says what the copy is called.
+     *
+     * No confirmation: it takes nothing away, and the copy can be deleted in two taps from
+     * the row it appears on. The message is the whole feedback — under any sort but the
+     * default the new row can land anywhere in the list.
+     */
+    fun duplicateProject(project: ProjectSummary) {
+        if (mutableState.value.isWorking) return
+        viewModelScope.launch {
+            runCatching { repository.duplicateProject(project.id) }
+                .onSuccess { duplicate ->
+                    mutableState.update {
+                        it.copy(
+                            duplicated = DuplicateNotice(
+                                messageIds.incrementAndGet(),
+                                duplicate.name,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
      * Deleting asks first. It discards every edit in the project and cannot be undone, and
      * with more than one project on a face the rows beside it look very much alike.
      */
@@ -500,6 +540,12 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    fun clearDuplicated(id: Long) {
+        mutableState.update { current ->
+            if (current.duplicated?.id == id) current.copy(duplicated = null) else current
+        }
+    }
+
     private fun Throwable.userMessage(): UserMessage {
         if (this is CancellationException) throw this
         // technicalDetail is the half that explains the failure and it used to stop here:
@@ -523,6 +569,7 @@ class LibraryViewModel @Inject constructor(
 
     private companion object {
         const val TAG = "LibraryViewModel"
+
         const val uneditableMessage =
             "This face is customised on the watch rather than shipped as an editable " +
                 "container, so FitFace Studio has nothing to open."

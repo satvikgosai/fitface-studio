@@ -48,10 +48,16 @@ cannot notice that a document went out of date.
   The app's three global actions — report a problem, about, check for update — live
   *inside* that menu rather than beside it, which is what keeps the count at one.
 
-## The one menu
+## The menus
 
-`AppMenuAction` is the app's **first and only `DropdownMenu`**, and it is worth saying
-why that is allowed after so much effort went into keeping the top bar's actions slot
+There are two: `AppMenuAction` in both top bars, and the overflow on a project row. They
+share `FitDropdownMenu` and `FitMenuEntry` so that they are one thing with two anchors —
+assembled separately they had already drifted, the row menu taking Material's default entry
+type (`labelLarge`) against the bar menu's `bodyMedium`, so the same gesture opened two
+different-looking menus in one app.
+
+`AppMenuAction` was the **first** `DropdownMenu`, and it is worth saying why one was
+allowed there at all after so much effort went into keeping the top bar's actions slot
 narrow.
 
 A `DropdownMenu` is a `Popup` — its own window, measured outside the composition that
@@ -61,15 +67,23 @@ report button it replaced measured. `FitTopBarLayoutTest.theOpenMenuCostsTheBarN
 holds that, and it exists specifically so that replacing the popup with an inline column
 fails a test rather than quietly re-ellipsizing every editor subtitle.
 
-Two rules the menu follows:
+Rules both menus follow:
 
-* **Every entry closes the menu before it runs.** All three open a dialog, and a popup
-  left standing behind a dialog is the first thing that goes wrong here.
-* **The glyph is `≡`, not `⋮`.** The editor's Canvas page already carries a `⋯` that
-  navigates to a page, and two ellipses side by side — one a menu, one a destination —
-  read as one control with two behaviours. `⚙` and `ℹ` were the other candidates and
-  were rejected because U+2699 and U+2139 fall through to the emoji font on many Android
-  builds; they would be the only colour glyphs in the inventory.
+* **Every entry closes the menu before it runs.** They open a dialog or navigate, and a
+  popup left standing behind a dialog is the first thing that goes wrong here.
+* **A destructive entry is `colorScheme.error` and goes last.** That is the same colour
+  `FitButtonStyle.Danger` and `FitStatus.Fail` use, and last is furthest from where the
+  menu opens — nothing above it can lose work.
+* **The bar menu's glyph is `≡`, not `⋮`.** `⚙` and `ℹ` were the other candidates and were
+  rejected because U+2699 and U+2139 fall through to the emoji font on many Android builds;
+  they would be the only colour glyphs in the inventory.
+
+**The two glyphs mean two scopes, not two behaviours.** `≡` is the *app's* menu and is the
+same on every screen. `⋯` is "more about this one project", and it takes the form the
+surface allows: a menu on a row in the list, and — on the editor's Canvas, where a popup
+would be too small for what it holds — a jump to the Project page that carries rename,
+duplicate, reset and delete. The rule the earlier note was protecting still holds: the two
+never sit side by side.
 
 **Every dialog's text slot scrolls, and About is sized to not need it.** An `AlertDialog`
 caps its own height and gives the text slot the remainder, which on a landscape phone is a

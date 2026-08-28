@@ -882,6 +882,10 @@
   <p class="note">
     This is also why the app's three global actions — report a problem, about, check for
     update — are one <code class="i">≡</code> button and a menu rather than three buttons.
+    There are two menus now — this one and a project row's — and they share
+    <code class="i">FitDropdownMenu</code> and <code class="i">FitMenuEntry</code>, because
+    assembled separately the second took Material's default entry type against this one's
+    <code class="i">bodyMedium</code>.
     A <code class="i">DropdownMenu</code> is a <code class="i">Popup</code>, measured in its
     own window, so the bar pays for the anchor and nothing else: the numbers below are the
     same as they were for the single button it replaced.
@@ -921,8 +925,11 @@
     <div class="ia-col">
       <div class="ia-h">L0 · ROOT</div>
       <div class="ia-page">Library<span>Watch faces / Projects</span></div>
-      <div class="ia-peek">Face sheet<span>SHEET · download, styles</span></div>
+      <div class="ia-peek">Face sheet<span>SHEET · your projects, styles, download</span></div>
       <div class="ia-peek">App menu<span>MENU · both top bars · &#8801;</span></div>
+      <div class="ia-peek">Project overflow<span>MENU · a project row · &#8943;</span></div>
+      <div class="ia-peek">Rename project<span>DIALOG · from either &#8943;</span></div>
+      <div class="ia-peek">Delete project<span>DIALOG · from either &#8943;</span></div>
       <div class="ia-peek">Diagnostics<span>DIALOG · from the menu</span></div>
       <div class="ia-peek">About<span>DIALOG · from the menu</span></div>
       <div class="ia-peek">App update<span>DIALOG · check, download, install</span></div>
@@ -941,7 +948,7 @@
       <div class="ia-page">Styles<span>variants as pictures</span></div>
       <div class="ia-page">Validate<span>the gate → Install</span></div>
       <div class="ia-page">Install<span>own page, own phases</span></div>
-      <div class="ia-peek">Project<span>PAGE · off ⋯ · reset</span></div>
+      <div class="ia-peek">Project<span>PAGE · off &#8943; · rename, duplicate, reset, delete</span></div>
     </div>
   </div>
   <p class="note" style="margin-top:20px">

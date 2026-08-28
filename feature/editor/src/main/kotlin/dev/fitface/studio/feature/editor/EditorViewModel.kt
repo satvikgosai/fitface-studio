@@ -55,6 +55,9 @@ internal fun storedToDisplay(
     anchoredFromEnd: Boolean,
 ): Int = if (anchoredFromEnd) canvasExtent + stored - extent else stored
 
+/** A copy was made and named. The screen turns it into a sentence. */
+data class DuplicateNotice(val id: Long, val name: String)
+
 data class EditorUiState(
     val snapshot: EditorSnapshot? = null,
     val isWorking: Boolean = true,
@@ -80,6 +83,14 @@ data class EditorUiState(
      * editor a chance to draw a session that no longer exists.
      */
     val projectDeleted: Boolean = false,
+    /**
+     * A copy of this project was just made, and nothing on this screen changed to show it —
+     * the editor stays on the original, which is what you were working on.
+     *
+     * Carries the name rather than a finished sentence, so the wording stays in
+     * `strings.xml` with the rest of the editor's copy.
+     */
+    val duplicated: DuplicateNotice? = null,
     val applyWidgetEditsToAllStyles: Boolean = true,
     val previewReviewed: Boolean = false,
     val pendingWidgetMove: WidgetMovePreview? = null,
@@ -186,6 +197,44 @@ class EditorViewModel @Inject constructor(
                     mutableState.value = mutableState.value.copy(projectDeleted = true)
                 }
                 .onFailure(::showFailure)
+        }
+    }
+
+    /**
+     * Copies this project and stays on it.
+     *
+     * Deliberately does not open the copy: you are in the middle of the original, and
+     * switching out from under an edit is worse than having to go and find the new one. The
+     * message is the only feedback there can be, for the same reason.
+     */
+    fun duplicateProject() {
+        val projectId = loadedProjectId ?: return
+        // Copying a package can be tens of megabytes, and the button says nothing while it
+        // runs. Without the guard a second tap — which is what someone does when a control
+        // appears to have done nothing — makes a second copy they then have to find and
+        // delete. `isWorking` is the editor's existing "busy" flag, so the page's other
+        // actions dim with it; `showFailure` clears it on the way out.
+        if (mutableState.value.isWorking) return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isWorking = true)
+            runCatching { repository.duplicateProject(projectId) }
+                .onSuccess { duplicate ->
+                    mutableState.value = mutableState.value.copy(
+                        isWorking = false,
+                        duplicated = DuplicateNotice(
+                            messageIds.incrementAndGet(),
+                            duplicate.name,
+                        ),
+                    )
+                }
+                .onFailure(::showFailure)
+        }
+    }
+
+    fun clearDuplicated(id: Long) {
+        val current = mutableState.value
+        if (current.duplicated?.id == id) {
+            mutableState.value = current.copy(duplicated = null)
         }
     }
 

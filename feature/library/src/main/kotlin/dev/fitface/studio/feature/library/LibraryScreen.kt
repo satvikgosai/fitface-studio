@@ -35,10 +35,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -84,6 +81,8 @@ import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.FitChip
+import dev.fitface.studio.core.ui.FitDropdownMenu
+import dev.fitface.studio.core.ui.FitMenuEntry
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.fitColors
 import dev.fitface.studio.core.ui.fitText
@@ -116,6 +115,22 @@ fun LibraryRoute(
             snackbar.showSnackbar(message.text)
         } finally {
             viewModel.clearError(message.id)
+        }
+    }
+
+    // Same show-then-clear shape as the error above, and for the same reason: clearing
+    // first changes this effect's key while `showSnackbar` is still suspended and cancels
+    // it, so the message appears for one frame and vanishes.
+    val duplicated = state.duplicated
+    val duplicatedText = duplicated?.let {
+        stringResource(R.string.library_project_duplicated, it.name)
+    }
+    LaunchedEffect(duplicated?.id) {
+        if (duplicated == null || duplicatedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(duplicatedText)
+        } finally {
+            viewModel.clearDuplicated(duplicated.id)
         }
     }
 
@@ -156,6 +171,7 @@ fun LibraryRoute(
         onDownload = viewModel::downloadSelectedFace,
         onProjectClick = viewModel::openProject,
         onRenameProject = viewModel::startRename,
+        onDuplicateProject = viewModel::duplicateProject,
         onDeleteProject = viewModel::startDelete,
     )
 }
@@ -191,6 +207,7 @@ private fun LibraryScreen(
     onDownload: () -> Unit,
     onProjectClick: (ProjectSummary) -> Unit,
     onRenameProject: (ProjectSummary) -> Unit,
+    onDuplicateProject: (ProjectSummary) -> Unit,
     onDeleteProject: (ProjectSummary) -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
@@ -234,6 +251,7 @@ private fun LibraryScreen(
                     onBrowse = { page = LibraryPage.WatchFaces },
                     onOpen = onProjectClick,
                     onRename = onRenameProject,
+                    onDuplicate = onDuplicateProject,
                     onRemove = onDeleteProject,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -942,6 +960,7 @@ private fun ProjectsList(
     onBrowse: () -> Unit,
     onOpen: (ProjectSummary) -> Unit,
     onRename: (ProjectSummary) -> Unit,
+    onDuplicate: (ProjectSummary) -> Unit,
     onRemove: (ProjectSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1025,6 +1044,7 @@ private fun ProjectsList(
                     onOpenMenu = { openMenuFor = project.id },
                     onDismissMenu = { openMenuFor = null },
                     onRename = { onRename(project) },
+                    onDuplicate = { onDuplicate(project) },
                     onRemove = { onRemove(project) },
                 )
             }
@@ -1089,6 +1109,7 @@ private fun ProjectRow(
     onOpenMenu: () -> Unit,
     onDismissMenu: () -> Unit,
     onRename: () -> Unit,
+    onDuplicate: () -> Unit,
     onRemove: () -> Unit,
 ) {
     Row(
@@ -1138,6 +1159,7 @@ private fun ProjectRow(
             onOpen = onOpenMenu,
             onDismiss = onDismissMenu,
             onRename = onRename,
+            onDuplicate = onDuplicate,
             onRemove = onRemove,
         )
         Text(
@@ -1171,6 +1193,7 @@ private fun ProjectMenu(
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
     onRename: () -> Unit,
+    onDuplicate: () -> Unit,
     onRemove: () -> Unit,
 ) {
     Box {
@@ -1180,28 +1203,27 @@ private fun ProjectMenu(
             onClick = onOpen,
             enabled = enabled,
         )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = onDismiss,
-            shape = MaterialTheme.shapes.small,
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 0.dp,
-            tonalElevation = 0.dp,
-        ) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.library_project_rename)) },
-                onClick = { onDismiss(); onRename() },
-            )
-            DropdownMenuItem(
-                text = {
-                    Text(
-                        stringResource(R.string.library_project_delete),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                },
-                onClick = { onDismiss(); onRemove() },
-            )
+        // The app menu's surface and entries, not a second set assembled by hand: built
+        // separately these took Material's default entry type against the bar menu's
+        // `bodyMedium`, so the same gesture opened two different-looking menus.
+        FitDropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+            FitMenuEntry(stringResource(R.string.library_project_rename)) {
+                onDismiss()
+                onRename()
+            }
+            FitMenuEntry(stringResource(R.string.library_project_duplicate)) {
+                onDismiss()
+                onDuplicate()
+            }
+            // Last, and the only one that is destructive. Nothing above it can lose work,
+            // so the entry that can is the one furthest from where the menu opens.
+            FitMenuEntry(
+                stringResource(R.string.library_project_delete),
+                MaterialTheme.colorScheme.error,
+            ) {
+                onDismiss()
+                onRemove()
+            }
         }
     }
 }

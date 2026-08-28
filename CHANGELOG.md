@@ -16,6 +16,8 @@ Added:
   project on the new version and leaves the ones you already have exactly as they were.
 - Search and sort on **Your projects**, and every sort now reverses — tap the one already
   chosen to flip it.
+- Duplicate a project, from its row in the list or from inside it. The copy carries the
+  edits the original had and is independent of it from then on.
 - Deleting a project asks first and names the one it would remove, from the projects list
   or from inside the project itself.
 

@@ -123,7 +123,10 @@
     <!-- project name -->
     <string name="library_project_more_a11y">More options for %1$s</string>
     <string name="library_project_rename">Rename</string>
+    <string name="library_project_duplicate">Duplicate</string>
     <string name="library_project_delete">Delete</string>
+    <!-- The name the copy was given; the list may be sorted so it landed out of sight. -->
+    <string name="library_project_duplicated">Duplicated as “%1$s”</string>
     <string name="library_rename_title">Rename project</string>
     <string name="library_rename_label">Project name</string>
     <string name="library_rename_confirm">Rename</string>
