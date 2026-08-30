@@ -102,22 +102,20 @@ jobs:
           APK: ${{ steps.name.outputs.apk }}
           KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
         run: |
+          # Every paragraph below is one long line, deliberately. GitHub renders a release
+          # body in the same comment-mode GFM as an issue, where a single newline is a <br>
+          # — so a hard-wrapped paragraph breaks mid-sentence on the release page instead of
+          # flowing. Wrapping is the reader's browser's job. Do not re-wrap these.
           if [ -n "$KEYSTORE_PATH" ]; then
-            signing="Signed with this project's debug key, so it installs over any other
-          build signed with the same key."
+            signing="Signed with this project's debug key, so it installs over an earlier build."
           else
-            signing="**Signed with a throwaway key**, because no debug keystore was
-          configured for this build — it cannot be installed over an existing copy, and
-          uninstalling first will delete every saved project."
+            signing="**Signed with a throwaway key** — it cannot be installed over an existing copy, and uninstalling first deletes every saved project."
           fi
 
           body=$(cat <<'EOF'
-          This APK contains code from two proprietary accessory SDK JARs, fetched at
-          build time and verified against pinned SHA-256 hashes. It is a convenience
-          build of an experimental personal project for use on hardware you own — not a
-          product, not supported, and not a grant of any rights in that SDK. See
-          [`NOTICE.md`](../main/NOTICE.md), and read [Installing to the watch](../main/README.md#installing-to-the-watch)
-          before you send anything to a watch.
+          A personal, experimental project for hardware you own — not a product, and not supported. It links two proprietary accessory SDK JARs, fetched at build time and verified against pinned hashes, and grants no rights in that SDK: see [`NOTICE.md`](../main/NOTICE.md).
+
+          Read [Installing to the watch](../main/README.md#installing-to-the-watch) before you send anything to a watch.
           EOF
           )
 

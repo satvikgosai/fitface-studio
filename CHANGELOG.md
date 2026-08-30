@@ -4,7 +4,7 @@ User-visible changes per version. APKs are on the
 [releases page](https://github.com/satvikgosai/fitface-studio/releases); the reasoning
 behind a change lives in [`docs/`](docs/README.md).
 
-## 0.1.3 (code `19`) — 2026-08-27
+## 0.1.3 (code `19`) — 2026-08-30
 
 Added:
 
@@ -26,21 +26,27 @@ Added:
 
 Fixed:
 
+- The list of watch faces could stop short of the whole catalogue and stay that way for a
+  week: a store error on a later page read as the end of the list.
+- A transfer that had already timed out could go on to report the face as installed, and
+  **Reconnect the watch and discover again** dropped straight back into the failure it was
+  leaving — which left the whole four-step setup as the only way on.
 - The install checklist offered disconnecting the watch in its companion app as a way to
   free the accessory channel. It does not free it, and nothing on the page says so any more.
+- An install failure was printed twice, once in a box and once plain underneath it.
+- An edit that failed to save could come back the next time you opened the project, as
+  though it had worked.
 - Removing a widget left the editor on a page describing nothing, with the back arrow as
   the only way out. It returns you to the widget list.
-
 - A face already on your device still offered to download it, then reopened the project
   you already had without saying so.
 - Two projects on the same face looked identical in the list and traded places every time
   you opened either one. They now carry their own name and the style they were started
   on, and the list is ordered by when you last edited them.
-- On a narrow phone the last sort chip ran off the side of the screen, taking the arrow
-  that says which way the list is sorted with it. The chips are shorter and the row fits.
+- On a narrow phone the last sort chip ran off the side of the screen.
 - Opening a project showed nothing at all while it happened, and it takes a few seconds,
-  so the tap looked as though it had missed and people tapped the rows around it. The row
-  you picked now says it is opening and the others go quiet until it has.
+  so the tap looked as though it had missed. The row you picked now says it is opening and
+  the others go quiet until it has.
 
 ## 0.1.2 (code `18`) — 2026-08-25
 
