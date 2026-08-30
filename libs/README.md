@@ -25,7 +25,7 @@ agent construction to fail with a nested `NoClassDefFoundError`;
   and carries on with your copy; delete it to fetch the pinned one instead.
 * **A JAR is absent** — it is downloaded from the mirror below, hashed, and only
   then moved into place. A download that does not match its pinned SHA-256 is
-  deleted and fails the build. Nothing unverified is ever compiled against.
+  deleted and fails the build.
 
 ```
 https://raw.githubusercontent.com/MiJey/TizenConsumerSAAgentV2/master/app/libs

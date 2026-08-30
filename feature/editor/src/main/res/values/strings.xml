@@ -23,7 +23,6 @@
     <string name="editor_reopen">Reopen from library</string>
 
     <!-- Page titles, reused as the navigation rail's labels -->
-    <string name="editor_page_face_fallback">Face %1$s</string>
     <string name="editor_page_widgets">Widgets</string>
     <string name="editor_page_widget_number">Widget #%1$s</string>
     <string name="editor_page_background">Background</string>
@@ -34,6 +33,19 @@
     <!-- The "⋯" that opens the page above. A glyph needs its label spelled out for TalkBack,
          which otherwise announces the ellipsis character itself. -->
     <string name="editor_project_a11y">Project and reset</string>
+    <string name="editor_project_name_heading">Project name</string>
+    <string name="editor_project_rename">Rename project</string>
+    <string name="editor_project_rename_title">Rename project</string>
+    <string name="editor_duplicate_project">Duplicate this project</string>
+    <string name="editor_duplicate_project_note">Duplicating makes an independent copy with these edits in it. You stay on this one.</string>
+    <!-- The name the copy was given. -->
+    <string name="editor_project_duplicated">Duplicated as “%1$s”</string>
+    <string name="editor_delete_project">Delete this project</string>
+    <string name="editor_delete_project_note">Deleting removes this project and every edit saved in it from your device. The watch face itself can be downloaded again.</string>
+    <string name="editor_delete_project_title">Delete this project?</string>
+    <!-- project name -->
+    <string name="editor_delete_project_message">%1$s and every edit saved in it will be removed from this device. The watch face itself can be downloaded again.</string>
+    <string name="editor_delete_project_confirm">Delete</string>
     <string name="editor_widget_index_unknown">—</string>
 
     <!-- Page subtitles -->
@@ -232,7 +244,8 @@
 
     <!-- Setup checklist -->
     <string name="editor_setup_label">SETUP</string>
-    <string name="editor_setup_banner">Only one app may hold the accessory channel. Discovery needs the watch connected, so it comes first — then the stock plugin has to let the channel go, which either disconnecting the watch or revoking the plugin\'s Nearby access will do.</string>
+    <string name="editor_setup_banner">Only one app may hold the accessory channel. Discovery needs the watch connected, so it comes first — then the stock plugin has to let the channel go by losing its Nearby devices access.</string>
+    <string name="editor_setup_banner_legacy">Only one app may hold the accessory channel. Discovery needs the watch connected, so it comes first — then the stock plugin has to let the channel go. This phone has no Nearby devices switch for it, so step 4 needs a tool that can disable the plugin.</string>
     <string name="editor_setup_step1_title">Connect the watch in its companion app</string>
     <string name="editor_setup_step1_why">Hands pairing back to the stock app, then return here.</string>
     <string name="editor_setup_step1_done">Companion app and plugin found</string>
@@ -240,26 +253,31 @@
     <string name="editor_setup_step1_done_companion_only">Companion app found, no watch plugin</string>
     <string name="editor_setup_step1_done_agent_only">An app that can reach the watch was found</string>
     <string name="editor_setup_step2_title">Grant FitFace Nearby devices access</string>
-    <string name="editor_setup_step2_why">Android 12+ requires it to use the accessory channel.</string>
+    <string name="editor_setup_step2_why">Android asks for this before any app may use the accessory channel.</string>
     <string name="editor_setup_step2_done">Granted</string>
     <string name="editor_setup_step3_title">Discover the watch-face and OTA peers</string>
     <string name="editor_setup_step3_why">Needs the watch connected, so the plugin\'s access has to be ON for this step — turn it back on if you have already revoked it.</string>
+    <string name="editor_setup_step3_why_legacy">Needs the watch connected, so the plugin has to be enabled and holding it — turn it back on first if you disabled it for an earlier attempt.</string>
     <string name="editor_setup_step3_done">Both peers cached — they stay cached while the watch does</string>
     <string name="editor_setup_step4_title">Let the plugin release the channel</string>
-    <string name="editor_setup_step4_why">Disconnect the watch in the companion app, or turn the plugin\'s Nearby access off. Either frees the channel.</string>
+    <string name="editor_setup_step4_why">Turn the plugin\'s Nearby devices access off. Return here after Android applies the change.</string>
+    <string name="editor_setup_step4_why_legacy">No Nearby devices switch on this Android version — the plugin has to be disabled instead. Freeze it with Hail in its Shizuku working mode, or disable it over ADB, then confirm below. Put it back after the attempt.</string>
     <string name="editor_setup_step4_done">Channel released</string>
     <string name="editor_setup_progress">%1$d OF %2$d COMPLETE</string>
     <string name="editor_setup_shortcuts">Shortcuts</string>
     <string name="editor_setup_companion_app">Companion app</string>
     <string name="editor_setup_plugin_access">Plugin access</string>
+    <string name="editor_setup_plugin_access_legacy">Plugin app info</string>
     <string name="editor_setup_confirm_released">The plugin has let go — continue</string>
-    <string name="editor_setup_confirm_note">Tap this once the watch shows as disconnected in the companion app. Revoking the plugin\'s Nearby access does the same thing and is detected on its own.</string>
+    <string name="editor_setup_confirm_note">Revoking the plugin\'s Nearby access is detected on its own. Use this only if you freed the channel some other way.</string>
+    <string name="editor_setup_confirm_note_legacy">Tap this once the plugin is disabled — nothing here can detect that on its own.</string>
 
     <!-- Transfer panel -->
     <string name="editor_transfer_phases">Phases</string>
     <string name="editor_transfer_keep_open">Keep FitFace Studio open. Leaving the app aborts the transfer.</string>
     <string name="editor_transfer_done_label">DONE</string>
     <string name="editor_transfer_done">Installed. Reconnect the watch in the companion app, and restore the plugin\'s Nearby access if you turned it off.</string>
+    <string name="editor_transfer_done_legacy">Installed. Re-enable the plugin, then reconnect the watch in the companion app.</string>
     <string name="editor_transfer_send_again">Send again</string>
     <string name="editor_transfer_back_to_canvas">Back to canvas</string>
     <string name="editor_transfer_try_again">Try again</string>

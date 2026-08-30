@@ -249,8 +249,8 @@ internal object TimeoutRecovery {
      */
     const val DISCOVERY =
         "Peer discovery timed out, which normally means the watch is not connected. Check " +
-            "it in the companion app — the plugin's Nearby access has to be on for this " +
-            "step — then discover again."
+            "it in the companion app — the stock plugin has to be holding the watch for " +
+            "this step — then discover again."
     const val INITIALIZATION = "Accessory initialization timed out. Restart setup and retry."
     const val INSTALL = "The install request timed out. Check the watch, then reconnect it and " +
         "discover again before retrying."
@@ -277,3 +277,152 @@ internal object TimeoutRecovery {
         else -> current.failed(TRANSFER)
     }
 }
+
+/** What a delivery agent has just reported, reduced to what the phase gate needs. */
+internal enum class DeliveryEvent {
+    PAYLOAD_VERIFIED,
+    TRANSFER_PROGRESS,
+    TRANSFER_COMPLETE,
+    INSTALL_REQUESTED,
+    INSTALL_DELIVERED,
+    FAILURE,
+}
+
+/**
+ * Whether a callback from a delivery agent may still change the state.
+ *
+ * The agents outlive the attempt that started them. A transfer thread is blocking
+ * RFCOMM I/O that no coroutine can interrupt, the OTA agent posts two delayed handler
+ * callbacks of its own, and an accessory `onSent` arrives whenever the framework gets
+ * round to it — so a watchdog that has already given up, or a user who has already
+ * rewound to the checklist, is routinely still holding a live worker. Every one of
+ * those callbacks used to write [DirectInstallState.phase] unconditionally, which is
+ * three distinct wrong answers:
+ *
+ *  * a window acknowledged after the transfer watchdog fired dragged `FAILED` back to
+ *    `TRANSFERRING`, and the transfer went on to report success;
+ *  * a late accessory `onSent` turned an install timeout into `COMPLETE`;
+ *  * and the abort the *user* asked for, by tapping "Reconnect the watch and discover
+ *    again" on the failure panel, made the old thread throw immediately — so its
+ *    failure landed microseconds after the rewind and put the page straight back into
+ *    `FAILED`. That left `reset()` as the only way out of a timed-out transfer, which
+ *    is the whole setup again.
+ *
+ * The rule is that a callback may only move the machine on from the phase that was
+ * waiting for it. Nothing here rejects a *timely* callback: each event names the phase
+ * its own caller has just set.
+ *
+ * Pure and separate from the agents for the reason [TimeoutRecovery] is: none of this
+ * is assertable through a `Context` and the accessory SDK.
+ */
+internal object DeliveryProgress {
+    fun accepts(current: DirectInstallPhase, event: DeliveryEvent): Boolean = when (event) {
+        // `install()` sets VERIFYING and then calls straight into the agent.
+        DeliveryEvent.PAYLOAD_VERIFIED -> current == DirectInstallPhase.VERIFYING
+        // Status lines and window acknowledgements. VERIFYING is accepted because the
+        // agent reports the channel it acquired before the first window lands.
+        DeliveryEvent.TRANSFER_PROGRESS ->
+            current == DirectInstallPhase.VERIFYING ||
+                current == DirectInstallPhase.TRANSFERRING
+        DeliveryEvent.TRANSFER_COMPLETE -> current == DirectInstallPhase.TRANSFERRING
+        // The install request is sent from the completion callback, so the phase is
+        // still TRANSFERRING when the agent reports it has asked.
+        DeliveryEvent.INSTALL_REQUESTED ->
+            current == DirectInstallPhase.TRANSFERRING ||
+                current == DirectInstallPhase.INSTALLING
+        DeliveryEvent.INSTALL_DELIVERED -> current == DirectInstallPhase.INSTALLING
+        // A failure for an attempt nobody is waiting on any more is noise. The reason
+        // the reader needs is already on screen — the watchdog's, or the checklist's.
+        DeliveryEvent.FAILURE -> current in DirectInstallState.ActivePhases
+    }
+}
+
+/** How long a phase that is merely waiting on the accessory framework may stay silent. */
+internal const val PHASE_WATCHDOG_MS = 20_000L
+
+/**
+ * How long a transfer may go without the agent reporting progress.
+ *
+ * Not "how long a transfer may take": it is re-armed by every progress callback, so it is a
+ * silence threshold. See [transferProgressRearmsWatchdog] for why that distinction is the
+ * whole safety of the number, and `TransferWatchdogBudgetTest` for the arithmetic.
+ */
+internal const val TRANSFER_WATCHDOG_MS = 20_000L
+
+/**
+ * Whether an accepted [DeliveryEvent.TRANSFER_PROGRESS] should re-arm the transfer
+ * watchdog, given the phase it has left the machine in.
+ *
+ * **The watchdog used to be re-armed only by an acknowledged window, and the protocol's
+ * own tail is longer than its budget.** After the last window is acknowledged the agent
+ * still has to wait out `RESULT_TIMEOUT_MS` (15 s) while the watch verifies the whole BIN,
+ * pause 250 ms, wait out `COMMAND_TIMEOUT_MS` (8 s) for the close handshake, sleep half a
+ * second tearing the socket down and post the completion a second later — 24.75 s against
+ * `TRANSFER_WATCHDOG_MS`'s 20, with nothing in between to say the transfer was still
+ * alive. A single window is the same shape: it may be re-sent
+ * `IdentityTransferProtocol.MAX_WINDOW_RETRIES` times, each waiting up to
+ * `WINDOW_TIMEOUT_MS`, and an `SPP_WINDOW_RETRY` answer reported nothing at all.
+ *
+ * That was survivable while a fired watchdog only *described* a dead transfer. Now that it
+ * calls `abandonInFlight`, crossing the line kills a transfer the watch has already
+ * accepted — the abandoned attempt's token invalidates the queued `onTransferComplete`, so
+ * the install command is never sent and a good install reads as a timeout. So every status
+ * line re-arms, and the agent reports one on a window retry.
+ *
+ * Raising the constant would have worked too and is worse: every wait in the protocol is
+ * already individually bounded by `SppResponseWait`, so what this watchdog actually guards
+ * is the gaps between them. Re-arming on progress keeps 20 s of true silence as the
+ * threshold instead of stretching it to cover a transfer that is plainly working.
+ *
+ * VERIFYING answers false. A status is *accepted* in that phase — the agent reports the
+ * channel it acquired before the first window lands — but [Fit3DirectInstaller.armWatchdog]
+ * replaces whatever is armed, so arming a TRANSFERRING watchdog here would swap VERIFYING's
+ * own for one that returns the moment it fires on a phase the machine is not in. That is
+ * not a re-arm, it is a disarm.
+ */
+internal fun transferProgressRearmsWatchdog(phase: DirectInstallPhase): Boolean =
+    phase == DirectInstallPhase.TRANSFERRING
+
+/**
+ * Every stretch of `OtaTransferDeliveryAgent.runTransferStateMachine` between one report to
+ * the listener and the next, in order, with what it may consume.
+ *
+ * **Every wait in that method has to end in a `report`**, and this list is why: a report is
+ * what re-arms the transfer watchdog, so an unreported wait is silence as far as the watchdog
+ * is concerned. Three of them used to be — the negotiation handshake, the descriptor
+ * handshake and a re-sent window — which was survivable only while a fired watchdog merely
+ * relabelled the phase. It abandons the worker now, so an unreported wait longer than
+ * [TRANSFER_WATCHDOG_MS] kills a transfer the watch is happily servicing.
+ *
+ * It lives here rather than beside the state machine for a reason worth not rediscovering: a
+ * non-`const` `val` in `OtaTransferDeliveryAgent`'s companion forces the JVM to load that
+ * class, which extends the accessory SDK's `SAAgentV2`, and its pre-stackmap bytecode fails
+ * the verifier — so a test reading it dies with `VerifyError` before it asserts anything.
+ * The timeouts below are `const val`, which the compiler inlines at each use site, so naming
+ * them here pulls in nothing. This file holds no accessory type at all, which is what makes
+ * every decision in it assertable.
+ *
+ * The list cannot *drive* the conversation, and the conversation cannot be unit-tested for
+ * the same `VerifyError` reason, so this is the closest thing to coverage the seam allows:
+ * `TransferWatchdogBudgetTest` checks the arithmetic, and adding a wait means adding a line
+ * here. Keep it honest by hand.
+ */
+internal val TRANSFER_PROGRESS_GAPS: List<Pair<String, Long>> = listOf(
+    "channel acquired → negotiation accepted" to
+        OtaTransferDeliveryAgent.COMMAND_TIMEOUT_MS,
+    "negotiation accepted → descriptor accepted" to
+        OtaTransferDeliveryAgent.COMMAND_TIMEOUT_MS,
+    // One attempt at one window, whichever way it is answered: accepted reports through
+    // onWindowAcknowledged, re-sent through onTransferStatus. So the retry ladder costs one
+    // gap per attempt rather than one gap for all four.
+    "descriptor accepted → window answered" to OtaTransferDeliveryAgent.WINDOW_TIMEOUT_MS,
+    "window answered → next window answered" to OtaTransferDeliveryAgent.WINDOW_TIMEOUT_MS,
+    "last window → BIN verified" to OtaTransferDeliveryAgent.RESULT_TIMEOUT_MS,
+    "BIN verified → channel closed" to
+        OtaTransferDeliveryAgent.RESULT_TO_CLOSE_PAUSE_MS +
+        OtaTransferDeliveryAgent.COMMAND_TIMEOUT_MS,
+    // Nothing reports during teardown, so this one is a fixed cost rather than a wait on
+    // the watch.
+    "channel closed → transfer complete" to
+        OtaTransferDeliveryAgent.TEARDOWN_PAUSE_MS + OtaTransferDeliveryAgent.COMPLETION_POST_MS,
+)

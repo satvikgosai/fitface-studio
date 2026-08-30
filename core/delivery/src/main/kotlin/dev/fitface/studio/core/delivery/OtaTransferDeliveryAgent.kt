@@ -20,6 +20,7 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 internal interface TransferListener {
@@ -53,12 +54,18 @@ class OtaTransferDeliveryAgent(context: Context) :
     @Volatile
     private var transferThread: Thread? = null
     /**
-     * Set by [cancelTransfer] and read by every poll of the SPP response wait. Closing
-     * the socket is not enough on its own — whether that makes a blocked read throw is
-     * up to the stack — and the wait used to check nothing but its own deadline.
+     * Which attempt is live. [runPayload] takes the next value, every callback and every
+     * poll of the SPP response wait compares against the one it was started with, and
+     * [cancelTransfer] simply takes another — which invalidates the worker thread, both
+     * delayed handler callbacks and every listener call still to come, in one write.
+     *
+     * It replaces a single `transferAborted` flag, which was wrong in both directions.
+     * Closing the socket is not enough on its own — whether that makes a blocked read
+     * throw is up to the stack — and a shared flag was *cleared* by the next attempt, so
+     * an abandoned thread that had not noticed yet quietly un-aborted itself and carried
+     * on transferring against the same watch.
      */
-    @Volatile
-    private var transferAborted = false
+    private val attempt = AtomicInteger()
     private val message = object : SAMessage(this) {
         override fun onReceive(peerAgent: SAPeerAgent, data: ByteArray) = Unit
 
@@ -76,33 +83,35 @@ class OtaTransferDeliveryAgent(context: Context) :
             transferListener?.onTransferFailed("A transfer is already running")
             return
         }
-        transferAborted = false
+        val token = attempt.incrementAndGet()
         val peer = discoveredPeer
         if (peer == null) {
             transferRunning.set(false)
-            transferListener?.onTransferFailed(
-                "The cached OTA peer is gone — the watch has to be connected and discovered " +
-                    "again before it can be sent to.",
-                peerLost = true,
-            )
+            report(token) {
+                it.onTransferFailed(
+                    "The cached OTA peer is gone — the watch has to be connected and " +
+                        "discovered again before it can be sent to.",
+                    peerLost = true,
+                )
+            }
             return
         }
         val band = when (val lookup = resolveFit3(peer)) {
             is Fit3Lookup.Found -> lookup.device
             is Fit3Lookup.Unavailable -> {
                 transferRunning.set(false)
-                transferListener?.onTransferFailed(lookup.reason)
+                report(token) { it.onTransferFailed(lookup.reason) }
                 return
             }
         }
         val identity = payload.copyBytes()
         if (identity.size != payload.size || identity.sha256() != payload.sha256) {
             transferRunning.set(false)
-            transferListener?.onTransferFailed("Frozen BIN size or SHA-256 changed")
+            report(token) { it.onTransferFailed("Frozen BIN size or SHA-256 changed") }
             return
         }
         val windowCount = IdentityTransferProtocol.windowCount(identity.size)
-        transferListener?.onPayloadVerified(payload, windowCount)
+        report(token) { it.onPayloadVerified(payload, windowCount) }
 
         // An accessory send that throws means the peer is no longer reachable, not
         // that the payload is wrong: retrying against the same handle repeats it.
@@ -110,32 +119,47 @@ class OtaTransferDeliveryAgent(context: Context) :
             message.send(peer, buildFileInfoRequest(payload))
         } catch (error: Exception) {
             transferRunning.set(false)
-            transferListener?.onTransferFailed(
-                error.message ?: "Unable to send Fit3 file metadata",
-                peerLost = true,
-            )
+            report(token) {
+                it.onTransferFailed(
+                    error.message ?: "Unable to send Fit3 file metadata",
+                    peerLost = true,
+                )
+            }
             return
         }
 
+        // Not tracked as a Runnable to be removed later: `removeCallbacks` has to win a
+        // race against a callback already dispatched, and the token settles that without
+        // one. A cancelled attempt still runs this block and finds it has nothing to do.
         Handler(Looper.getMainLooper()).postDelayed(
             {
+                if (attempt.get() != token) return@postDelayed
                 try {
                     message.send(peer, BT_OPEN_REQUEST)
-                    connectAndTransfer(band, peer, payload, identity)
+                    connectAndTransfer(token, band, peer, payload, identity)
                 } catch (error: Exception) {
                     transferRunning.set(false)
                     sendBtClose(peer)
-                    transferListener?.onTransferFailed(
-                        error.message ?: "Unable to open the Fit3 transfer channel",
-                        peerLost = true,
-                    )
+                    report(token) {
+                        it.onTransferFailed(
+                            error.message ?: "Unable to open the Fit3 transfer channel",
+                            peerLost = true,
+                        )
+                    }
                 }
             },
             150L,
         )
     }
 
+    /** Reports to the listener only while [token] is still the live attempt. */
+    private inline fun report(token: Int, block: (TransferListener) -> Unit) {
+        if (attempt.get() != token) return
+        transferListener?.let(block)
+    }
+
     private fun connectAndTransfer(
+        token: Int,
         band: BluetoothDevice,
         peer: SAPeerAgent,
         payload: DirectInstallPayload,
@@ -148,8 +172,9 @@ class OtaTransferDeliveryAgent(context: Context) :
                 socket = band.createRfcommSocketToServiceRecord(SPP_UUID)
                 activeSocket = socket
                 socket.connect()
-                transferListener?.onTransferStatus("Direct Fit3 SPP channel acquired")
+                report(token) { it.onTransferStatus("Direct Fit3 SPP channel acquired") }
                 runTransferStateMachine(
+                    token,
                     socket.inputStream,
                     socket.outputStream,
                     payload.fileName,
@@ -157,28 +182,45 @@ class OtaTransferDeliveryAgent(context: Context) :
                 )
                 transferComplete = true
             } catch (error: Exception) {
-                transferListener?.onTransferFailed(
-                    error.message ?: error.javaClass.simpleName,
-                )
+                report(token) {
+                    it.onTransferFailed(error.message ?: error.javaClass.simpleName)
+                }
             } finally {
                 sendBtClose(peer)
-                SystemClock.sleep(500L)
+                SystemClock.sleep(TEARDOWN_PAUSE_MS)
                 runCatching { socket?.close() }
-                activeSocket = null
-                transferThread = null
-                transferRunning.set(false)
+                // Only if this thread is still the live attempt. A cancelled one unwinds
+                // through half a second of teardown sleep, by which time the next attempt
+                // may already have claimed these fields — and clearing them from here
+                // handed that transfer a null socket and a free `transferRunning`.
+                if (attempt.get() == token) {
+                    activeSocket = null
+                    transferThread = null
+                    transferRunning.set(false)
+                }
                 if (transferComplete) {
                     Handler(Looper.getMainLooper()).postDelayed(
-                        { transferListener?.onTransferComplete(payload) },
-                        1_000L,
+                        { report(token) { listener -> listener.onTransferComplete(payload) } },
+                        COMPLETION_POST_MS,
                     )
                 }
             }
         }
     }
 
+    /**
+     * Abandons the live attempt: the worker, both delayed callbacks and every listener
+     * call still to come.
+     *
+     * It deliberately does not wait for the worker to stop. It is called from `reset()`
+     * on the main thread, and the thread it is abandoning is blocking on RFCOMM with half
+     * a second of teardown sleep after it — so joining would freeze the UI for as long as
+     * the failure the reader is trying to leave. Bumping the token makes an unterminated
+     * worker harmless instead of waiting for one, and a fresh transfer cannot overtake it
+     * anyway: it needs a whole re-discovery first.
+     */
     internal fun cancelTransfer() {
-        transferAborted = true
+        attempt.incrementAndGet()
         runCatching { activeSocket?.close() }
         transferThread?.interrupt()
         activeSocket = null
@@ -187,13 +229,21 @@ class OtaTransferDeliveryAgent(context: Context) :
     }
 
     private fun runTransferStateMachine(
+        token: Int,
         input: InputStream,
         output: OutputStream,
         fileName: String,
         identity: ByteArray,
     ) {
+        // Each handshake reports as soon as it lands. Not for the reader's benefit — for
+        // the watchdog's: the three waits between the channel opening and the first
+        // acknowledged window are 8 s + 8 s + 12 s, and none of them used to say anything,
+        // so a slow-but-working watch could spend 28 s inside a 20 s budget. Every gap in
+        // this method is now shorter than TRANSFER_WATCHDOG_MS, which is what
+        // `TransferWatchdogBudgetTest` holds.
         writeFixed(output, SPP_NEGOTIATION_REQUEST)
-        requireToken(input, COMMAND_TIMEOUT_MS, SPP_NEGOTIATION_RESPONSE)
+        requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_NEGOTIATION_RESPONSE)
+        report(token) { it.onTransferStatus("Fit3 accepted the transfer negotiation") }
 
         writeFixed(
             output,
@@ -202,7 +252,8 @@ class OtaTransferDeliveryAgent(context: Context) :
                 fileSize = identity.size,
             ),
         )
-        requireToken(input, COMMAND_TIMEOUT_MS, SPP_DESCRIPTOR_RESPONSE)
+        requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_DESCRIPTOR_RESPONSE)
+        report(token) { it.onTransferStatus("Fit3 accepted the file descriptor") }
 
         val windowCount = IdentityTransferProtocol.windowCount(identity.size)
         var acknowledgedBytes = 0
@@ -212,6 +263,7 @@ class OtaTransferDeliveryAgent(context: Context) :
                 val windowLength =
                     IdentityTransferProtocol.writeWindow(output, identity, windowIndex)
                 val response = awaitToken(
+                        token,
                         input,
                         WINDOW_TIMEOUT_MS,
                         SPP_WINDOW_ACCEPTED,
@@ -220,17 +272,31 @@ class OtaTransferDeliveryAgent(context: Context) :
                 when {
                     response.contentEquals(SPP_WINDOW_ACCEPTED) -> {
                         acknowledgedBytes += windowLength
-                        transferListener?.onWindowAcknowledged(
-                            acknowledgedBytes,
-                            identity.size,
-                            windowIndex + 1,
-                            windowCount,
-                        )
+                        val sent = acknowledgedBytes
+                        report(token) {
+                            it.onWindowAcknowledged(
+                                sent,
+                                identity.size,
+                                windowIndex + 1,
+                                windowCount,
+                            )
+                        }
                         acknowledged = true
                         break
                     }
 
-                    response.contentEquals(SPP_WINDOW_RETRY) -> Unit
+                    // Reported, where it used to be swallowed. A re-sent window is the one
+                    // stretch of a working transfer that produced no callback at all, so
+                    // the installer's watchdog counted it as silence — and now that a
+                    // fired watchdog abandons the worker, four retries of one window
+                    // (4 × WINDOW_TIMEOUT_MS) would kill a transfer the retry ladder
+                    // exists to rescue. It is also the only way a reader learns the watch
+                    // asked again.
+                    response.contentEquals(SPP_WINDOW_RETRY) -> report(token) {
+                        it.onTransferStatus(
+                            "Fit3 asked for window ${windowIndex + 1} of $windowCount again",
+                        )
+                    }
                 }
             }
             if (!acknowledged) {
@@ -244,25 +310,31 @@ class OtaTransferDeliveryAgent(context: Context) :
         }
 
         writeFixed(output, SPP_RESULT_REQUEST)
-        requireToken(input, RESULT_TIMEOUT_MS, SPP_RESULT_RESPONSE)
-        transferListener?.onTransferStatus("Fit3 verified the complete BIN")
+        requireToken(token, input, RESULT_TIMEOUT_MS, SPP_RESULT_RESPONSE)
+        report(token) { it.onTransferStatus("Fit3 verified the complete BIN") }
 
-        SystemClock.sleep(250L)
+        SystemClock.sleep(RESULT_TO_CLOSE_PAUSE_MS)
         writeFixed(output, SPP_CLOSE_REQUEST)
-        requireToken(input, COMMAND_TIMEOUT_MS, SPP_CLOSE_RESPONSE)
-        transferListener?.onTransferStatus("Fit3 closed the transfer cleanly")
+        requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_CLOSE_RESPONSE)
+        report(token) { it.onTransferStatus("Fit3 closed the transfer cleanly") }
     }
 
-    private fun requireToken(input: InputStream, timeoutMs: Long, expected: ByteArray) {
-        awaitToken(input, timeoutMs, expected)
+    private fun requireToken(
+        token: Int,
+        input: InputStream,
+        timeoutMs: Long,
+        expected: ByteArray,
+    ) {
+        awaitToken(token, input, timeoutMs, expected)
     }
 
     /**
-     * The device-side wiring of [SppResponseWait]. The abort signal is [cancelTransfer]
-     * plus the thread's own interrupt flag: this runs on the transfer thread, not in the
-     * caller's coroutine, so there is no `isActive` to read here.
+     * The device-side wiring of [SppResponseWait]. The abort signal is the attempt
+     * token plus the thread's own interrupt flag: this runs on the transfer thread, not
+     * in the caller's coroutine, so there is no `isActive` to read here.
      */
     private fun awaitToken(
+        token: Int,
         input: InputStream,
         timeoutMs: Long,
         vararg accepted: ByteArray,
@@ -272,7 +344,7 @@ class OtaTransferDeliveryAgent(context: Context) :
         accepted = accepted,
         elapsedMillis = { SystemClock.elapsedRealtime() },
         pause = { millis -> Thread.sleep(millis) },
-        aborted = { transferAborted || Thread.currentThread().isInterrupted },
+        aborted = { attempt.get() != token || Thread.currentThread().isInterrupted },
     )
 
     /**
@@ -375,9 +447,31 @@ class OtaTransferDeliveryAgent(context: Context) :
         private val SPP_CLOSE_REQUEST = "34".toByteArray()
         private val SPP_CLOSE_RESPONSE = "340".toByteArray()
 
-        private const val COMMAND_TIMEOUT_MS = 8_000L
-        private const val WINDOW_TIMEOUT_MS = 12_000L
-        private const val RESULT_TIMEOUT_MS = 15_000L
+        // Internal, not private, because `TransferWatchdogBudgetTest` measures the gaps
+        // between progress reports against `TRANSFER_WATCHDOG_MS`. The arithmetic is the
+        // thing that broke; leaving it as literals scattered through the state machine is
+        // what let it break unnoticed.
+        internal const val COMMAND_TIMEOUT_MS = 8_000L
+        internal const val WINDOW_TIMEOUT_MS = 12_000L
+        internal const val RESULT_TIMEOUT_MS = 15_000L
+
+        /** Between the watch verifying the BIN and being asked to close the channel. */
+        internal const val RESULT_TO_CLOSE_PAUSE_MS = 250L
+
+        /** Socket teardown, after the last thing the watch says. */
+        internal const val TEARDOWN_PAUSE_MS = 500L
+
+        /** How long after teardown the transfer reports itself complete. */
+        internal const val COMPLETION_POST_MS = 1_000L
+
+        // The timeline these budgets form — every stretch of `runTransferStateMachine`
+        // between one report and the next — is `TRANSFER_PROGRESS_GAPS`, in
+        // DirectInstallState.kt. It cannot live here: a non-const `val` in this companion
+        // forces the JVM to load this class, which extends the accessory SDK's `SAAgentV2`,
+        // and its pre-stackmap bytecode fails the verifier before any test runs. The
+        // `const val`s above are inlined at their use sites, which is why they can be read
+        // from a test at all.
+
         private val SPP_UUID: UUID =
             UUID.fromString("db764ac8-4b08-7f25-aafe-59d03c27bae3")
     }

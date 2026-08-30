@@ -20,18 +20,18 @@ published to an app store. See [`NOTICE.md`](NOTICE.md) and [`LICENSE`](LICENSE)
 | | |
 | --- | --- |
 | Application ID | `dev.fitface.studio` |
-| Version | `0.1.2` (code `18`) |
+| Version | `0.1.3` (code `19`) |
 | Android | 9.0 (SDK 28) or newer |
 
 ## What it looks like
 
 | Browse the catalogue | Edit the real layout | Every record, listed |
 | --- | --- | --- |
-| ![The watch-face catalogue, a grid of face previews with search and sort](docs/screenshots/catalogue.png) | ![The canvas with one widget selected, its outline highlighted and nudge controls below](docs/screenshots/canvas.png) | ![The widget list, each row showing the widget itself beside its type and coordinates](docs/screenshots/widgets.png) |
+| <img src="docs/screenshots/catalogue.png" alt="The watch-face catalogue, a grid of face previews with search and sort" width="260"> | <img src="docs/screenshots/canvas.png" alt="The canvas with one widget selected, its outline highlighted and nudge controls below" width="260"> | <img src="docs/screenshots/widgets.png" alt="The widget list, each row showing the widget itself beside its type and coordinates" width="260"> |
 
 | Styles, as pictures | Validate before install | Install over Bluetooth |
 | --- | --- | --- |
-| ![The styles page, each variant shown as a watch-face image](docs/screenshots/styles.png) | ![The validate page: reparsed container, structural checks all passing](docs/screenshots/validate.png) | ![The install page: the face to be sent, and the four-step setup checklist](docs/screenshots/install.png) |
+| <img src="docs/screenshots/styles.png" alt="The styles page, each variant shown as a watch-face image" width="260"> | <img src="docs/screenshots/validate.png" alt="The validate page: reparsed container, structural checks all passing" width="260"> | <img src="docs/screenshots/install.png" alt="The install page: the face to be sent, and the four-step setup checklist" width="260"> |
 
 The rest of the app is in [`docs/screenshots/`](docs/screenshots/): the face sheet
 with its style picker, the inspector, the background replacement page, and the
@@ -123,16 +123,20 @@ the page refuses to go on while anything is missing.
 1. Connect the watch in its companion app.
 2. Grant FitFace Studio Nearby devices access.
 3. Discover the watch-face and OTA peers. This needs the watch **connected**, so
-   the stock plugin's Nearby access has to be **on** for this step.
-4. Let the plugin release the channel, because only one app may hold it. Either
-   disconnect the watch in the companion app, or turn the plugin's Nearby access
-   off — the permission itself can stay granted. Then send.
+   the stock plugin has to be running and holding it for this step.
+4. Let the plugin release the channel, because only one app may hold it, then
+   send. On Android 12 and later that is one switch: turn the plugin's **Nearby
+   devices** access off, and the app picks the change up on its own. Older phones
+   have no such switch, so the plugin has to be frozen instead — the checklist
+   says so where it applies, and
+   [`docs/direct-install.md`](docs/direct-install.md#android-11-and-earlier-freezing-the-plugin)
+   has the walkthrough.
 
 Step 4 is the one people get stuck on: discovery needs the plugin, and the
 transfer needs it to let go. Peer handles stay cached once found, so a second
 install does not repeat the setup, and editing after an install re-arms the send
-button instead of stranding the page. Reconnect the watch when the transfer
-finishes, and restore the plugin's Nearby access if you turned it off.
+button instead of stranding the page. When the transfer finishes, put the plugin
+back the way step 4 had you leave it, then reconnect the watch.
 
 If a send fails, the page offers **Reconnect the watch and discover again**
 beside **Try again**. A cached peer only lives as long as the connection it was

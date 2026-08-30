@@ -1,6 +1,7 @@
 package dev.fitface.studio.core.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -67,20 +68,13 @@ fun AppMenuAction(
             onClick = { expanded = true },
             tint = tint,
         )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            shape = MaterialTheme.shapes.small,
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            // Elevation in this design is a lighter surface and a 1dp border, never a
-            // shadow. Material's own default would put one here.
-            shadowElevation = 0.dp,
-            tonalElevation = 0.dp,
-        ) {
-            MenuEntry(reportLabel, reportTint) { expanded = false; onReportProblem() }
-            MenuEntry(stringResource(R.string.ui_app_menu_about)) { expanded = false; onAbout() }
-            MenuEntry(stringResource(R.string.ui_app_menu_update)) {
+        FitDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            FitMenuEntry(reportLabel, reportTint) { expanded = false; onReportProblem() }
+            FitMenuEntry(stringResource(R.string.ui_app_menu_about)) {
+                expanded = false
+                onAbout()
+            }
+            FitMenuEntry(stringResource(R.string.ui_app_menu_update)) {
                 expanded = false
                 onCheckForUpdate()
             }
@@ -94,8 +88,45 @@ fun AppMenuAction(
  * Each of these opens a dialog, and a popup left standing behind one is the first thing
  * that goes wrong with a construction like this.
  */
+/**
+ * A menu surface in this design: a lighter container and a 1dp border, never a shadow.
+ *
+ * Shared rather than copied because there are two menus now — this bar's, and the one on a
+ * project row — and a second hand-assembled `DropdownMenu` had already drifted: it took
+ * Material's default entry type, `labelLarge`, against this one's `bodyMedium`, so the same
+ * gesture produced two different-looking menus in one app.
+ */
 @Composable
-private fun MenuEntry(label: String, tint: Color? = null, onClick: () -> Unit) {
+fun FitDropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        shape = MaterialTheme.shapes.small,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        // Elevation in this design is a lighter surface and a 1dp border, never a shadow.
+        // Material's own default would put one here.
+        shadowElevation = 0.dp,
+        tonalElevation = 0.dp,
+        content = content,
+    )
+}
+
+/**
+ * One line of a [FitDropdownMenu].
+ *
+ * @param tint overrides the label colour — the crash offer uses it, and so does a
+ *   destructive entry, which takes `colorScheme.error` like every other danger in the app.
+ *
+ * Every caller closes the menu before it runs its callback: these all open a dialog or
+ * navigate, and a popup left standing behind one is the first thing to go wrong here.
+ */
+@Composable
+fun FitMenuEntry(label: String, tint: Color? = null, onClick: () -> Unit) {
     DropdownMenuItem(
         text = {
             Text(

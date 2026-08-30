@@ -49,6 +49,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -165,6 +166,9 @@ fun EditorRoute(
     }
 
     LaunchedEffect(projectId) { viewModel.loadProject(projectId) }
+    // Deleting the open project takes its row, its directory and its session with it, so
+    // there is nothing left for this screen to draw.
+    LaunchedEffect(state.projectDeleted) { if (state.projectDeleted) onBack() }
     // The message is cleared *after* it has been shown, not before. Clearing first
     // changed this effect's key while `showSnackbar` was still suspended, which
     // cancelled it — so every editor failure appeared for one frame and vanished, and
@@ -180,6 +184,21 @@ fun EditorRoute(
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         viewModel.refreshDirectInstallEnvironment()
+    }
+
+    // Show first, clear in a `finally` — the same shape as the error above, for the same
+    // reason: clearing first changes this effect's key mid-`showSnackbar` and cancels it.
+    val duplicated = state.duplicated
+    val duplicatedText = duplicated?.let {
+        stringResource(R.string.editor_project_duplicated, it.name)
+    }
+    LaunchedEffect(duplicated?.id) {
+        if (duplicated == null || duplicatedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(duplicatedText)
+        } finally {
+            viewModel.clearDuplicated(duplicated.id)
+        }
     }
 
     state.diagnosticsReport?.let { report ->
@@ -215,9 +234,12 @@ fun EditorRoute(
         onDiscardImage = viewModel::cancelBackground,
         onApplyImage = viewModel::applyBackground,
         onReset = viewModel::reset,
+        onRename = viewModel::renameProject,
+        onDelete = viewModel::deleteProject,
+        onDuplicate = viewModel::duplicateProject,
         onGrantNearby = {
             val permissions = buildList {
-                if (Build.VERSION.SDK_INT >= 31) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     add(Manifest.permission.BLUETOOTH_CONNECT)
                     add(Manifest.permission.BLUETOOTH_SCAN)
                 }
@@ -302,6 +324,9 @@ private fun EditorScreen(
     onDiscardImage: () -> Unit,
     onApplyImage: () -> Unit,
     onReset: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onDuplicate: () -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -334,6 +359,24 @@ private fun EditorScreen(
     val goBack: () -> Unit = {
         val parent = page.parent
         if (parent == null) onBack() else page = parent
+    }
+    // Removing a widget left the Inspector describing nothing — no name, no rectangle, no
+    // control that did anything — and the back arrow was the only way out. It falls back to
+    // the list the widget was opened from instead.
+    //
+    // Driven by the removal *count* changing, not by "the Inspector has no widget". That
+    // rule reads better and is wrong: `page` is local Compose state and moves in the same
+    // frame as the tap, while the selection comes through `collectAsStateWithLifecycle` a
+    // frame later, so opening a widget from the list would find an Inspector that had not
+    // been told which widget yet and bounce straight back to it. The counter only advances
+    // on a removal that committed, which also leaves a failed one on the page it happened
+    // on, where its message is.
+    var removalsSeen by rememberSaveable { mutableIntStateOf(state.widgetRemovals) }
+    LaunchedEffect(state.widgetRemovals) {
+        if (state.widgetRemovals != removalsSeen) {
+            removalsSeen = state.widgetRemovals
+            if (page == EditorPage.Inspector) page = EditorPage.Widgets
+        }
     }
 
     BackHandler(enabled = page != EditorPage.Canvas) { goBack() }
@@ -398,6 +441,9 @@ private fun EditorScreen(
                         onDiscardImage = onDiscardImage,
                         onApplyImage = onApplyImage,
                         onReset = onReset,
+                        onRename = onRename,
+                        onDelete = onDelete,
+                        onDuplicate = onDuplicate,
                         onGrantNearby = onGrantNearby,
                         onOpenCompanion = onOpenCompanion,
                         onInitializeAndDiscover = onInitializeAndDiscover,
@@ -517,8 +563,11 @@ private fun EditorHeader(
     onCheckForUpdate: () -> Unit,
 ) {
     val title = when (page) {
-        EditorPage.Canvas -> snapshot.faceName
-            ?: stringResource(R.string.editor_page_face_fallback, snapshot.faceId)
+        // The project's name, not the face's. Two projects on one face carry the same
+        // `faceName`, so titling the editor with it left no way to tell from this screen
+        // which of them was open — and the subtitle below is the face and style, which are
+        // identical too.
+        EditorPage.Canvas -> snapshot.projectName
         EditorPage.Widgets -> stringResource(R.string.editor_page_widgets)
         EditorPage.Inspector -> stringResource(
             R.string.editor_page_widget_number,
@@ -686,6 +735,9 @@ private fun EditorPageContent(
     onDiscardImage: () -> Unit,
     onApplyImage: () -> Unit,
     onReset: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onDuplicate: () -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -734,7 +786,10 @@ private fun EditorPageContent(
             onOpenPluginSettings, onConfirmPluginReleased, onRediscover, onSendBin,
             onResetDelivery, { onNavigate(EditorPage.Canvas) }, modifier,
         )
-        EditorPage.Project -> ProjectWorkspace(snapshot, onReset, modifier)
+        EditorPage.Project ->
+            ProjectWorkspace(
+                snapshot, !state.isWorking, onReset, onRename, onDelete, onDuplicate, modifier,
+            )
     }
 }
 
@@ -2450,13 +2505,60 @@ private fun ValidationCheck(label: String, ok: Boolean) {
 @Composable
 private fun ProjectWorkspace(
     snapshot: EditorSnapshot,
+    enabled: Boolean,
     onReset: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
+    onDuplicate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var renaming by rememberSaveable { mutableStateOf(false) }
+    var deleting by rememberSaveable { mutableStateOf(false) }
+    if (renaming) {
+        RenameProjectDialog(
+            current = snapshot.projectName,
+            onDismiss = { renaming = false },
+            onConfirm = { renaming = false; onRename(it) },
+        )
+    }
+    if (deleting) {
+        DeleteProjectDialog(
+            name = snapshot.projectName,
+            onDismiss = { deleting = false },
+            onConfirm = { deleting = false; onDelete() },
+        )
+    }
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // The name is the project's own, not the face's, and this is where it is changed.
+        // Two projects on one face read identically everywhere else in the editor.
+        Column(
+            Modifier.fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                .padding(14.dp),
+        ) {
+            MicroLabel(stringResource(R.string.editor_project_name_heading))
+            Text(
+                snapshot.projectName,
+                Modifier.fillMaxWidth().padding(top = 9.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            // A labelled button rather than a pencil glyph. This page has the width for a
+            // word, and the glyphs that would fit — U+270E and its neighbours — are exactly
+            // the class that falls through to the emoji font on some builds, which would
+            // make it the only colour character in the app.
+            FitButton(
+                stringResource(R.string.editor_project_rename),
+                { renaming = true },
+                Modifier.fillMaxWidth().padding(top = 12.dp),
+                style = FitButtonStyle.Secondary,
+            )
+        }
         Column(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
@@ -2478,13 +2580,44 @@ private fun ProjectWorkspace(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // Non-destructive, so it sits above the two that are. Duplicating leaves the editor
+        // on the original: switching out from under an edit in progress would be worse than
+        // having to go and find the copy.
+        FitButton(
+            stringResource(R.string.editor_duplicate_project),
+            onDuplicate,
+            Modifier.fillMaxWidth(),
+            enabled,
+            style = FitButtonStyle.Secondary,
+        )
+        Text(
+            stringResource(R.string.editor_duplicate_project_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         FitButton(
             stringResource(R.string.editor_reset_edits),
-            onReset, Modifier.fillMaxWidth(), snapshot.isDirty,
+            onReset, Modifier.fillMaxWidth(), enabled && snapshot.isDirty,
             style = FitButtonStyle.Danger,
         )
         Text(
             stringResource(R.string.editor_reset_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Deleting from here as well as from the projects list, because this is where you
+        // are when you decide a project is not worth keeping — and with more than one
+        // project per face, going back to find the right row is where you delete the wrong
+        // one.
+        FitButton(
+            stringResource(R.string.editor_delete_project),
+            { deleting = true },
+            Modifier.fillMaxWidth(),
+            enabled,
+            style = FitButtonStyle.Danger,
+        )
+        Text(
+            stringResource(R.string.editor_delete_project_note),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2855,22 +2988,28 @@ private fun InstallWorkspace(
         run {
             // A rewound setup shows the checklist, which says what to do next but not
             // what went wrong; the transfer panel renders its own failure banner.
-            if (!delivery.setupComplete) {
-                delivery.failure?.let { failure ->
-                    StatusBanner(
-                        FitStatus.Fail,
-                        failure,
-                        label = stringResource(R.string.editor_install_stopped_label),
-                    )
-                }
+            val stopped = if (delivery.setupComplete) null else delivery.failure
+            stopped?.let { failure ->
+                StatusBanner(
+                    FitStatus.Fail,
+                    failure,
+                    label = stringResource(R.string.editor_install_stopped_label),
+                )
             }
-            // The banner above already says this in full; showing both is noise.
-            Text(
-                delivery.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            )
+            // The banner above already says this in full; showing both is noise — and
+            // it was, on every terminal failure: `DirectInstallState.failed` writes the
+            // same string to `failure` and to `message`, so an agent that would not
+            // initialize printed itself twice, once boxed and once bare underneath. The
+            // two fields differ only after a rewind, where `failure` is what went wrong
+            // and `message` is what to do next, and there both are worth showing.
+            if (delivery.message != stopped) {
+                Text(
+                    delivery.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
         }
 
         if (delivery.setupComplete) {
@@ -2991,6 +3130,21 @@ private fun DeviceStatusRow(state: DirectInstallState, snapshot: EditorSnapshot)
     }
 }
 
+/**
+ * Whether this phone has a Nearby devices switch for the stock plugin at all.
+ *
+ * Android 12 is where `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` became runtime permissions, so
+ * below it there is no per-app switch to revoke and `Fit3DirectInstaller.pluginNearbyGranted`
+ * is always null — step 4 can only ever be the user's acknowledgement there. Every string
+ * that names that switch is therefore wrong on an older phone, and every string that names
+ * the older phones' way round it — a freezing tool, ADB — is noise on a newer one, which is
+ * how a reader who does not know their own Android version ends up following instructions
+ * meant for somebody else's. So the split is made once, here, and both halves are gated on
+ * it. See `docs/direct-install.md`.
+ */
+private val hasPluginNearbySwitch: Boolean
+    get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
 @Composable
 private fun SetupChecklist(
     state: DirectInstallState,
@@ -3001,6 +3155,7 @@ private fun SetupChecklist(
     onOpenPluginSettings: () -> Unit,
     onConfirmPluginReleased: () -> Unit,
 ) {
+    val nearbySwitch = hasPluginNearbySwitch
     val steps = listOf(
         SetupRow(
             step = SetupStep.COMPANION_PRESENT,
@@ -3034,16 +3189,31 @@ private fun SetupChecklist(
         SetupRow(
             step = SetupStep.PEERS_DISCOVERED,
             title = stringResource(R.string.editor_setup_step3_title),
-            why = stringResource(R.string.editor_setup_step3_why),
+            why = stringResource(
+                if (nearbySwitch) {
+                    R.string.editor_setup_step3_why
+                } else {
+                    R.string.editor_setup_step3_why_legacy
+                },
+            ),
             done = stringResource(R.string.editor_setup_step3_done),
             action = onDiscover,
         ),
         SetupRow(
             step = SetupStep.PLUGIN_RELEASED,
             title = stringResource(R.string.editor_setup_step4_title),
-            why = stringResource(R.string.editor_setup_step4_why),
+            why = stringResource(
+                if (nearbySwitch) {
+                    R.string.editor_setup_step4_why
+                } else {
+                    R.string.editor_setup_step4_why_legacy
+                },
+            ),
             done = stringResource(R.string.editor_setup_step4_done),
             action = onOpenPluginSettings,
+            // Amber because this is the one step whose way through is not on the phone:
+            // it needs a tool the reader has to go and set up first.
+            warning = !nearbySwitch,
         ),
     )
     val completed = steps.count { state.isStepDone(it.step) }
@@ -3051,7 +3221,13 @@ private fun SetupChecklist(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StatusBanner(
             FitStatus.Warning,
-            stringResource(R.string.editor_setup_banner),
+            stringResource(
+                if (nearbySwitch) {
+                    R.string.editor_setup_banner
+                } else {
+                    R.string.editor_setup_banner_legacy
+                },
+            ),
             label = stringResource(R.string.editor_setup_label),
         )
         Column(
@@ -3109,7 +3285,16 @@ private fun SetupChecklist(
                     style = FitButtonStyle.Secondary,
                 )
                 FitButton(
-                    stringResource(R.string.editor_setup_plugin_access),
+                    // Below Android 12 the same screen has no Nearby devices entry to
+                    // reach, so calling it "Plugin access" sends the reader looking for
+                    // a switch that is not there.
+                    stringResource(
+                        if (nearbySwitch) {
+                            R.string.editor_setup_plugin_access
+                        } else {
+                            R.string.editor_setup_plugin_access_legacy
+                        },
+                    ),
                     onOpenPluginSettings,
                     Modifier.weight(1f),
                     enabled && !busy,
@@ -3126,7 +3311,13 @@ private fun SetupChecklist(
                 style = FitButtonStyle.Secondary,
             )
             Text(
-                stringResource(R.string.editor_setup_confirm_note),
+                stringResource(
+                    if (nearbySwitch) {
+                        R.string.editor_setup_confirm_note
+                    } else {
+                        R.string.editor_setup_confirm_note_legacy
+                    },
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.fitText.secondary,
             )
@@ -3140,6 +3331,7 @@ private data class SetupRow(
     val why: String,
     val done: String,
     val action: () -> Unit,
+    val warning: Boolean = false,
 )
 
 @Composable
@@ -3155,6 +3347,7 @@ private fun SetupStepRow(
         Modifier.fillMaxWidth()
             .background(
                 if (done) MaterialTheme.colorScheme.primary.copy(alpha = .05f)
+                else if (row.warning) MaterialTheme.fitColors.warning.copy(alpha = .07f)
                 else MaterialTheme.colorScheme.surfaceContainerLow,
             )
             .clickable(enabled = enabled && !done, onClick = row.action)
@@ -3208,6 +3401,7 @@ private fun SetupStepRow(
                 modifier = Modifier.padding(top = 3.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = if (done) MaterialTheme.colorScheme.primary
+                else if (row.warning) MaterialTheme.fitColors.warning
                 else MaterialTheme.fitText.secondary,
             )
         }
@@ -3269,7 +3463,13 @@ private fun TransferPanel(
             state.phase == DirectInstallPhase.COMPLETE -> {
                 StatusBanner(
                     FitStatus.Pass,
-                    stringResource(R.string.editor_transfer_done),
+                    stringResource(
+                        if (hasPluginNearbySwitch) {
+                            R.string.editor_transfer_done
+                        } else {
+                            R.string.editor_transfer_done_legacy
+                        },
+                    ),
                     label = stringResource(R.string.editor_transfer_done_label),
                 )
                 // Sending the same bytes again is legitimate — a watch can reject a
@@ -3677,4 +3877,81 @@ private fun fittedRect(
     val centerX = targetWidth / 2f + placement.offsetX * targetWidth
     val centerY = targetHeight / 2f + placement.offsetY * targetHeight
     return Offset(centerX - width / 2f, centerY - height / 2f) to Size(width, height)
+}
+
+/**
+ * Renames the open project.
+ *
+ * A second copy of the library's dialog rather than a shared one: the two modules have no
+ * component layer between them, and one small `AlertDialog` in each is less than a new
+ * shared surface would cost. Both scroll their text slot for the same reason — an
+ * `AlertDialog` caps its own height and clips rather than scrolls in landscape.
+ */
+@Composable
+private fun RenameProjectDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var name by rememberSaveable(current) { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.editor_project_rename_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.editor_project_name_heading)) },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) {
+                Text(stringResource(R.string.editor_project_rename))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
+        },
+    )
+}
+
+/**
+ * Confirms deleting the open project, from inside it.
+ *
+ * The same guarantee the library's copy gives: the text slot scrolls, because an
+ * `AlertDialog` caps its own height and clips rather than scrolls in landscape.
+ */
+@Composable
+private fun DeleteProjectDialog(
+    name: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.editor_delete_project_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    stringResource(R.string.editor_delete_project_message, name),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    stringResource(R.string.editor_delete_project_confirm),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
+        },
+    )
 }

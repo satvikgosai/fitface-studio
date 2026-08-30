@@ -314,7 +314,12 @@ The four that catch people fastest:
   first); and cancelling back to the offer re-reads the install permission instead of
   defaulting it, or it quietly tells someone installs are allowed when they are not.
   Verified on hardware the only way it can be: watch the `.tmp` grow, cancel, and confirm
-  it is gone and nothing more arrives.
+  it is gone and nothing more arrives. The **face-package** download had none of this and
+  now does — the Job check, the `Call.cancel()`, the `CancellationException` rethrow — plus
+  the `runCatching` in `LibraryViewModel` that caught the cancellation and reported it as a
+  failed download into a screen that was already going away. Nothing user-visible hangs on
+  it, since that download has no cancel button, but two paths reading differently is how
+  the next one gets written wrong.
 * **The updater owns its own `CoroutineScope`, and the install permission has to be
   re-read.** The APK is 36 MiB and the menu is in both bars, so a download begun in the
   library has to survive opening a face; in a `viewModelScope` it dies with the nav entry.
@@ -430,10 +435,112 @@ The four that catch people fastest:
   rather than a flag so a later edit marks it stale on its own.
   `replacePreviewThumbnail` returns null — not an exception — when the stored
   raster already matches.
+* **An abandoned delivery worker is not a stopped one, and it used to still be able to
+  speak.** `armWatchdog` changed the state and nothing else, so the transfer it had just
+  declared dead went on transferring — and every delivery callback wrote `phase`
+  unconditionally. Three wrong answers followed, all reachable on arithmetic rather than
+  bad luck, since `MAX_WINDOW_RETRIES` is 3 over a `0..3` loop and one window can spend
+  four `WINDOW_TIMEOUT_MS` waits — 48 s against a 20 s watchdog. An acknowledged window
+  dragged `FAILED` back to `TRANSFERRING` and the transfer then reported success; a late
+  accessory `onSent` turned an install timeout into `COMPLETE`, which is a face the watch
+  never got reported as installed; and tapping **Reconnect the watch and discover again**
+  cancelled the transfer, which made the abandoned worker throw within milliseconds — so
+  its failure landed just *after* the rewind and put the page straight back into `FAILED`,
+  leaving the whole four-step setup as the only way out of a timed-out transfer. Two
+  mechanisms now, because neither covers the other's half: an **attempt token** in each
+  agent — which replaced a shared `transferAborted` flag that the *next* attempt cleared,
+  so an abandoned worker quietly un-aborted itself — and `DeliveryProgress.accepts` in the
+  installer, tested inside the atomic update so a worker thread cannot read one phase and
+  write against another. `abandonInFlight()` is what a timeout, a rewind and a reset all
+  call. Cancelling deliberately does **not** join the worker: it is blocking on RFCOMM with
+  half a second of teardown sleep behind it and `reset()` runs on the main thread, so
+  joining would freeze the UI for as long as the failure being escaped. The token is what
+  makes an unterminated worker harmless instead of waiting for one.
+* **A watchdog that stops the work has to be re-armed by every wait, not just by an
+  acknowledged window.** Making the transfer timeout real — `abandonInFlight()` from
+  `armWatchdog` — turned a 20 s budget that had only ever mislabelled a phase into one that
+  kills the transfer, and three stretches of a *healthy* transfer are longer than it. The
+  opening handshake is 8 s + 8 s + 12 s with nothing reported in between; one window may be
+  re-sent four times at 12 s each and an `SPP_WINDOW_RETRY` answer reported nothing at all;
+  and the tail after the last window is 15 s of BIN verification, a 250 ms pause, an 8 s
+  close handshake, 500 ms of teardown and a 1 s completion post — 24.75 s. Crossing the line
+  now bumps the attempt token, which discards the queued `onTransferComplete`, so the install
+  command is never sent and an install the watch **accepted and verified** reports as a
+  timeout. Every wait ends in a `report` now and `onTransferStatus` re-arms; the budget lives
+  in `TRANSFER_PROGRESS_GAPS` with `TransferWatchdogBudgetTest` on it. Do not "simplify" that
+  by raising the constant instead: `SppResponseWait` already bounds every individual wait, so
+  what this watchdog guards is the gaps between them, and stretching it to 48 s only delays
+  noticing a watch that really has gone. Two corollaries. `transferProgressRearmsWatchdog`
+  excludes `VERIFYING` — a status is *accepted* there, but `armWatchdog` replaces whatever is
+  armed, so arming a TRANSFERRING watchdog in VERIFYING is a disarm. And the gap list cannot
+  live in `OtaTransferDeliveryAgent`'s companion: a non-`const` `val` there forces the JVM to
+  load that class, which extends the accessory SDK's `SAAgentV2`, and its pre-stackmap
+  bytecode fails the verifier — so the test dies of `VerifyError` before asserting anything.
+  `const val`s are inlined at their use sites, which is the only reason the timeouts can be
+  read from a test at all.
+* **Creating a project is two writes, and the second one is where it used to be abandoned.**
+  The row goes in first because its id names the directory, so unlike `persistEdited` this
+  cannot be one write — and a row whose `localApkPath` is null is one `openProject` can only
+  refuse, with "This project's package is missing." It used to heal itself: `openPackage`
+  looked the row up by `sourceKey` and reused it. It always starts a new project now, so a
+  half-written row would sit in the list unopenable while every retry added a numbered
+  sibling beside it. `NonCancellable` closes the cancellation window — the second `insert` is
+  the only suspension point between the two writes, and backing out of the library while an
+  open finished landed exactly there — and the `catch` deletes the row for a write that
+  genuinely fails. Delete through **`projectDao.deleteById`, never `deleteProject`**: that
+  takes `mutex`, which the block already holds and which is not reentrant.
+* **A row that sets its own `contentDescription` says only what that string says.** The face
+  sheet's project rows replace the label a screen reader would have assembled from their own
+  text, so the OUTDATED badge was drawn and never announced — and it is the only thing
+  telling two projects on one face apart. The grid's cards already carried a second string
+  for this (`library_face_card_a11y_not_editable`); the sheet's rows now do too.
+* **Only `1007` ends catalogue pagination.** The follow-up-page branch accepted *every*
+  non-zero `resultCode` as "No Items" — and a null one too, since a missing or unparseable
+  element also fails `!= 0`. So a locale rejection or a server error on page two read as a
+  clean end of list: the faces gathered so far were written to `cache.writeCatalog()` as a
+  successful refresh and served for the full seven-day TTL, with no `CatalogRejected`
+  escaping for `CatalogRetry` or the stale-cache fallback to act on. This is the normal
+  path, not a corner of it — `PageSize` is 100 and the catalogue is longer than that, so
+  page two is fetched on every cold refresh.
+* **The database pointer is written first, and the container second.** `persistEdited` did
+  it the other way — `edited.bin`, then `session.json`, then the row — and the row is the
+  only one of the three behind a cancellable suspension. A commit that threw or was
+  cancelled at the DAO left the new container on disk while `commit()` rolled only memory
+  back, and an already-edited project's row names that same pathname, so reopening it
+  loaded the edit the app had just reported as failed. Row-first makes every failure land
+  consistent instead, with no compensation machinery, because `writeAtomically` leaves the
+  previous file intact when it throws and `loadSession` reads a path that is not a file as
+  no edit at all. It also closes the cancellation window outright rather than compensating
+  for it: past the DAO there is nothing left but blocking I/O. `EditPersistenceTest` pins
+  it — and fails against the old order, which is the only reason to believe it. The other
+  half of the same bug: `persistSessionState` swallowed every write failure in a bare
+  `runCatching`, so the container and the row could commit a removal while `session.json`
+  stayed stale, and the widget came back from the next launch with no way to restore it and
+  nothing reported. Failures propagate now.
+* **A dynamic receiver is exported below API 33, so the action string has to be the
+  secret.** `RECEIVER_NOT_EXPORTED` arrived in Tiramisu; before it a dynamic receiver takes
+  a matching broadcast from any app on the phone, and `UpdateInstaller`'s action was a
+  constant sitting in the APK. `minSdk` is 28, so on API 28–32 any installed app could
+  report an install success the package manager never gave while an update was running —
+  or send `STATUS_PENDING_USER_ACTION` carrying an `Intent` of its own, which `AppMenuHost`
+  then launched as though it were Android's install confirmation. The action carries a
+  per-install `UUID` now and `awaitOutcome` checks the session id the genuine
+  `PendingIntent` has always carried and nothing ever read. A receiver permission is **not**
+  an option here: the sender is the package manager running as the system, and it holds no
+  permission this app could define.
 * **Discovery needs the plugin's channel; the transfer needs it released.** Those
   are opposite requirements in that order, which is the thing users get stuck on.
   Discovery without the plugin connected must land in the recoverable
-  `NEEDS_WATCH_CONNECTION`, never in `FAILED`.
+  `NEEDS_WATCH_CONNECTION`, never in `FAILED`. **And how the plugin lets go depends on
+  the phone**: `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` became runtime permissions in Android
+  12, so below API 31 there is no per-app switch, `pluginNearbyGranted` is null on every
+  such phone, and step 4 can only ever be the user's acknowledgement. Both halves are
+  gated in one place each — `hasPluginNearbySwitch` in `EditorScreen.kt`,
+  `Fit3DirectInstaller.restorePlugin` for the state messages — and **nothing else may
+  name a Nearby switch, a freezing tool or `adb` in user-facing text**: a reader who does
+  not know their own Android version cannot pick the half that applies to them. The one
+  route that used to serve both, disconnecting the watch in the companion app, does not
+  free the channel — it and a manual force stop were both tried on hardware.
 * **What is installed does not decide whether the channel opens — discovery does.** The
   Install page used to AND three package names and replace the whole checklist with a dead
   end if any were absent, and every part of that was wrong. **The companion app has no
@@ -543,6 +650,127 @@ The four that catch people fastest:
   `rememberUpdatedState` — `latestSnapshot`, `latestSelectedGlobalIndex`, `latestEnabled`.
   Adding `snapshot` to the keys is **not** the fix: that restarts the detector mid-gesture
   and cancels the drag in progress.
+* **Both library pages lay their controls out with one composable and one set of insets.**
+  Assembled twice, they had already drifted: the catalogue inset its grid by 16dp and the
+  projects list by 20dp, with 2dp between their top paddings, so the search field and every
+  sort chip stepped sideways and up when you switched tabs. `LibraryPageControls` and
+  `LibraryPageInsets` make that impossible rather than merely fixed.
+* **Both labels of a sort direction pair are the same number of characters, and that is
+  load-bearing.** `labelMedium` is `FontFamily.Monospace`, so equal length is equal width —
+  which is what stops the selected chip resizing when it is reversed and shoving every chip
+  after it sideways under the finger that just tapped it. The two pages also share one set
+  of labels, because wording the same chip differently moved the whole row on a tab switch.
+  `SortChipLayoutTest` measures the *neighbours* of the reversed chip, not the chip itself:
+  the selected one is first in the row, so its own left edge cannot move whatever it does,
+  and an assertion on it passes while the bug is present.
+* **The editor leaves the Inspector on a removal *count*, never on "no widget is selected".**
+  The second rule reads better and is wrong: `page` is local Compose state and moves in the
+  same frame as the tap, while the selection arrives through `collectAsStateWithLifecycle` a
+  frame later — so opening a widget from the list would find an Inspector that had not been
+  told which widget yet and bounce straight back to the list. The counter only advances on a
+  removal that committed, which also leaves a *failed* removal on the page it happened on,
+  where its message is.
+* **A project row is nearly copyable, and the two fields that are not are what make a
+  duplicate independent.** `localApkPath` and `editedBinPath` are absolute paths into the
+  project's *own* directory. A duplicate that kept them reads the original's edits, and
+  stops opening at all the moment the original is deleted — and neither symptom appears
+  until after the copy has been made and named. `duplicateProject` clears both on the copy
+  and rewrites them once the new id names a directory. `session.json` and `previews/` are
+  found by convention rather than by a column, so they are copied by name; the session file
+  is not decoration, it holds the removed-widget records, and a copy without it shows a
+  widget missing with nothing offering to put it back. `ProjectDuplicationTest` holds all of
+  it, and the assertions that catch a shared path are the ones about editing the *original*
+  and deleting it — editing the copy writes to its own directory either way, because
+  `persistEdited` derives the path from the id rather than from the row.
+* **`ProjectNaming.defaultName` numbers from the stem, not from whatever it was handed.**
+  Downloading only ever passes a face's own name, so a base already ending in a counter
+  never came up until duplication started passing an existing *project* name: copying
+  "Aurora 2" produced "Aurora 2 2" and copying that "Aurora 2 3", a second series running
+  beside the first. Only a base that is already taken is re-stemmed — duplicating "Aurora 2"
+  onto a face with no "Aurora 2" keeps the name rather than promoting the copy to "Aurora".
+* **The database version numbers start at 4 and can never be renumbered.** `v0.1.0`, the
+  first public release, already shipped at version 4, so schemas 1–3 exist on no device and
+  renumbering 4 to 1 looks free. It is the opposite: every install holds
+  `PRAGMA user_version = 4`, a build declaring a lower number opens that as a **downgrade**,
+  and the builder answers a downgrade with
+  `fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)` — every saved project on
+  every phone, gone on first launch. The reasoning is kept on `FitFaceDatabase` itself.
+* **`openPackage` always creates a project; resuming one goes through `openProject`.** It
+  used to look the package's `sourceKey` up first and silently re-enter whatever it found,
+  which is what limited a face to one project and what made **Download & edit** open work
+  already in progress while promising a download that never happened. Schema 4 pinned that
+  with a UNIQUE index on `sourceUri`; `Migration4To5` drops it, and `findBySourceUri` is
+  gone from the DAO on purpose — leaving it is an invitation to reinstate one project per
+  face. The identity key is unchanged and still `fit3-catalog://<productId>/<versionCode>/<styleId>`,
+  now also stored split across `productId`, `packageVersionCode` and `styleId` so nothing
+  has to parse a string to compare it.
+* **A `sourceUri` may not parse, and NULL is the answer.** Schema 1 rows came from the file
+  picker and hold a `content://` document URI. `FacePackage.parseSourceKey` returns null for
+  those and the schema 5 backfill leaves their three columns NULL — a migration that threw
+  would strand the database on version 4 for good and the app would not open at all. NULL
+  must read as "say nothing": `ProjectSummary.isOutdated` is false for an unknown version,
+  never true, or a project that is already current gets badged and sent to re-download.
+* **A project's name is stored, never derived.** `faceName` and `displayName` are the
+  *face's* names and read identically on every project started from it, which is what made
+  two projects on one face impossible to tell apart — same title, same face line, same
+  vendor thumbnail, and they traded places on every open because the list sorted on
+  `importedAtEpochMillis`, which `openProject` bumps. `projectName` is written once by
+  `ProjectNaming.defaultName` against the face's other projects and thereafter only by a
+  rename; nothing derived may overwrite it, or the next open would undo the rename. Sorting
+  moved to `updatedAtEpochMillis`, which only a commit touches.
+* **The face sheet's project list is a plain `Column`, never a `LazyColumn`.** That region
+  is already inside a `verticalScroll`, and nesting a vertical lazy list in one throws at
+  measure time. The `LazyRow` of style thumbnails beside it is fine because it scrolls the
+  other way.
+* **"Update" starts a *new* project on the newer version and leaves the old one alone.** An
+  edit cannot be carried across a version change — the container may have changed shape — so
+  `UPDATE` and `NEW_PROJECT` run exactly the same code and differ only in what the button
+  says. That wording is the whole feature: `downloadPackage` always fetches
+  `face.versionCode`, which *is* the newest, so the old button was already doing the right
+  thing while describing it wrong.
+* **A caption that promises no download has to check, not infer.** "Already on your device"
+  was first derived from the projects on the face, which is nearly always right and wrong
+  exactly when it matters: `PackageCache.readPackage` deletes a package it cannot read, so a
+  project can still record a version whose bytes are gone. It reads `PackageCache.hasPackage`
+  now — a file check, not a 32 MiB read. The same run is why there is a `FaceAction.OPENING`:
+  "Downloading…" over a caption saying nothing would be downloaded is the same dishonesty
+  the screen was being fixed for.
+* **The watch keeps one face per slot, and no code can change that.**
+  `DirectInstallPayload` requires `fileName == "SM-R390_<faceId>_256x402.bin"` and a single
+  faceId protocol byte, so two projects on one face replace each other on the wrist however
+  separate they are on the phone. The Projects page says so once, above the list, when any
+  two projects share a face. Do not try to fix it in code; it is firmware.
+* **Reverse the comparator, never the sorted list — and reverse only the primary key.**
+  `Comparator.reversed()` flips the tiebreak with it, so faces sharing a name swapped places
+  for a reason nothing on screen explains. Every sort is
+  `compareBy(primary).maybeReversed(reversed).thenBy(stable)`, with the tiebreak outside the
+  reversal. `CatalogSort.RECENT` reversed genuinely reverses the list: the store already
+  serves newest first, so treating it as a no-op in both directions leaves the chip inert.
+  The labels are **not** on the enums — `:core:model` has no resources, and a reversible sort
+  needs two labels per option in the reader's language.
+* **A row that scrolls sideways still has to fit, and a refused tap still has to look
+  refused.** Two halves of the same complaint, both in the library. The sort row is a
+  `horizontalScroll`, so "Face number ↑" overflowing it threw nothing and clipped nothing
+  visibly — it just put the last chip past the right edge of a 320dp phone with the arrow,
+  the half that says which way the list is sorted, in the part that had scrolled out of
+  sight. 288dp is what `LibraryPageInsets` leaves there and eight characters is what a chip
+  label gets; `LibrarySortRow` has the arithmetic and `SortChipLayoutTest` holds the bound in
+  characters rather than pixels, because `labelMedium` is monospace and Robolectric's metrics
+  are not the device's. The other half: `openProject` reads a 30-odd MiB package and parses a
+  container, which is seconds, and every guard around it was already correct — the rows and
+  the sheet's button refused every extra tap. Nothing said so. `Modifier.clickable(enabled =
+  false)` draws no ripple and changes no colour, so a refused tap and a tap that missed are
+  the same event to the person making it, and they went on tapping the row and then its
+  neighbours. `LibraryUiState.openingProjectId` carries an identity rather than a flag for
+  exactly this: the row that was tapped keeps full opacity and shows a spinner in place of its
+  chevron, and every other row fades. Three corollaries. The spinner is a few dp wider than
+  the `›`, and reserving the wider of the two for both states costs every row's title column
+  those dp permanently to spare one row a wobble that lasts as long as the open — so it is not
+  reserved. `downloadSelectedFace` refuses on `isOpeningProject` and **not** on `isWorking`,
+  since a catalogue refresh must not close the button any more than it closes the sheet. And
+  the grid's cards were still `!isWorking` while `canSelectFace`'s own KDoc named them as its
+  caller — the fix had been applied to the sort chips beside them and missed the cards, so a
+  tap in the cache-painted window of every launch did nothing at all.
 * **A drag accumulates the finger's position, never the clamped one.** Folding
   `constrainDragCoordinate` into the running total made a widget stick: pushed past an
   edge and brought back, it resumed from the edge instead of from under the finger, so it
@@ -565,6 +793,13 @@ is the only path to the watch.** Nothing may route around it.
   timeout recovery is the one that is not. What a timeout *means* is now pinned in
   `TimeoutRecoveryTest` — the decision was lifted out of `armWatchdog` into a pure
   function so it could be — but no watch has yet been made to time out on purpose.
+  **The other half of that gap is what a timeout must *not* do.** Now that it stops the
+  worker, its budget has to cover every wait the protocol allows, and
+  `TransferWatchdogBudgetTest` can only check the arithmetic: whether the state machine
+  really reports after each wait is unassertable, because `OtaTransferDeliveryAgent`
+  extends the accessory SDK's `SAAgentV2` and cannot be instantiated in a JVM test. So
+  `TRANSFER_PROGRESS_GAPS` is maintained by hand, and a slow-but-healthy watch — the case
+  that turns an unreported wait into a lost install — has never been staged either.
 * No `androidTest` source set; the Room migration test runs under Robolectric.
   `:feature:editor` deliberately does **not** use Robolectric — it depends on
   `:core:delivery`, whose merged manifest declares a receiver from the accessory SDK JAR,

@@ -19,6 +19,7 @@ import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StructuralEdit
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
+import dev.fitface.studio.core.model.DuplicatedProject
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.EditorSnapshot
@@ -27,6 +28,7 @@ import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.format.Fit3NoContainerException
 import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.PreviewFrame
+import dev.fitface.studio.core.model.ProjectNaming
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.ReplacementImage
@@ -42,6 +44,7 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -82,18 +85,25 @@ class WatchFaceRepositoryImpl @Inject constructor(
         context.editorPreferences.edit { it[ImageFitKey] = value.name }
     }
 
+    /**
+     * Starts a **new** project on a downloaded package, always.
+     *
+     * It used to look the package's `sourceKey` up first and re-enter the project it found,
+     * which is what limited a face to one project and what made "Download & edit" open work
+     * that was already in progress without saying so. Continuing an existing project is
+     * [openProject]'s job, and the face sheet lists them so there is something to tap.
+     */
     override suspend fun openPackage(
         download: FacePackage,
     ): EditorSnapshot = withContext(Dispatchers.IO) {
         mutex.withLock {
             val apkBytes = download.copyBytes()
-            val existing = projectDao.findBySourceUri(download.sourceKey)
             val desiredStyle = "style${download.selectedStyleId}.bin"
             val loaded = loadSession(
                 apkBytes = apkBytes,
                 fallbackName = download.displayName,
-                projectId = existing?.id ?: 0,
-                editedBinPath = existing?.editedBinPath,
+                projectId = 0,
+                editedBinPath = null,
                 selectedStyle = desiredStyle,
             )
             if (loaded.apk.faceId != download.expectedFaceId) {
@@ -103,28 +113,66 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 )
             }
             val now = System.currentTimeMillis()
+            // Named against the face's other projects, so the second one is "Aurora 2" and
+            // not a second row reading exactly like the first. The face's own names are
+            // identical across every project started on it, which is why the name is stored
+            // rather than derived on the way to the screen.
+            val siblings = projectDao.findByFaceId(loaded.apk.faceId)
             val project = ProjectEntity(
-                id = existing?.id ?: 0,
+                id = 0,
                 displayName = loaded.sourceName,
                 sourceUri = download.sourceKey,
                 faceId = loaded.apk.faceId,
                 faceName = loaded.apk.faceName,
                 importedAtEpochMillis = now,
-                localApkPath = existing?.localApkPath,
-                editedBinPath = existing?.editedBinPath,
+                localApkPath = null,
+                editedBinPath = null,
                 selectedStyle = desiredStyle,
+                projectName = ProjectNaming.defaultName(
+                    base = loaded.apk.faceName?.takeIf(String::isNotBlank) ?: loaded.sourceName,
+                    taken = siblings.map(ProjectEntity::resolvedName),
+                ),
+                productId = download.source?.productId,
+                packageVersionCode = download.versionCode,
+                styleId = download.selectedStyleId,
+                updatedAtEpochMillis = now,
             )
             val projectId = projectDao.insert(project)
-            val projectDirectory = projectDirectory(projectId).apply { mkdirs() }
-            val localApk = File(projectDirectory, "source.apk")
-            writeAtomically(localApk, apkBytes)
-            projectDao.insert(
-                project.copy(
-                    id = projectId,
-                    localApkPath = localApk.absolutePath,
-                ),
-            )
+            // The row goes in first because the id is what names the directory, so unlike
+            // [persistEdited] this cannot be one write — but it can be one commit.
+            //
+            // `NonCancellable` closes the cancellation window rather than compensating for
+            // it: the only suspension point between the two writes is the second `insert`,
+            // and backing out of the library while an open finished used to be able to land
+            // exactly there. The catch is for a write that genuinely fails — a full disk —
+            // because a row naming no package is one `openProject` can only ever refuse,
+            // with "This project's package is missing. Download the face again."
+            //
+            // Leaving it behind used to be survivable: `openPackage` looked the row up by
+            // `sourceKey` and reused it, so the next attempt healed it. It always starts a
+            // new project now, so a half-written row would never be reused — it would sit
+            // in the list unopenable while every retry added a numbered sibling beside it.
+            try {
+                withContext(NonCancellable) {
+                    val projectDirectory = projectDirectory(projectId).apply { mkdirs() }
+                    val localApk = File(projectDirectory, "source.apk")
+                    writeAtomically(localApk, apkBytes)
+                    projectDao.insert(
+                        project.copy(
+                            id = projectId,
+                            localApkPath = localApk.absolutePath,
+                        ),
+                    )
+                }
+            } catch (error: Throwable) {
+                // The DAO directly, never `deleteProject`: that takes `mutex`, which this
+                // block is already holding and which is not reentrant.
+                withContext(NonCancellable) { projectDao.deleteById(projectId) }
+                projectDirectory(projectId).deleteRecursively()
+                throw error
+            }
             loaded.projectId = projectId
+            loaded.projectName = project.projectName ?: loaded.sourceName
             loaded.stylePreviewFiles = writeStylePreviews(projectId, loaded.apk)
             loaded.also { session = it }.snapshot()
         }
@@ -163,8 +211,121 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         localApkPath = localApk.absolutePath,
                     ),
                 )
+                loaded.projectName = project.resolvedName
                 loaded.stylePreviewFiles = writeStylePreviews(project.id, loaded.apk)
                 loaded.also { session = it }.snapshot()
+            }
+        }
+
+    override suspend fun renameProject(projectId: Long, name: String) =
+        withContext(Dispatchers.IO) {
+            val trimmed = name.trim()
+            // Silently ignored rather than refused. The only caller is a dialog, and a
+            // dialog that can fail on an empty field is a dialog someone gets stuck in;
+            // an empty title would also leave a row with nothing to identify it by.
+            if (trimmed.isEmpty()) return@withContext
+            mutex.withLock {
+                // A targeted UPDATE, not an insert of a whole row: the editor may be
+                // holding an older copy of this project, and writing that back would undo
+                // the commit it has not seen.
+                projectDao.rename(projectId, trimmed)
+                // The open session holds its own copy, and every snapshot is built from it.
+                // Without this the editor goes on showing the old name until it is closed
+                // and reopened — which is most of the time, since the rename is made there.
+                session?.takeIf { it.projectId == projectId }?.projectName = trimmed
+            }
+            Unit
+        }
+
+    override suspend fun duplicateProject(projectId: Long): DuplicatedProject =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                val source = projectDao.findById(projectId)
+                    ?: throw WatchFaceException(
+                        "That project no longer exists.",
+                        "duplicate: no row for project $projectId",
+                    )
+                // Refused up front rather than half-done. A project whose package has gone
+                // missing cannot be opened, and copying the row would produce a second one
+                // that cannot be opened either — with a name suggesting it is a working
+                // copy of something.
+                val sourceApk = source.localApkPath
+                    ?.let(::File)
+                    ?.takeIf(File::isFile)
+                    ?: throw WatchFaceException(
+                        "This project's package is missing, so it cannot be copied. " +
+                            "Download the face again.",
+                        "duplicate: missing local APK for project $projectId",
+                    )
+                val now = System.currentTimeMillis()
+                val copy = source.copy(
+                    id = 0,
+                    projectName = ProjectNaming.defaultName(
+                        base = source.resolvedName,
+                        taken = projectDao.findByFaceId(source.faceId)
+                            .map(ProjectEntity::resolvedName),
+                    ),
+                    importedAtEpochMillis = now,
+                    updatedAtEpochMillis = now,
+                    // Both are absolute paths into the *original's* directory, and copying
+                    // them is the one mistake this whole function exists to avoid: the
+                    // duplicate would load the original's edit, and deleting the original
+                    // would take the duplicate's package with it. They are rewritten below,
+                    // once an id of its own names a directory.
+                    localApkPath = null,
+                    editedBinPath = null,
+                )
+                val newId = projectDao.insert(copy)
+                // The same shape as `openPackage`, and for the same reason: the id is what
+                // names the directory, so the row has to exist before the files can be
+                // written, and `NonCancellable` is what stops a cancellation landing between
+                // the two and leaving a row naming no package.
+                try {
+                    withContext(NonCancellable) {
+                        val target = projectDirectory(newId).apply { mkdirs() }
+                        val localApk = File(target, "source.apk")
+                        copyFileAtomically(sourceApk, localApk)
+                        val editedBin = source.editedBinPath
+                            ?.let(::File)
+                            ?.takeIf(File::isFile)
+                            ?.let { edited ->
+                                File(target, "edited.bin")
+                                    .also { copyFileAtomically(edited, it) }
+                            }
+                        // These two are found by convention rather than by a stored path,
+                        // so they are copied under the names the reader looks for. The
+                        // session file is not optional decoration: it holds the removed
+                        // widget records, and without it a duplicate of an edit that cut a
+                        // widget out would show it missing with no way to put it back.
+                        File(projectDirectory(projectId), "session.json")
+                            .takeIf(File::isFile)
+                            ?.let { copyFileAtomically(it, File(target, "session.json")) }
+                        previewsDirectory(projectId).listFiles().orEmpty()
+                            .filter(File::isFile)
+                            .forEach {
+                                copyFileAtomically(it, File(previewsDirectory(newId), it.name))
+                            }
+                        projectDao.insert(
+                            copy.copy(
+                                id = newId,
+                                localApkPath = localApk.absolutePath,
+                                editedBinPath = editedBin?.absolutePath,
+                            ),
+                        )
+                    }
+                } catch (error: Throwable) {
+                    // The DAO directly, never `deleteProject`: that takes `mutex`, which
+                    // this block is already holding and which is not reentrant.
+                    withContext(NonCancellable) { projectDao.deleteById(newId) }
+                    projectDirectory(newId).deleteRecursively()
+                    throw error
+                }
+                diagnostics.info(
+                    TAG,
+                    "Duplicated a project",
+                    "from=$projectId to=$newId face=${source.faceId}",
+                )
+                DuplicatedProject(newId, copy.resolvedName)
             }
         }
 
@@ -859,28 +1020,63 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
+    /**
+     * Writes an edit — or a reset — as one commit across the database and the disk.
+     *
+     * **The database pointer goes first, and that ordering is the whole fix.** It used to
+     * come last: `edited.bin` was replaced, then `session.json`, then the row, and the row
+     * is the only one of the three behind a cancellable suspension. So a commit that threw
+     * or was cancelled at the DAO left the new container on disk while [commit] rolled
+     * only memory back — and because an already-edited project's row names that same
+     * pathname, the next open loaded the edit that had just been reported as failed.
+     *
+     * With the row first, every failure lands consistent instead, because
+     * [writeAtomically] leaves the previous file intact when it throws and [loadSession]
+     * treats a path that is not a file as no edit at all:
+     *
+     *  * row written, container write fails — the row names `edited.bin`, which still
+     *    holds the previous edit, or does not exist yet on a first edit. Memory rolls
+     *    back to exactly that.
+     *  * row write fails — nothing on disk has been touched, and memory rolls back.
+     *  * resetting, row written, delete fails — the row says there is no edit, so the
+     *    file left behind is never read again.
+     *
+     * It also closes the cancellation window outright rather than compensating for it:
+     * once the DAO returns, everything left is blocking I/O with no suspension point for
+     * a cancellation to land on.
+     */
     private suspend fun persistEdited(current: Session, keepEdited: Boolean) {
         if (current.projectId <= 0) return
         val project = projectDao.findById(current.projectId) ?: return
         val directory = projectDirectory(current.projectId)
         val editedFile = File(directory, "edited.bin")
+        projectDao.insert(
+            project.copy(
+                editedBinPath = editedFile.absolutePath.takeIf { keepEdited },
+                selectedStyle = current.selectedStyle,
+                // The Projects page sorts on this. `importedAtEpochMillis` is bumped by
+                // merely opening a project, so it cannot answer "which did I work on last"
+                // — and with two projects on one face, that was the only thing telling
+                // otherwise identical rows apart.
+                updatedAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
         if (keepEdited) {
             writeAtomically(editedFile, current.currentContainer.toByteArray())
         } else {
             editedFile.delete()
         }
         persistSessionState(directory, current, keepEdited)
-        projectDao.insert(
-            project.copy(
-                editedBinPath = editedFile.absolutePath.takeIf { keepEdited },
-                selectedStyle = current.selectedStyle,
-            ),
-        )
     }
 
     /**
      * Removed widget records live beside the edited BIN so "restore" survives
      * process death, exactly like the edit itself does.
+     *
+     * Failures propagate. They used to be swallowed by a bare `runCatching`, which broke
+     * the guarantee in the line above without saying so: the container and the row could
+     * both commit a removal while this file stayed missing or stale, and the widget came
+     * back from the next launch with no way to restore it and nothing reported.
      */
     private fun persistSessionState(directory: File, current: Session, keepEdited: Boolean) {
         val file = File(directory, "session.json")
@@ -888,17 +1084,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
             file.delete()
             return
         }
-        runCatching {
-            writeAtomically(
-                file,
-                json.encodeToString(
-                    StoredSessionState(
-                        thumbnailRefreshed = current.thumbnailRefreshed,
-                        removed = current.removedWidgets.map(::StoredRemovedWidget),
-                    ),
-                ).toByteArray(),
-            )
-        }
+        writeAtomically(
+            file,
+            json.encodeToString(
+                StoredSessionState(
+                    thumbnailRefreshed = current.thumbnailRefreshed,
+                    removed = current.removedWidgets.map(::StoredRemovedWidget),
+                ),
+            ).toByteArray(),
+        )
     }
 
     private fun restoreSessionState(directory: File, current: Session) {
@@ -1022,6 +1216,28 @@ class WatchFaceRepositoryImpl @Inject constructor(
         return chosen.second.absolutePath
     }
 
+    /**
+     * Copies one file, committing it under its final name only once it is whole.
+     *
+     * Streamed rather than read into a `ByteArray` and handed to [writeAtomically]: a
+     * project's `source.apk` is up to 32 MiB, and a copy that allocates all of it is the
+     * same hazard the package parser's inflate bounds exist for.
+     */
+    private fun copyFileAtomically(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        val temporary = File(target.parentFile, "${target.name}.tmp")
+        source.inputStream().use { input ->
+            temporary.outputStream().use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+        if (!temporary.renameTo(target)) {
+            temporary.delete()
+            throw IOException("Could not commit ${target.name}")
+        }
+    }
+
     private fun writeAtomically(target: File, bytes: ByteArray) {
         target.parentFile?.mkdirs()
         val temporary = File(target.parentFile, "${target.name}.tmp")
@@ -1041,6 +1257,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val originalContainer: Fit3Container,
         var currentContainer: Fit3Container,
         val sourceName: String,
+        /** Read from the project row, and rewritten in place by a rename. */
+        var projectName: String = sourceName,
         var audit: EditAuditSummary? = null,
         var selectedStyle: String? = null,
         /** Style index → the package's preview for it, extracted to app storage. */
@@ -1381,6 +1599,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 faceId = apk.faceId,
                 faceName = apk.faceName,
                 sourceName = sourceName,
+                projectName = projectName,
                 styleNames = styles.map { it.basename },
                 selectedStyle = selected.basename,
                 preview = currentBackground,
@@ -1497,6 +1716,18 @@ private val PreviewFileNamePattern = Regex("""style(\d+)\.png""")
 private fun styleIndexOf(basename: String): Int? =
     StyleNamePattern.matchEntire(basename)?.groupValues?.get(1)?.toIntOrNull()
 
+/**
+ * The name to show for a project.
+ *
+ * [ProjectEntity.projectName] is null only on a row that predates schema 5 and that its
+ * backfill could not name, so the fallbacks are the face's own names — identical across
+ * every project on the face, but better than a blank row.
+ */
+internal val ProjectEntity.resolvedName: String
+    get() = projectName?.takeIf(String::isNotBlank)
+        ?: faceName?.takeIf(String::isNotBlank)
+        ?: displayName
+
 private fun ProjectEntity.toSummary(previewImagePath: String?) = ProjectSummary(
     id = id,
     displayName = displayName,
@@ -1505,6 +1736,12 @@ private fun ProjectEntity.toSummary(previewImagePath: String?) = ProjectSummary(
     faceName = faceName,
     importedAtEpochMillis = importedAtEpochMillis,
     previewImagePath = previewImagePath,
+    name = resolvedName,
+    styleId = styleId ?: selectedStyle?.let(::styleIndexOf),
+    packageVersionCode = packageVersionCode,
+    // Zero for a row written before schema 5 whose migration could not recover one; falling
+    // back to the import time keeps it out of the bottom of a "recently edited" sort.
+    updatedAtEpochMillis = updatedAtEpochMillis.takeIf { it > 0 } ?: importedAtEpochMillis,
 )
 
 private fun StructuralEdit.audit(operation: String) = EditAuditSummary(

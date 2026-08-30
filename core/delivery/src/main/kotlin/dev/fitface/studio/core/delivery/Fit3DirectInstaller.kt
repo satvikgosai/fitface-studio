@@ -59,10 +59,9 @@ class Fit3DirectInstaller @Inject constructor(
             // handover, not a dead end: it is exactly what the user has to undo to
             // discover again. FAILED would strand them, so this stays recoverable.
             "device_not_connected" -> needsWatchConnection(
-                "The Fit3 is not connected, and discovery needs it to be. Turn the " +
-                    "plugin's Nearby access back on if you revoked it, reconnect the watch " +
-                    "in the companion app, then discover again — the channel is only " +
-                    "released afterwards.",
+                "The Fit3 is not connected, and discovery needs it to be. $restorePlugin, " +
+                    "reconnect the watch in the companion app, then discover again — the " +
+                    "channel is only released afterwards.",
             )
             // The accessory framework refusing to initialize arrives here, not through
             // requestAgent's own callback, and it is the shape a phone with nothing
@@ -83,21 +82,24 @@ class Fit3DirectInstaller @Inject constructor(
 
     private val transferListener = object : TransferListener {
         override fun onPayloadVerified(payload: DirectInstallPayload, windows: Int) {
-            armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
-            mutableState.update {
-                it.copy(
-                    phase = DirectInstallPhase.TRANSFERRING,
-                    faceId = payload.faceId,
-                    samplerId = payload.samplerId,
-                    fileName = payload.fileName,
-                    sha256 = payload.sha256,
-                    acknowledgedBytes = 0,
-                    totalBytes = payload.size,
-                    acknowledgedWindows = 0,
-                    totalWindows = windows,
-                    message = "BIN hash verified. Opening the direct transfer.",
-                )
+            if (!advance(DeliveryEvent.PAYLOAD_VERIFIED) {
+                    it.copy(
+                        phase = DirectInstallPhase.TRANSFERRING,
+                        faceId = payload.faceId,
+                        samplerId = payload.samplerId,
+                        fileName = payload.fileName,
+                        sha256 = payload.sha256,
+                        acknowledgedBytes = 0,
+                        totalBytes = payload.size,
+                        acknowledgedWindows = 0,
+                        totalWindows = windows,
+                        message = "BIN hash verified. Opening the direct transfer.",
+                    )
+                }
+            ) {
+                return
             }
+            armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
         }
 
         override fun onWindowAcknowledged(
@@ -106,24 +108,41 @@ class Fit3DirectInstaller @Inject constructor(
             acknowledgedWindows: Int,
             totalWindows: Int,
         ) {
-            armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
-            mutableState.update {
-                it.copy(
-                    phase = DirectInstallPhase.TRANSFERRING,
-                    acknowledgedBytes = acknowledgedBytes,
-                    totalBytes = totalBytes,
-                    acknowledgedWindows = acknowledgedWindows,
-                    totalWindows = totalWindows,
-                    message = "Fit3 accepted window $acknowledgedWindows of $totalWindows.",
-                )
+            if (!advance(DeliveryEvent.TRANSFER_PROGRESS) {
+                    it.copy(
+                        phase = DirectInstallPhase.TRANSFERRING,
+                        acknowledgedBytes = acknowledgedBytes,
+                        totalBytes = totalBytes,
+                        acknowledgedWindows = acknowledgedWindows,
+                        totalWindows = totalWindows,
+                        message = "Fit3 accepted window $acknowledgedWindows of $totalWindows.",
+                    )
+                }
+            ) {
+                return
             }
+            // Re-armed only for an acknowledgement that counted. Re-arming first would
+            // let an abandoned worker keep the watchdog alive for a transfer nobody is
+            // waiting on.
+            armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
         }
 
         override fun onTransferStatus(message: String) {
-            mutableState.update { it.copy(message = message) }
+            if (!advance(DeliveryEvent.TRANSFER_PROGRESS) { it.copy(message = message) }) return
+            // A status line is progress, and re-arming on it is what keeps the protocol's
+            // own tail — the 15 s BIN verification, the close handshake, the teardown —
+            // inside a watchdog that used to count nothing but acknowledged windows. See
+            // `transferProgressRearmsWatchdog` for why that mattered only once a fired
+            // watchdog began to actually stop the transfer, and why VERIFYING is excluded.
+            if (transferProgressRearmsWatchdog(state.value.phase)) {
+                armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
+            }
         }
 
         override fun onTransferComplete(payload: DirectInstallPayload) {
+            if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.TRANSFER_COMPLETE)) {
+                return
+            }
             val agent = watchfaceAgent
             if (agent == null) {
                 fail("Watch-face agent disappeared after transfer")
@@ -133,38 +152,73 @@ class Fit3DirectInstaller @Inject constructor(
         }
 
         override fun onTransferFailed(message: String, peerLost: Boolean) {
+            if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.FAILURE)) return
             if (peerLost) restartDiscovery(message) else fail(message)
         }
     }
 
     private val installListener = object : InstallListener {
         override fun onInstallRequested(payload: DirectInstallPayload) {
-            armWatchdog(DirectInstallPhase.INSTALLING, PHASE_WATCHDOG_MS)
-            mutableState.update {
-                it.copy(
-                    phase = DirectInstallPhase.INSTALLING,
-                    message = "Transfer verified. Sending the one-shot install command.",
-                )
+            if (!advance(DeliveryEvent.INSTALL_REQUESTED) {
+                    it.copy(
+                        phase = DirectInstallPhase.INSTALLING,
+                        message = "Transfer verified. Sending the one-shot install command.",
+                    )
+                }
+            ) {
+                return
             }
+            armWatchdog(DirectInstallPhase.INSTALLING, PHASE_WATCHDOG_MS)
         }
 
         override fun onInstallDelivered(payload: DirectInstallPayload) {
-            cancelWatchdog()
-            mutableState.update {
-                it.copy(
-                    phase = DirectInstallPhase.COMPLETE,
-                    acknowledgedBytes = payload.size,
-                    totalBytes = payload.size,
-                    message = "Install request delivered. Check the Fit3, then reconnect it " +
-                        "in the companion app — and restore the plugin's Nearby access if " +
-                        "you turned it off.",
-                )
+            if (!advance(DeliveryEvent.INSTALL_DELIVERED) {
+                    it.copy(
+                        phase = DirectInstallPhase.COMPLETE,
+                        acknowledgedBytes = payload.size,
+                        totalBytes = payload.size,
+                        message = "Install request delivered. Check the Fit3, then reconnect " +
+                            "it in the companion app. $restorePlugin.",
+                    )
+                }
+            ) {
+                return
             }
+            cancelWatchdog()
         }
 
         override fun onInstallFailed(message: String, peerLost: Boolean) {
+            if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.FAILURE)) return
             if (peerLost) restartDiscovery(message) else fail(message)
         }
+    }
+
+    /**
+     * Applies [change] only if [event] is still welcome in the phase the machine is in.
+     *
+     * The test happens *inside* the atomic update, so a callback arriving from a worker
+     * thread cannot read one phase and write against another. See [DeliveryProgress] for
+     * what each of these callbacks used to overwrite when it arrived late.
+     *
+     * @return whether the change was applied, so the caller knows whether to arm or
+     *   cancel a watchdog on the back of it.
+     */
+    private fun advance(
+        event: DeliveryEvent,
+        change: (DirectInstallState) -> DirectInstallState,
+    ): Boolean {
+        var applied = false
+        mutableState.update { current ->
+            // Assigned rather than latched: `update` is a compare-and-set loop and can
+            // run this block more than once under contention, so the verdict has to be
+            // the one from the pass that actually wrote. Latching it would report an
+            // applied change from a discarded attempt — and `onInstallDelivered` cancels
+            // the watchdog on the strength of this answer.
+            applied = DeliveryProgress.accepts(current.phase, event)
+            if (!applied) return@update current
+            change(current)
+        }
+        return applied
     }
 
     fun refreshEnvironment() {
@@ -258,9 +312,8 @@ class Fit3DirectInstaller @Inject constructor(
             mutableState.update {
                 it.copy(
                     phase = DirectInstallPhase.PEERS_CACHED,
-                    message = "Let the stock plugin release the accessory channel first — " +
-                        "disconnect the watch in the companion app, or turn the plugin's " +
-                        "Nearby access off.",
+                    message = "Complete step 4 to let the stock plugin release the " +
+                        "accessory channel before sending.",
                 )
             }
             return
@@ -295,7 +348,7 @@ class Fit3DirectInstaller @Inject constructor(
     @Synchronized
     fun restartDiscovery(reason: String? = null) {
         cancelWatchdog()
-        otaAgent?.cancelTransfer()
+        abandonInFlight()
         watchfaceAgent?.forgetPeer()
         otaAgent?.forgetPeer()
         discoveryStarted = false
@@ -458,7 +511,7 @@ class Fit3DirectInstaller @Inject constructor(
     fun reset() {
         generation.incrementAndGet()
         cancelWatchdog()
-        otaAgent?.cancelTransfer()
+        abandonInFlight()
         watchfaceAgent?.discoveryListener = null
         watchfaceAgent?.installListener = null
         otaAgent?.discoveryListener = null
@@ -611,17 +664,44 @@ class Fit3DirectInstaller @Inject constructor(
                     cancelWatchdog()
                     updated.copy(
                         phase = DirectInstallPhase.PEERS_CACHED,
-                        message = "Both peers are cached and stay cached. Now let the plugin " +
-                            "release the channel: disconnect the watch in the companion app, " +
-                            "or turn the plugin's Nearby access off.",
+                        message = "Both peers are cached and stay cached. Complete step 4 " +
+                            "to let the plugin release the channel.",
                     )
                 }
             }
         }
     }
 
+    /**
+     * Whether `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` are runtime permissions on this phone.
+     *
+     * The one fact three separate questions here turn on, so it is asked once rather than
+     * spelled as an inline API-level test at each of them: whether this app has to request
+     * them at all, whether the plugin has a per-app switch worth reading, and which words
+     * describe undoing step 4. `EditorScreen.hasPluginNearbySwitch` is the same line drawn
+     * for the checklist's strings; keep them in step.
+     */
+    private val nearbyIsRuntimePermission: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    /**
+     * Undoing step 4, in the terms the reader's own phone offers.
+     *
+     * Without the runtime permission the plugin has no Nearby devices switch —
+     * [pluginNearbyGranted] returns null there for exactly that reason — so telling that
+     * reader to restore one sends them looking for a control their phone does not have.
+     * The way back is re-enabling the app they disabled instead. Sentence-initial: every
+     * use starts a sentence.
+     */
+    private val restorePlugin: String
+        get() = if (nearbyIsRuntimePermission) {
+            "Turn the plugin's Nearby access back on if you revoked it"
+        } else {
+            "Re-enable the plugin if you disabled it"
+        }
+
     private fun helperNearbyGranted(): Boolean =
-        Build.VERSION.SDK_INT < 31 ||
+        !nearbyIsRuntimePermission ||
             (
                 appContext.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
                     PackageManager.PERMISSION_GRANTED &&
@@ -630,14 +710,16 @@ class Fit3DirectInstaller @Inject constructor(
                 )
 
     private fun pluginNearbyGranted(pluginInstalled: Boolean): Boolean? {
-        if (Build.VERSION.SDK_INT < 31 || !pluginInstalled) return null
+        if (!nearbyIsRuntimePermission || !pluginInstalled) return null
         val packageInfo = runCatching {
             appContext.packageManager.getPackageInfo(
                 PLUGIN_PACKAGE,
                 PackageManager.GET_PERMISSIONS,
             )
         }.getOrNull() ?: return null
-        if (packageInfo.applicationInfo?.targetSdkVersion?.let { it < 31 } != false) {
+        val pluginRequestsThemAtRuntime = packageInfo.applicationInfo?.targetSdkVersion
+            ?.let { it >= Build.VERSION_CODES.S } ?: false
+        if (!pluginRequestsThemAtRuntime) {
             return null
         }
         val requested = packageInfo.requestedPermissions?.toSet().orEmpty()
@@ -705,6 +787,11 @@ class Fit3DirectInstaller @Inject constructor(
             delay(timeoutMillis)
             if (state.value.phase != phase) return@launch
             cancelWatchdog()
+            // Giving up has to stop the work, not just describe it. This used to change
+            // the state and nothing else, so the transfer thread the watchdog had just
+            // declared dead went on transferring — and its next acknowledged window
+            // dragged FAILED back to TRANSFERRING, after which it reported success.
+            abandonInFlight()
             // A discovery timeout rewinds instead of failing, so the peer handles and
             // the discovery latch go with it — the same teardown the explicit
             // device_not_connected outcome gets through needsWatchConnection().
@@ -715,6 +802,18 @@ class Fit3DirectInstaller @Inject constructor(
             }
             mutableState.update { TimeoutRecovery.timedOut(it, phase) }
         }
+    }
+
+    /**
+     * Abandons whatever the agents are still doing for the current attempt.
+     *
+     * Unconditional rather than branched on the phase: with nothing in flight both calls
+     * are no-ops, and a phase test here is one more thing to get wrong on the path that
+     * is hardest to reproduce.
+     */
+    private fun abandonInFlight() {
+        otaAgent?.cancelTransfer()
+        watchfaceAgent?.cancelInstall()
     }
 
     private fun cancelWatchdog() {
@@ -741,11 +840,14 @@ class Fit3DirectInstaller @Inject constructor(
         DirectInstallPhase.NEEDS_HELPER_PERMISSION ->
             "Grant FitFace Studio Nearby devices access."
         DirectInstallPhase.NEEDS_WATCH_CONNECTION ->
-            "Discovery needs the watch connected by the stock plugin. Turn the plugin's " +
-                "Nearby access back on, reconnect, then discover."
+            "Discovery needs the watch connected by the stock plugin. $restorePlugin, " +
+                "reconnect, then discover."
+        // How the channel is released differs by Android version and the checklist's step 4
+        // is where that is said in one place, so this points at it rather than repeating
+        // half of it. It used to name disconnecting the watch in the companion app, which
+        // does not free the channel — see docs/direct-install.md.
         DirectInstallPhase.PEERS_CACHED ->
-            "Both peers cached. Now let the plugin release the channel — disconnect the " +
-                "watch in the companion app, or turn its Nearby access off."
+            "Both peers cached. Complete step 4 to let the plugin release the channel."
         DirectInstallPhase.READY ->
             "Ready to send the validated face."
         DirectInstallPhase.IDLE ->
@@ -759,7 +861,9 @@ class Fit3DirectInstaller @Inject constructor(
         const val ACCESSORY_REGISTER_AGENT_ACTION = "com.samsung.accessory.action.REGISTER_AGENT"
         const val VENDOR_PACKAGE_PREFIX = "com.samsung."
         val ACTIVE_PHASES = DirectInstallState.ActivePhases
-        const val PHASE_WATCHDOG_MS = 20_000L
-        const val TRANSFER_WATCHDOG_MS = 20_000L
+        // PHASE_WATCHDOG_MS and TRANSFER_WATCHDOG_MS live in DirectInstallState.kt, beside
+        // `transferProgressRearmsWatchdog`, because the budget and the rule that keeps a
+        // live transfer inside it are one decision — and because this companion is private,
+        // which put the arithmetic that broke out of reach of any test.
     }
 }

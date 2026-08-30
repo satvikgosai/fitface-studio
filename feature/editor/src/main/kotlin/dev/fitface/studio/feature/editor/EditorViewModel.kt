@@ -55,6 +55,9 @@ internal fun storedToDisplay(
     anchoredFromEnd: Boolean,
 ): Int = if (anchoredFromEnd) canvasExtent + stored - extent else stored
 
+/** A copy was made and named. The screen turns it into a sentence. */
+data class DuplicateNotice(val id: Long, val name: String)
+
 data class EditorUiState(
     val snapshot: EditorSnapshot? = null,
     val isWorking: Boolean = true,
@@ -62,6 +65,32 @@ data class EditorUiState(
     val pendingImage: ReplacementImage? = null,
     val placement: ImagePlacement = ImagePlacement(),
     val selectedWidgetIndex: Int? = null,
+    /**
+     * How many widget removals have committed.
+     *
+     * A counter and not a flag: the screen acts on it *changing*, which is what makes it
+     * safe to act on at all. The obvious rule — "the Inspector has no widget, so leave" —
+     * races the opposite way: `page` is local Compose state and updates synchronously, while
+     * the selection arrives through `collectAsStateWithLifecycle` a frame later, so tapping
+     * a widget in the list would land on an Inspector that had not been told which widget
+     * yet and bounce straight back.
+     */
+    val widgetRemovals: Int = 0,
+    /**
+     * The project this editor was showing has been deleted, so the screen has to leave.
+     *
+     * One-way: nothing after it can act on the project, and clearing it would only give the
+     * editor a chance to draw a session that no longer exists.
+     */
+    val projectDeleted: Boolean = false,
+    /**
+     * A copy of this project was just made, and nothing on this screen changed to show it —
+     * the editor stays on the original, which is what you were working on.
+     *
+     * Carries the name rather than a finished sentence, so the wording stays in
+     * `strings.xml` with the rest of the editor's copy.
+     */
+    val duplicated: DuplicateNotice? = null,
     val applyWidgetEditsToAllStyles: Boolean = true,
     val previewReviewed: Boolean = false,
     val pendingWidgetMove: WidgetMovePreview? = null,
@@ -130,6 +159,83 @@ class EditorViewModel @Inject constructor(
         if (loadedProjectId == projectId && mutableState.value.snapshot != null) return
         loadedProjectId = projectId
         operate { repository.openProject(projectId) }
+    }
+
+    /**
+     * Renames the open project.
+     *
+     * Not an `operate {}`: a rename touches one column and no container, so it must not put
+     * the editor into its working state or produce a new snapshot through the commit path.
+     * The repository updates the open session in place, and the reload below is what carries
+     * the new name onto this screen.
+     */
+    fun renameProject(name: String) {
+        val projectId = loadedProjectId ?: return
+        viewModelScope.launch {
+            runCatching {
+                repository.renameProject(projectId, name)
+                repository.currentSnapshot()
+            }.onSuccess { snapshot ->
+                mutableState.value = mutableState.value.copy(snapshot = snapshot)
+            }.onFailure(::showFailure)
+        }
+    }
+
+    /**
+     * Deletes the open project and asks the screen to leave.
+     *
+     * The repository drops the row, the directory and — because this is the open one — the
+     * session, so there is nothing left for this ViewModel to show. The flag is what the
+     * route navigates on; it is never cleared, because the only thing that happens after it
+     * is set is going back.
+     */
+    fun deleteProject() {
+        val projectId = loadedProjectId ?: return
+        viewModelScope.launch {
+            runCatching { repository.deleteProject(projectId) }
+                .onSuccess {
+                    mutableState.value = mutableState.value.copy(projectDeleted = true)
+                }
+                .onFailure(::showFailure)
+        }
+    }
+
+    /**
+     * Copies this project and stays on it.
+     *
+     * Deliberately does not open the copy: you are in the middle of the original, and
+     * switching out from under an edit is worse than having to go and find the new one. The
+     * message is the only feedback there can be, for the same reason.
+     */
+    fun duplicateProject() {
+        val projectId = loadedProjectId ?: return
+        // Copying a package can be tens of megabytes, and the button says nothing while it
+        // runs. Without the guard a second tap — which is what someone does when a control
+        // appears to have done nothing — makes a second copy they then have to find and
+        // delete. `isWorking` is the editor's existing "busy" flag, so the page's other
+        // actions dim with it; `showFailure` clears it on the way out.
+        if (mutableState.value.isWorking) return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isWorking = true)
+            runCatching { repository.duplicateProject(projectId) }
+                .onSuccess { duplicate ->
+                    mutableState.value = mutableState.value.copy(
+                        isWorking = false,
+                        duplicated = DuplicateNotice(
+                            messageIds.incrementAndGet(),
+                            duplicate.name,
+                        ),
+                    )
+                }
+                .onFailure(::showFailure)
+        }
+    }
+
+    fun clearDuplicated(id: Long) {
+        val current = mutableState.value
+        if (current.duplicated?.id == id) {
+            mutableState.value = current.copy(duplicated = null)
+        }
     }
 
     fun selectStyle(style: String) {
@@ -494,7 +600,12 @@ class EditorViewModel @Inject constructor(
             it.globalIndex == mutableState.value.selectedWidgetIndex
         } ?: return
         operate(
-            onSuccess = { current -> current.copy(selectedWidgetIndex = null) },
+            onSuccess = { current ->
+                current.copy(
+                    selectedWidgetIndex = null,
+                    widgetRemovals = current.widgetRemovals + 1,
+                )
+            },
         ) {
             repository.removeWidget(
                 snapshot.selectedStyle,

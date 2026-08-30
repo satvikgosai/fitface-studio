@@ -11,6 +11,7 @@ import android.os.Build
 import android.provider.Settings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -88,20 +89,23 @@ internal class UpdateInstaller @Inject constructor(
     suspend fun install(file: File, onConfirmation: (Intent) -> Unit): InstallOutcome =
         withContext(Dispatchers.IO) {
             val installer = context.packageManager.packageInstaller
+            // One unguessable action per install. See [registerStatusReceiver] for why
+            // the action itself has to carry the secret.
+            val action = "$StatusAction.${UUID.randomUUID()}"
             val statuses = Channel<Intent>(Channel.UNLIMITED)
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     intent?.let(statuses::trySend)
                 }
             }
-            registerStatusReceiver(receiver)
+            registerStatusReceiver(receiver, action)
             var sessionId = -1
             try {
                 sessionId = openAndWrite(installer, file)
                 installer.openSession(sessionId).use { session ->
-                    session.commit(statusSender(sessionId).intentSender)
+                    session.commit(statusSender(sessionId, action).intentSender)
                 }
-                awaitOutcome(statuses, onConfirmation)
+                awaitOutcome(statuses, sessionId, onConfirmation)
             } catch (error: CancellationException) {
                 // Abandon the session, then let the cancellation through. Swallowed into a
                 // Failed like the branch below, it would report the install as broken when
@@ -146,9 +150,14 @@ internal class UpdateInstaller @Inject constructor(
      */
     private suspend fun awaitOutcome(
         statuses: Channel<Intent>,
+        sessionId: Int,
         onConfirmation: (Intent) -> Unit,
     ): InstallOutcome {
         for (intent in statuses) {
+            // The second line, after the unguessable action. The genuine PendingIntent
+            // has always carried the session id and nothing ever read it, so a status
+            // was trusted purely for arriving.
+            if (intent.getIntExtra(SessionExtra, -1) != sessionId) continue
             val status = intent.getIntExtra(
                 PackageInstaller.EXTRA_STATUS,
                 PackageInstaller.STATUS_FAILURE,
@@ -196,9 +205,18 @@ internal class UpdateInstaller @Inject constructor(
     /**
      * `FLAG_MUTABLE` is required from API 31: the system fills `EXTRA_STATUS` and
      * `EXTRA_INTENT` into this intent, and an immutable `PendingIntent` throws instead.
+     *
+     * `FLAG_UPDATE_CURRENT` is **inert here and kept anyway.** It dates from when [action]
+     * was a constant; the action now carries a per-install nonce, so no two of these ever
+     * match and there is never a current one to update. Dropping it would be a behaviour
+     * change — however certain the reasoning — in the one path with no automated coverage
+     * and no way to exercise it short of a real newer release, so it stays and says so.
+     * `FLAG_ONE_SHOT` is not a substitute either: the package manager may send more than one
+     * status for a session, and `STATUS_PENDING_USER_ACTION` is exactly the case where a
+     * second one has to follow.
      */
-    private fun statusSender(sessionId: Int): PendingIntent {
-        val intent = Intent(StatusAction)
+    private fun statusSender(sessionId: Int, action: String): PendingIntent {
+        val intent = Intent(action)
             .setPackage(context.packageName)
             .putExtra(SessionExtra, sessionId)
         var flags = PendingIntent.FLAG_UPDATE_CURRENT
@@ -217,9 +235,21 @@ internal class UpdateInstaller @Inject constructor(
      * status worth acting on arrives while the app is in the foreground, because the
      * reader has just tapped Install, and a successful self-install replaces this process
      * before any receiver could report it.
+     *
+     * [action] is per-install and unguessable because below API 33 it is the *only*
+     * defence there is. `RECEIVER_NOT_EXPORTED` arrived in Tiramisu; before it, a
+     * dynamic receiver takes a matching broadcast from any app on the phone, and this
+     * one's action was a constant sitting in the APK. So while an update was installing,
+     * any installed app could report a success the package manager never gave — or send
+     * `STATUS_PENDING_USER_ACTION` carrying an `Intent` of its own, which this app then
+     * launched as though it were Android's install confirmation. `minSdk` is 28, so that
+     * is API 28–32 of the supported range.
+     *
+     * A receiver permission is not the fix: the sender is the package manager, running
+     * as the system, and it holds no permission this app could define.
      */
-    private fun registerStatusReceiver(receiver: BroadcastReceiver) {
-        val filter = IntentFilter(StatusAction)
+    private fun registerStatusReceiver(receiver: BroadcastReceiver, action: String) {
+        val filter = IntentFilter(action)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -228,6 +258,7 @@ internal class UpdateInstaller @Inject constructor(
     }
 
     private companion object {
+        /** Prefixes the real action; a per-install nonce is appended to it. */
         const val StatusAction = "dev.fitface.studio.UPDATE_INSTALL_STATUS"
         const val SessionExtra = "sessionId"
         const val SessionFileName = "update.apk"

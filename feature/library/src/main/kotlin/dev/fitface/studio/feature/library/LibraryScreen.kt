@@ -35,6 +35,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -71,11 +72,17 @@ import coil3.compose.AsyncImage
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.FaceStyleOption
+import dev.fitface.studio.core.model.ProjectSort
+import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.ui.DiagnosticsDialog
+import dev.fitface.studio.core.ui.FitBadge
+import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.FitChip
+import dev.fitface.studio.core.ui.FitDropdownMenu
+import dev.fitface.studio.core.ui.FitMenuEntry
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.fitColors
 import dev.fitface.studio.core.ui.fitText
@@ -92,7 +99,6 @@ fun LibraryRoute(
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val projects by viewModel.projects.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -112,13 +118,42 @@ fun LibraryRoute(
         }
     }
 
+    // Same show-then-clear shape as the error above, and for the same reason: clearing
+    // first changes this effect's key while `showSnackbar` is still suspended and cancels
+    // it, so the message appears for one frame and vanishes.
+    val duplicated = state.duplicated
+    val duplicatedText = duplicated?.let {
+        stringResource(R.string.library_project_duplicated, it.name)
+    }
+    LaunchedEffect(duplicated?.id) {
+        if (duplicated == null || duplicatedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(duplicatedText)
+        } finally {
+            viewModel.clearDuplicated(duplicated.id)
+        }
+    }
+
     state.diagnosticsReport?.let { report ->
         DiagnosticsDialog(report = report, onDismiss = viewModel::dismissDiagnostics)
+    }
+    state.renaming?.let { project ->
+        RenameProjectDialog(
+            project = project,
+            onDismiss = viewModel::dismissRename,
+            onConfirm = viewModel::confirmRename,
+        )
+    }
+    state.deleting?.let { project ->
+        DeleteProjectDialog(
+            project = project,
+            onDismiss = viewModel::dismissDelete,
+            onConfirm = viewModel::confirmDelete,
+        )
     }
 
     LibraryScreen(
         state = state,
-        projects = projects,
         snackbar = snackbar,
         onRefresh = viewModel::refreshCatalog,
         onReportProblem = viewModel::showDiagnostics,
@@ -126,12 +161,18 @@ fun LibraryRoute(
         onCheckForUpdate = onCheckForUpdate,
         onQuery = viewModel::setQuery,
         onSort = viewModel::setSort,
+        onReverseSort = viewModel::reverseSort,
+        onProjectQuery = viewModel::setProjectQuery,
+        onProjectSort = viewModel::setProjectSort,
+        onReverseProjectSort = viewModel::reverseProjectSort,
         onFace = viewModel::selectFace,
         onDismissFace = viewModel::dismissFace,
         onStyle = viewModel::selectStyle,
         onDownload = viewModel::downloadSelectedFace,
         onProjectClick = viewModel::openProject,
-        onDeleteProject = viewModel::deleteProject,
+        onRenameProject = viewModel::startRename,
+        onDuplicateProject = viewModel::duplicateProject,
+        onDeleteProject = viewModel::startDelete,
     )
 }
 
@@ -149,7 +190,6 @@ internal enum class LibraryPage(@StringRes val title: Int, @StringRes val subtit
 @Composable
 private fun LibraryScreen(
     state: LibraryUiState,
-    projects: List<ProjectSummary>,
     snackbar: SnackbarHostState,
     onRefresh: () -> Unit,
     onReportProblem: () -> Unit,
@@ -157,11 +197,17 @@ private fun LibraryScreen(
     onCheckForUpdate: () -> Unit,
     onQuery: (String) -> Unit,
     onSort: (CatalogSort) -> Unit,
+    onReverseSort: () -> Unit,
+    onProjectQuery: (String) -> Unit,
+    onProjectSort: (ProjectSort) -> Unit,
+    onReverseProjectSort: () -> Unit,
     onFace: (CatalogFace) -> Unit,
     onDismissFace: () -> Unit,
     onStyle: (Int) -> Unit,
     onDownload: () -> Unit,
     onProjectClick: (ProjectSummary) -> Unit,
+    onRenameProject: (ProjectSummary) -> Unit,
+    onDuplicateProject: (ProjectSummary) -> Unit,
     onDeleteProject: (ProjectSummary) -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
@@ -177,7 +223,7 @@ private fun LibraryScreen(
             LibraryHeader(
                 page = page,
                 state = state,
-                projectCount = projects.size,
+                projectCount = state.projects.size,
                 loading = state.isLoadingCatalog,
                 onPage = { page = it },
                 onRefresh = onRefresh,
@@ -191,15 +237,22 @@ private fun LibraryScreen(
                     state = state,
                     onQuery = onQuery,
                     onSort = onSort,
+                    onReverseSort = onReverseSort,
                     onRefresh = onRefresh,
                     onFace = onFace,
                     modifier = Modifier.fillMaxSize(),
                 )
                 LibraryPage.Projects -> ProjectsList(
-                    projects = projects,
+                    state = state,
                     enabled = !state.isWorking,
+                    openingProjectId = state.openingProjectId,
+                    onQuery = onProjectQuery,
+                    onSort = onProjectSort,
+                    onReverseSort = onReverseProjectSort,
                     onBrowse = { page = LibraryPage.WatchFaces },
                     onOpen = onProjectClick,
+                    onRename = onRenameProject,
+                    onDuplicate = onDuplicateProject,
                     onRemove = onDeleteProject,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -210,14 +263,19 @@ private fun LibraryScreen(
     state.selectedFace?.let { face ->
         FaceDetailsSheet(
             face = face,
+            faceProjects = state.projectsFor(face.faceId),
             selectedStyleId = state.selectedStyleId,
             downloading = state.downloadingProductId == face.productId,
             downloadFraction = state.downloadFraction,
             uneditable = face.appId in state.uneditableAppIds,
+            packageOnDevice = state.selectedFaceCached,
+            projectsEnabled = !state.isWorking,
+            openingProjectId = state.openingProjectId,
             error = state.sheetError,
             onDismiss = onDismissFace,
             onStyle = onStyle,
             onDownload = onDownload,
+            onOpenProject = onProjectClick,
         )
     }
 }
@@ -369,6 +427,7 @@ private fun WatchFaceGrid(
     state: LibraryUiState,
     onQuery: (String) -> Unit,
     onSort: (CatalogSort) -> Unit,
+    onReverseSort: () -> Unit,
     onRefresh: () -> Unit,
     onFace: (CatalogFace) -> Unit,
     modifier: Modifier = Modifier,
@@ -376,71 +435,50 @@ private fun WatchFaceGrid(
     // Resolved out here: a `semantics` lambda is not a composable scope, so it cannot read
     // a resource itself.
     val catalogueDescription = stringResource(R.string.library_catalogue_a11y)
+    // Counted once for the whole grid, not per card. `projectsFor` filters the project
+    // list, and asking it per card is that filter run once for every one of the hundred
+    // faces on screen, on every frame the grid scrolls.
+    val projectCounts = remember(state.projects) {
+        state.projects.groupingBy(ProjectSummary::faceId).eachCount()
+    }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 148.dp),
         modifier = modifier.semantics { contentDescription = catalogueDescription },
-        contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 28.dp),
+        contentPadding = LibraryPageInsets,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Column {
-                OutlinedTextField(
-                    value = state.query,
-                    onValueChange = onQuery,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = state.downloadingProductId == null,
-                    singleLine = true,
-                    placeholder = { Text(stringResource(R.string.library_search_placeholder)) },
-                    leadingIcon = { Text("⌕", style = MaterialTheme.typography.titleLarge) },
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        imeAction = ImeAction.Search,
-                    ),
-                    keyboardActions = KeyboardActions(onSearch = {}),
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 11.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MicroLabel(stringResource(R.string.library_sort_label), Modifier.padding(end = 3.dp))
-                    CatalogSort.entries.forEach { option ->
-                        FitChip(
-                            text = option.label,
-                            selected = state.sort == option,
-                            onClick = { onSort(option) },
-                            enabled = !state.isWorking,
-                        )
-                    }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 3.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MicroLabel(
-                        stringResource(
-                            if (state.catalogFromCache) {
-                                R.string.library_source_cached
-                            } else {
-                                R.string.library_source_live
-                            },
-                        ),
-                    )
-                    Text(
-                        stringResource(
-                            R.string.library_face_and_style_count,
-                            state.visibleFaces.size,
-                            state.styleCount,
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.fitText.secondary,
-                    )
-                }
-            }
+            LibraryPageControls(
+                query = state.query,
+                onQuery = onQuery,
+                searchPlaceholder = stringResource(R.string.library_search_placeholder),
+                searchEnabled = state.downloadingProductId == null,
+                sortOptions = CatalogSort.entries,
+                sort = state.sort,
+                sortReversed = state.sortReversed,
+                // `canSelectFace`, not `isWorking`. The grid is painted from the on-disk
+                // cache before the network is touched, so `isLoadingCatalog` is true for the
+                // whole opening window of every launch while the screen already looks ready
+                // — and re-sorting a list conflicts with a refresh no more than opening the
+                // sheet does.
+                sortEnabled = state.canSelectFace,
+                sortLabel = { option, reversed -> catalogSortLabel(option, reversed) },
+                onSort = onSort,
+                onReverseSort = onReverseSort,
+                sourceLabel = stringResource(
+                    if (state.catalogFromCache) {
+                        R.string.library_source_cached
+                    } else {
+                        R.string.library_source_live
+                    },
+                ),
+                countLabel = stringResource(
+                    R.string.library_face_and_style_count,
+                    state.visibleFaces.size,
+                    state.styleCount,
+                ),
+            )
         }
 
         if (state.isLoadingCatalog && state.faces.isEmpty()) {
@@ -471,8 +509,14 @@ private fun WatchFaceGrid(
             gridItems(state.visibleFaces, key = CatalogFace::productId) { face ->
                 WatchFaceCard(
                     face = face,
-                    enabled = !state.isWorking,
+                    // `canSelectFace`, like the sort chips above — not `isWorking`. The
+                    // grid is drawn from the on-disk cache before the network is touched,
+                    // so `isLoadingCatalog` is true for the whole opening window of every
+                    // launch while the screen already looks ready, and a card refusing the
+                    // tap there is the silence that predicate was added to end.
+                    enabled = state.canSelectFace,
                     uneditable = face.appId in state.uneditableAppIds,
+                    projectCount = projectCounts[face.faceId] ?: 0,
                     onClick = { onFace(face) },
                 )
             }
@@ -543,9 +587,18 @@ private fun WatchFaceCard(
     face: CatalogFace,
     enabled: Boolean,
     uneditable: Boolean,
+    projectCount: Int,
     onClick: () -> Unit,
 ) {
     val styleCount = styleCountLabel(face.styles.size)
+    // The project count replaces the style count rather than joining it: this row is one
+    // line of micro type between two edges, and what someone scanning the grid for a face
+    // they have already started wants is the count that is about them.
+    val trailing = if (projectCount > 0) {
+        pluralStringResource(R.plurals.library_face_card_projects, projectCount, projectCount)
+    } else {
+        styleCount
+    }
     val cardDescription = stringResource(
         if (uneditable) {
             R.string.library_face_card_a11y_not_editable
@@ -554,7 +607,8 @@ private fun WatchFaceCard(
         },
         face.name,
         face.faceId,
-        styleCount,
+        // Both facts reach a screen reader; only one of them fits on the card.
+        if (projectCount > 0) "$styleCount, $trailing" else styleCount,
     )
     Column(
         modifier = Modifier
@@ -610,9 +664,13 @@ private fun WatchFaceCard(
                 color = MaterialTheme.colorScheme.primary,
             )
             Text(
-                styleCount,
+                trailing,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.fitText.secondary,
+                color = if (projectCount > 0) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.fitText.secondary
+                },
             )
         }
     }
@@ -632,16 +690,23 @@ private fun styleCountLabel(count: Int): String =
 @Composable
 private fun FaceDetailsSheet(
     face: CatalogFace,
+    faceProjects: List<ProjectSummary>,
     selectedStyleId: Int?,
     downloading: Boolean,
     downloadFraction: Float,
     uneditable: Boolean,
+    packageOnDevice: Boolean,
+    projectsEnabled: Boolean,
+    openingProjectId: Long?,
     error: String?,
     onDismiss: () -> Unit,
     onStyle: (Int) -> Unit,
     onDownload: () -> Unit,
+    onOpenProject: (ProjectSummary) -> Unit,
 ) {
     val selected = face.styles.singleOrNull { it.id == selectedStyleId } ?: face.styles.first()
+    val action =
+        faceAction(downloading, uneditable, packageOnDevice, faceProjects, face.versionCode)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         // The sheet exists to reach one button. Opening half-height put "Download &
@@ -695,6 +760,46 @@ private fun FaceDetailsSheet(
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentScale = ContentScale.Fit,
                 )
+                if (faceProjects.isNotEmpty()) {
+                    // A plain Column, never a LazyColumn. This region is already inside a
+                    // `verticalScroll`, and nesting a vertical lazy list in one throws at
+                    // measure time. The LazyRow of style thumbnails below is fine because it
+                    // scrolls the other way.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        MicroLabel(stringResource(R.string.library_sheet_your_projects))
+                        Text(
+                            faceProjects.size.toString(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.fitText.secondary,
+                        )
+                    }
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        faceProjects.forEach { project ->
+                            SheetProjectRow(
+                                project = project,
+                                outdated = project.isOutdated(face.versionCode),
+                                enabled = projectsEnabled,
+                                opening = project.id == openingProjectId,
+                                onOpen = { onOpenProject(project) },
+                            )
+                        }
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(top = 20.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                    MicroLabel(
+                        stringResource(R.string.library_sheet_start_new),
+                        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 MicroLabel(
                     stringResource(R.string.library_sheet_choose_style),
                     modifier = Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 9.dp),
@@ -753,26 +858,47 @@ private fun FaceDetailsSheet(
                     )
                 }
                 FitButton(
-                    text = stringResource(
-                        when {
-                            downloading -> R.string.library_download_in_progress
-                            uneditable -> R.string.library_download_not_editable
-                            else -> R.string.library_download
-                        },
-                    ),
+                    // UPDATE and NEW_PROJECT run the same code — `onDownload` always fetches
+                    // the version the catalogue is serving now, which *is* the newest. They
+                    // differ only in what the button says, and that was the part that was
+                    // wrong: it promised a download that would not happen, or offered to
+                    // start something new without mentioning the newer version it would use.
+                    text = when (action) {
+                        FaceAction.OPENING -> stringResource(R.string.library_open_in_progress)
+                        FaceAction.DOWNLOADING -> stringResource(R.string.library_download_in_progress)
+                        FaceAction.NOT_EDITABLE -> stringResource(R.string.library_download_not_editable)
+                        FaceAction.UPDATE ->
+                            stringResource(R.string.library_update_to, face.versionName)
+                        FaceAction.NEW_PROJECT -> stringResource(R.string.library_new_project)
+                        FaceAction.OPEN -> stringResource(R.string.library_open_edit)
+                        FaceAction.DOWNLOAD -> stringResource(R.string.library_download)
+                    },
                     onClick = onDownload,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !downloading && !uneditable,
+                    // `openingProjectId`, not `projectsEnabled`: the latter is `isWorking`,
+                    // and a catalogue refresh must not close this button any more than it
+                    // closes the sheet. An open in flight must, and did not — it is the
+                    // control directly under the rows that start one.
+                    enabled = !downloading && !uneditable && openingProjectId == null,
                     loading = downloading,
                 )
-                if (downloading) {
+                // Only while bytes are actually arriving. A determinate bar over a cached
+                // package would jump straight to full and say nothing true on the way.
+                if (action == FaceAction.DOWNLOADING) {
                     LinearProgressIndicator(
                         progress = { downloadFraction },
                         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     )
                 }
                 Text(
-                    stringResource(R.string.library_download_cache_note),
+                    stringResource(
+                        when {
+                            action == FaceAction.UPDATE -> R.string.library_update_note
+                            packageOnDevice && action != FaceAction.NOT_EDITABLE ->
+                                R.string.library_new_project_note
+                            else -> R.string.library_download_cache_note
+                        },
+                    ),
                     modifier = Modifier.padding(top = 10.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.fitText.secondary,
@@ -839,39 +965,101 @@ private fun StyleThumbnail(
 
 @Composable
 private fun ProjectsList(
-    projects: List<ProjectSummary>,
+    state: LibraryUiState,
     enabled: Boolean,
+    openingProjectId: Long?,
+    onQuery: (String) -> Unit,
+    onSort: (ProjectSort) -> Unit,
+    onReverseSort: () -> Unit,
     onBrowse: () -> Unit,
     onOpen: (ProjectSummary) -> Unit,
+    onRename: (ProjectSummary) -> Unit,
+    onDuplicate: (ProjectSummary) -> Unit,
     onRemove: (ProjectSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val projects = state.visibleProjects
+    // Only one menu is ever composed, because only one id can be held here. A DropdownMenu
+    // is a Popup — its own window — and one per row would be one window per project.
+    var openMenuFor by rememberSaveable { mutableStateOf<Long?>(null) }
+    // Said once, above the list, rather than on each row that shares a face: it is a fact
+    // about the watch, not about any one project.
+    val sharesAFace = remember(state.projects) {
+        state.projects.groupingBy(ProjectSummary::faceId).eachCount().any { it.value > 1 }
+    }
     LazyColumn(
         modifier = modifier,
-        contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 28.dp),
+        // The catalogue's insets, not its own. They used to differ by 4dp horizontally and
+        // 2dp vertically, which is why the search field and every sort chip stepped sideways
+        // and up when you switched tabs.
+        contentPadding = LibraryPageInsets,
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        if (projects.isEmpty()) {
+        if (state.projects.isEmpty()) {
             item { ProjectsEmptyState(onBrowse) }
-        } else {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    MicroLabel(stringResource(R.string.library_projects_saved))
+            return@LazyColumn
+        }
+        // The same controls the catalogue has, in the same place, scrolling with the list.
+        item {
+            Column {
+                LibraryPageControls(
+                    query = state.projectQuery,
+                    onQuery = onQuery,
+                    searchPlaceholder = stringResource(R.string.library_projects_search_placeholder),
+                    searchEnabled = true,
+                    sortOptions = ProjectSort.entries,
+                    sort = state.projectSort,
+                    sortReversed = state.projectSortReversed,
+                    sortEnabled = true,
+                    sortLabel = { option, reversed -> projectSortLabel(option, reversed) },
+                    onSort = onSort,
+                    onReverseSort = onReverseSort,
+                    sourceLabel = stringResource(R.string.library_projects_saved),
+                    countLabel = stringResource(
+                        R.string.library_projects_local_count,
+                        projects.size,
+                    ),
+                )
+                if (sharesAFace) {
                     Text(
-                        stringResource(R.string.library_projects_local_count, projects.size),
-                        style = MaterialTheme.typography.labelMedium,
+                        stringResource(R.string.library_projects_shared_face_note),
+                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.fitText.secondary,
                     )
                 }
             }
+        }
+        if (projects.isEmpty()) {
+            item {
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        stringResource(R.string.library_projects_no_matches_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        stringResource(R.string.library_projects_no_matches_detail),
+                        modifier = Modifier.padding(top = 7.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        } else {
             items(projects, key = ProjectSummary::id) { project ->
                 ProjectRow(
                     project = project,
                     enabled = enabled,
+                    opening = project.id == openingProjectId,
+                    menuOpen = openMenuFor == project.id,
                     onOpen = { onOpen(project) },
+                    onOpenMenu = { openMenuFor = project.id },
+                    onDismissMenu = { openMenuFor = null },
+                    onRename = { onRename(project) },
+                    onDuplicate = { onDuplicate(project) },
                     onRemove = { onRemove(project) },
                 )
             }
@@ -931,43 +1119,41 @@ private fun ProjectsEmptyState(onBrowse: () -> Unit) {
 private fun ProjectRow(
     project: ProjectSummary,
     enabled: Boolean,
+    opening: Boolean,
+    menuOpen: Boolean,
     onOpen: () -> Unit,
+    onOpenMenu: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onRename: () -> Unit,
+    onDuplicate: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    val age = remember(project.importedAtEpochMillis) {
-        DateUtils.getRelativeTimeSpanString(
-            project.importedAtEpochMillis,
-            System.currentTimeMillis(),
-            DateUtils.MINUTE_IN_MILLIS,
-            DateUtils.FORMAT_ABBREV_RELATIVE,
-        ).toString()
-    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 84.dp)
+            .alpha(inertRowAlpha(enabled, opening))
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
             .clickable(enabled = enabled, role = Role.Button, onClick = onOpen)
-            .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
+            .padding(start = 14.dp, top = 12.dp, end = 10.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(13.dp),
     ) {
         ProjectThumbnail(project)
         Column(Modifier.weight(1f)) {
             Text(
-                project.faceName ?: stringResource(R.string.library_unnamed_face),
+                // The project's own name, not the face's. `faceName` is the same string for
+                // every project started on a face, which is what made two of them on one
+                // face impossible to tell apart.
+                project.name,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                stringResource(
-                    R.string.library_project_face_line,
-                    project.faceId,
-                    project.displayName,
-                ),
+                projectFaceLine(project),
                 modifier = Modifier.padding(top = 3.dp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -975,7 +1161,7 @@ private fun ProjectRow(
                 color = MaterialTheme.fitText.secondary,
             )
             Text(
-                age,
+                relativeAge(project.updatedAtEpochMillis),
                 modifier = Modifier.padding(top = 3.dp),
                 // Mono, like the face line directly above it: this is a quantity, and it was
                 // the one numeral in the app still set in a proportional face.
@@ -983,19 +1169,256 @@ private fun ProjectRow(
                 color = MaterialTheme.fitText.tertiary,
             )
         }
-        TextButton(onClick = onRemove, enabled = enabled) {
+        // Left in place while the row is opening rather than hidden: `enabled` is already
+        // false for every row then, and taking a control out of a row is a layout shift
+        // under a finger that is still on it.
+        ProjectMenu(
+            project = project,
+            enabled = enabled,
+            expanded = menuOpen,
+            onOpen = onOpenMenu,
+            onDismiss = onDismissMenu,
+            onRename = onRename,
+            onDuplicate = onDuplicate,
+            onRemove = onRemove,
+        )
+        // Unlike the sheet's row, this one builds no description of its own, so the label
+        // is heard beside the project's name rather than in place of it.
+        val openingLabel = stringResource(R.string.library_project_opening_a11y)
+        ProjectRowTrailing(
+            opening = opening,
+            modifier = if (opening) {
+                Modifier.semantics { contentDescription = openingLabel }
+            } else {
+                Modifier
+            },
+        )
+    }
+}
+
+/**
+ * Rename and delete, behind one action on the row.
+ *
+ * It replaces a bare `×` TextButton that had no `contentDescription` at all — a screen
+ * reader announced it as "multiplication sign" — and that deleted every edit in a project
+ * with no confirmation. Two near-identical rows on one face make that much worse.
+ *
+ * The glyph is `⋯` and not the app menu's `≡`. `AGENTS.md` records why the header menu is
+ * `≡`: the editor's Canvas page already carries a `⋯` that *navigates*, and two ellipses
+ * side by side read as one control with two behaviours. There is no such `⋯` on this
+ * screen, so here `⋯` means what it usually means.
+ *
+ * Both entries close the menu before invoking their callback, because both open a dialog
+ * and a popup left standing behind one is the first thing to go wrong.
+ */
+@Composable
+private fun ProjectMenu(
+    project: ProjectSummary,
+    enabled: Boolean,
+    expanded: Boolean,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onDuplicate: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Box {
+        FitIconButton(
+            glyph = "⋯",
+            contentDescription = stringResource(R.string.library_project_more_a11y, project.name),
+            onClick = onOpen,
+            enabled = enabled,
+        )
+        // The app menu's surface and entries, not a second set assembled by hand: built
+        // separately these took Material's default entry type against the bar menu's
+        // `bodyMedium`, so the same gesture opened two different-looking menus.
+        FitDropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+            FitMenuEntry(stringResource(R.string.library_project_rename)) {
+                onDismiss()
+                onRename()
+            }
+            FitMenuEntry(stringResource(R.string.library_project_duplicate)) {
+                onDismiss()
+                onDuplicate()
+            }
+            // Last, and the only one that is destructive. Nothing above it can lose work,
+            // so the entry that can is the one furthest from where the menu opens.
+            FitMenuEntry(
+                stringResource(R.string.library_project_delete),
+                MaterialTheme.colorScheme.error,
+            ) {
+                onDismiss()
+                onRemove()
+            }
+        }
+    }
+}
+
+/**
+ * One of this face's projects, inside the face sheet.
+ *
+ * Internal so `SheetProjectRowA11yTest` can render it: this row builds its own
+ * `contentDescription`, which is the only thing a screen reader hears, so what it does and
+ * does not include is worth an assertion.
+ */
+@Composable
+internal fun SheetProjectRow(
+    project: ProjectSummary,
+    outdated: Boolean,
+    enabled: Boolean,
+    opening: Boolean,
+    onOpen: () -> Unit,
+) {
+    val age = relativeAge(project.updatedAtEpochMillis)
+    // The badge has to be in the description, not merely beside it. This row sets its own
+    // `contentDescription`, which replaces whatever a screen reader would have assembled
+    // from the text inside it — so OUTDATED was drawn and never announced, and it is the
+    // only thing telling this row apart from the siblings above and below it. The grid's
+    // cards already carry a second string for exactly this reason. The same goes for the
+    // spinner: while this row is opening, "Opening <name>" is the whole of what is heard.
+    val description = if (opening) {
+        stringResource(R.string.library_sheet_project_a11y_opening, project.name)
+    } else {
+        stringResource(
+            if (outdated) {
+                R.string.library_sheet_project_a11y_outdated
+            } else {
+                R.string.library_sheet_project_a11y
+            },
+            project.name,
+            projectFaceLine(project),
+            age,
+        )
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(inertRowAlpha(enabled, opening))
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onOpen)
+            .semantics { contentDescription = description }
+            .padding(start = 10.dp, top = 9.dp, end = 12.dp, bottom = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        ProjectThumbnail(project)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    project.name,
+                    modifier = Modifier.weight(1f, fill = false),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                if (outdated) {
+                    FitBadge(
+                        stringResource(R.string.library_project_outdated),
+                        MaterialTheme.fitColors.warning,
+                        Modifier.padding(start = 8.dp),
+                    )
+                }
+            }
             Text(
-                "×",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.titleLarge,
+                "${projectFaceLine(project)} · $age",
+                modifier = Modifier.padding(top = 3.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.fitText.secondary,
             )
         }
+        ProjectRowTrailing(opening)
+    }
+}
+
+/**
+ * The chevron a project row ends in, or the spinner that stands in for it while that
+ * project is being opened.
+ *
+ * In the chevron's place rather than beside it, because the row is one line of type between
+ * two edges: anything added to it either wraps the face line or pushes the `›` off the end.
+ * Replacing it also says the right thing — the row is no longer somewhere to go, it is
+ * somewhere being gone to.
+ *
+ * The spinner is a few dp wider than the chevron, so on a narrow phone the face line of the
+ * row being opened can lose its last word to an ellipsis while it spins. Reserving the wider
+ * of the two for both states fixes that and costs more than it saves: at 320dp it took the
+ * same few dp out of *every* row's title column permanently — `face 00036 · style 01` became
+ * `face 00036 · style…` on all of them, opening or not — to spare one row a wobble that
+ * lasts as long as the open does.
+ */
+@Composable
+private fun ProjectRowTrailing(opening: Boolean, modifier: Modifier = Modifier) {
+    if (opening) {
+        CircularProgressIndicator(
+            modifier = modifier.size(15.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    } else {
         Text(
             "›",
+            modifier = modifier,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.titleLarge,
         )
     }
+}
+
+/**
+ * How far a project row is faded while it cannot be tapped.
+ *
+ * Only the rows that are *not* the one being opened: that one keeps full opacity and shows
+ * the spinner, so the pair reads as "this one is going, the rest are unavailable" rather
+ * than as a list that has gone quiet for no reason. Material's own disabled alpha is .38,
+ * which on a whole card — thumbnail, border and three lines of type — reads as damage; .45
+ * is enough to be plainly inert. Both are exempt from the small-text contrast floor for the
+ * reason `AGENTS.md` gives: an inoperable control should look inert.
+ */
+private fun inertRowAlpha(enabled: Boolean, opening: Boolean): Float =
+    if (enabled || opening) 1f else .45f
+
+/**
+ * "face 00112 · style 01", or just the face when the style could not be recovered.
+ *
+ * The style is numbered the way the sheet's thumbnails are — `styleN.bin` is zero-based and
+ * the labels beside the previews are not — so the two agree about which colourway is which.
+ */
+@Composable
+private fun projectFaceLine(project: ProjectSummary): String {
+    val styleId = project.styleId
+    return if (styleId == null) {
+        stringResource(R.string.library_project_face_line_plain, project.faceId)
+    } else {
+        stringResource(
+            R.string.library_project_face_line,
+            project.faceId,
+            stringResource(
+                R.string.library_project_style,
+                (styleId + 1).toString().padStart(2, '0'),
+            ),
+        )
+    }
+}
+
+/**
+ * "2 hr. ago", for a moment in the past.
+ *
+ * Keyed on the timestamp alone: the composition it is read in re-runs on an edit, which is
+ * the only thing that moves this value, and a clock that had to tick would recompose every
+ * row in the list for a string most readers never watch change.
+ */
+@Composable
+private fun relativeAge(epochMillis: Long): String = remember(epochMillis) {
+    DateUtils.getRelativeTimeSpanString(
+        epochMillis,
+        System.currentTimeMillis(),
+        DateUtils.MINUTE_IN_MILLIS,
+        DateUtils.FORMAT_ABBREV_RELATIVE,
+    ).toString()
 }
 
 /**
@@ -1056,4 +1479,86 @@ private fun formatBytes(bytes: Long): String = when {
     bytes < 1024 -> stringResource(R.string.library_size_bytes, bytes)
     bytes < 1024 * 1024 -> stringResource(R.string.library_size_kib, bytes / 1024.0)
     else -> stringResource(R.string.library_size_mib, bytes / (1024.0 * 1024.0))
+}
+
+/**
+ * Renames a project.
+ *
+ * The text slot scrolls, like every dialog's in this app: an `AlertDialog` caps its own
+ * height and hands the slot whatever is left, which on a landscape phone is a few lines,
+ * and it clips rather than scrolls. About lost its link and its version to exactly that.
+ */
+@Composable
+private fun RenameProjectDialog(
+    project: ProjectSummary,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var name by rememberSaveable(project.id) { mutableStateOf(project.name) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.library_rename_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.library_rename_label)) },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name) },
+                // Blank is refused here rather than in the repository, which ignores it: a
+                // dimmed button says why nothing happens, where a silent no-op does not.
+                enabled = name.isNotBlank(),
+            ) {
+                Text(stringResource(R.string.library_rename_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.library_cancel)) }
+        },
+    )
+}
+
+/**
+ * Confirms deleting a project.
+ *
+ * Deleting discards every edit saved in it and cannot be undone. It used to happen on one
+ * tap of an unlabelled `×`; with more than one project on a face, the row beside the one
+ * being deleted can look almost identical to it.
+ */
+@Composable
+private fun DeleteProjectDialog(
+    project: ProjectSummary,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.library_delete_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    stringResource(R.string.library_delete_message, project.name),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    stringResource(R.string.library_delete_confirm),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.library_cancel)) }
+        },
+    )
 }

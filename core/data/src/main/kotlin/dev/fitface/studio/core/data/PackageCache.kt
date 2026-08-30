@@ -73,6 +73,18 @@ class PackageCache @Inject constructor(
         }
     }
 
+    /**
+     * Whether [readPackage] would serve bytes, without reading up to 32 MiB to find out.
+     *
+     * The face sheet's caption tells someone no download will happen. Inferring that from
+     * the projects on the face is nearly always right and is wrong exactly when it matters:
+     * [readPackage] deletes a package it cannot read, which leaves a project still recording
+     * a version whose bytes are gone. A promise the app cannot check is one it should not
+     * make.
+     */
+    fun hasPackage(appId: String, versionCode: Long): Boolean =
+        packageFile(appId, versionCode).let { it.isFile && it.length() > 0 }
+
     fun writePackage(appId: String, versionCode: Long, bytes: ByteArray) {
         try {
             packagesDirectory.mkdirs()

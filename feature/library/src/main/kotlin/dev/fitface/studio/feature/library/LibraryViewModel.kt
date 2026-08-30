@@ -9,6 +9,8 @@ import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.FaceCatalogRepository
+import dev.fitface.studio.core.model.ProjectSort
+import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.WatchFaceException
@@ -18,24 +20,54 @@ import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class LibraryUiState(
     val isLoadingCatalog: Boolean = true,
-    val isOpeningProject: Boolean = false,
+    /**
+     * The project whose package is being read and parsed, if any.
+     *
+     * An id rather than a flag because the row that was tapped has to say so. Opening reads
+     * a 30-odd MiB package off disk and parses the container out of it, which is seconds
+     * even on a fast phone, and until this carried an identity nothing on screen changed at
+     * all in that window: the taps that followed were refused by [openProject]'s own guard
+     * and looked exactly like taps that had done nothing, so people went on tapping the row
+     * and then its neighbours.
+     */
+    val openingProjectId: Long? = null,
     val faces: List<CatalogFace> = emptyList(),
     val styleCount: Int = 0,
     val catalogFromCache: Boolean = false,
     val catalogFetchedAtEpochMillis: Long = 0,
     val query: String = "",
     val sort: CatalogSort = CatalogSort.RECENT,
+    /** Whether [sort] runs against the order its own label names, or backwards. */
+    val sortReversed: Boolean = false,
+    /**
+     * Every saved project.
+     *
+     * In the state rather than beside it, because the face sheet has to derive from projects
+     * and the catalogue at once — "which of these are mine, and has the store moved past
+     * them" is a question neither flow can answer alone.
+     */
+    val projects: List<ProjectSummary> = emptyList(),
+    val projectQuery: String = "",
+    val projectSort: ProjectSort = ProjectSort.RECENT,
+    val projectSortReversed: Boolean = false,
+    /** The project a rename dialog is open for, and the one a delete confirmation is. */
+    val renaming: ProjectSummary? = null,
+    val deleting: ProjectSummary? = null,
     val selectedFace: CatalogFace? = null,
     val selectedStyleId: Int? = null,
+    /**
+     * Whether [selectedFace]'s current package is already on disk. Resolved when the sheet
+     * opens, and false until it is — a caption that promises no download has to be checked,
+     * not assumed.
+     */
+    val selectedFaceCached: Boolean = false,
     val downloadingProductId: String? = null,
     val downloadFraction: Float = 0f,
     /**
@@ -45,6 +77,15 @@ data class LibraryUiState(
     val sheetError: String? = null,
     val uneditableAppIds: Set<String> = emptySet(),
     val error: UserMessage? = null,
+    /**
+     * A project was just copied, and nothing on screen proves it.
+     *
+     * Carries the name rather than a finished sentence, so the wording stays in
+     * `strings.xml` where the rest of this screen's copy is. Separate from [error] because
+     * the two are not the same kind of thing — and needed at all because under any sort but
+     * the default the new row can land anywhere in the list, or off the bottom of it.
+     */
+    val duplicated: DuplicateNotice? = null,
     /**
      * Why the catalogue is empty, kept until the next successful load.
      *
@@ -64,6 +105,9 @@ data class LibraryUiState(
      */
     val previousCrash: Boolean = false,
 ) {
+    val isOpeningProject: Boolean
+        get() = openingProjectId != null
+
     val isWorking: Boolean
         get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null
 
@@ -94,9 +138,91 @@ data class LibraryUiState(
                         face.appId.contains(needle, ignoreCase = true)
                 }
             }
-            return sort.apply(matched)
+            return sort.apply(matched, sortReversed)
         }
+
+    val visibleProjects: List<ProjectSummary>
+        get() {
+            val needle = projectQuery.trim()
+            val matched = if (needle.isEmpty()) {
+                projects
+            } else {
+                projects.filter { project ->
+                    project.name.contains(needle, ignoreCase = true) ||
+                        project.faceName?.contains(needle, ignoreCase = true) == true ||
+                        project.faceId.contains(needle) ||
+                        project.displayName.contains(needle, ignoreCase = true)
+                }
+            }
+            return projectSort.apply(matched, projectSortReversed)
+        }
+
+    /**
+     * The projects started on one face, most recently edited first.
+     *
+     * Deliberately not [projectSort]: this is the list inside the face sheet, and it answers
+     * "which of these was I last working on". The Projects page's chosen order is about that
+     * page, and carrying it here would put an A–Z sort in front of someone who came to the
+     * sheet to carry on where they left off.
+     */
+    fun projectsFor(faceId: String): List<ProjectSummary> =
+        ProjectSort.RECENT.apply(projects.filter { it.faceId == faceId })
 }
+
+/**
+ * What the one button at the bottom of the face sheet does.
+ *
+ * Pure, and separate from the composable, because the priority order is the whole point and
+ * a rule about which of these wins should be readable without a screen attached.
+ */
+internal enum class FaceAction {
+    OPENING,
+    DOWNLOADING,
+    NOT_EDITABLE,
+    UPDATE,
+    NEW_PROJECT,
+
+    /**
+     * The package is already here but nothing has been started on it, so there is no
+     * download to offer and no sibling to be "new" beside.
+     *
+     * Its own case because [DOWNLOAD] promised one: a face whose projects have all been
+     * deleted, or whose package was cached by a download whose project is gone, sat under a
+     * "Download & edit" button above a caption saying nothing would be downloaded. Both
+     * halves could not be right, and the caption was the true one.
+     */
+    OPEN,
+    DOWNLOAD,
+}
+
+internal fun faceAction(
+    downloading: Boolean,
+    uneditable: Boolean,
+    packageOnDevice: Boolean,
+    projects: List<ProjectSummary>,
+    storeVersionCode: Long,
+): FaceAction = when {
+    // "Downloading…" over a caption saying nothing would be downloaded is the same
+    // dishonesty this screen is being fixed for. Opening a cached package still takes a
+    // moment — the bytes are copied beside the project and the container is parsed — so it
+    // is a state, just not that one.
+    downloading && packageOnDevice -> FaceAction.OPENING
+    downloading -> FaceAction.DOWNLOADING
+    uneditable -> FaceAction.NOT_EDITABLE
+    // Before NEW_PROJECT: both start a new project on whatever the store serves now, and
+    // they differ only in what the button says. Saying "start a new project" while a newer
+    // version is what would actually arrive is the half of this that was wrong.
+    projects.any { it.isOutdated(storeVersionCode) } -> FaceAction.UPDATE
+    projects.isNotEmpty() -> FaceAction.NEW_PROJECT
+    // Last before DOWNLOAD, and only reachable with no projects at all: the package is
+    // here, so the button must not promise to fetch it. The caption already said so, which
+    // is how the two came to contradict each other.
+    packageOnDevice -> FaceAction.OPEN
+    else -> FaceAction.DOWNLOAD
+}
+
+/** A copy was made and named. The screen turns it into a sentence. */
+data class DuplicateNotice(val id: Long, val name: String)
 
 sealed interface LibraryEvent {
     data class OpenEditor(val projectId: Long) : LibraryEvent
@@ -109,9 +235,6 @@ class LibraryViewModel @Inject constructor(
     private val diagnostics: DiagnosticsLog,
     private val reporter: DiagnosticsReporter,
 ) : ViewModel() {
-    val projects = repository.observeProjects()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
     private val mutableState = MutableStateFlow(LibraryUiState())
     val state = mutableState.asStateFlow()
     private val messageIds = AtomicLong()
@@ -120,6 +243,11 @@ class LibraryViewModel @Inject constructor(
     val events = eventChannel.receiveAsFlow()
 
     init {
+        viewModelScope.launch {
+            repository.observeProjects().collect { saved ->
+                mutableState.update { it.copy(projects = saved) }
+            }
+        }
         viewModelScope.launch {
             if (reporter.hasPreviousCrash()) {
                 mutableState.update { it.copy(previousCrash = true) }
@@ -182,8 +310,29 @@ class LibraryViewModel @Inject constructor(
         mutableState.update { it.copy(query = value) }
     }
 
+    /**
+     * Picking a different sort always starts in the direction that sort's label names.
+     * Carrying a reversal across would land someone on "Face number ↓" having asked for
+     * face number, with nothing but the chip to say why the list is upside down.
+     */
     fun setSort(value: CatalogSort) {
-        mutableState.update { it.copy(sort = value) }
+        mutableState.update { it.copy(sort = value, sortReversed = false) }
+    }
+
+    fun reverseSort() {
+        mutableState.update { it.copy(sortReversed = !it.sortReversed) }
+    }
+
+    fun setProjectQuery(value: String) {
+        mutableState.update { it.copy(projectQuery = value) }
+    }
+
+    fun setProjectSort(value: ProjectSort) {
+        mutableState.update { it.copy(projectSort = value, projectSortReversed = false) }
+    }
+
+    fun reverseProjectSort() {
+        mutableState.update { it.copy(projectSortReversed = !it.projectSortReversed) }
     }
 
     fun selectFace(face: CatalogFace) {
@@ -192,15 +341,34 @@ class LibraryViewModel @Inject constructor(
             it.copy(
                 selectedFace = face,
                 selectedStyleId = face.styles.firstOrNull()?.id,
+                selectedFaceCached = false,
                 sheetError = uneditableMessage.takeIf { _ -> face.appId in it.uneditableAppIds },
             )
+        }
+        viewModelScope.launch {
+            val cached = runCatching { catalog.isPackageCached(face) }.getOrDefault(false)
+            mutableState.update {
+                // The sheet may have been dismissed, or another face chosen, while this
+                // touched the disk. Landing the answer on whatever is open now would tell
+                // someone about a face they are no longer looking at.
+                if (it.selectedFace?.productId == face.productId) {
+                    it.copy(selectedFaceCached = cached)
+                } else {
+                    it
+                }
+            }
         }
     }
 
     fun dismissFace() {
         if (mutableState.value.downloadingProductId != null) return
         mutableState.update {
-            it.copy(selectedFace = null, selectedStyleId = null, sheetError = null)
+            it.copy(
+                selectedFace = null,
+                selectedStyleId = null,
+                selectedFaceCached = false,
+                sheetError = null,
+            )
         }
     }
 
@@ -213,7 +381,13 @@ class LibraryViewModel @Inject constructor(
     fun downloadSelectedFace() {
         val face = mutableState.value.selectedFace ?: return
         val styleId = mutableState.value.selectedStyleId ?: return
+        // Not `isWorking`: a catalogue refresh is no reason to refuse, which is the whole
+        // point of the sheet opening during one. An open in flight is — it holds the
+        // repository's single editing session and it is about to take the screen, and this
+        // button sits under the rows that start one, live for the several seconds an open
+        // takes. Two editors on the back stack was the result.
         if (mutableState.value.downloadingProductId != null) return
+        if (mutableState.value.isOpeningProject) return
         viewModelScope.launch {
             mutableState.update {
                 it.copy(
@@ -235,10 +409,16 @@ class LibraryViewModel @Inject constructor(
                         downloadFraction = 0f,
                         selectedFace = null,
                         selectedStyleId = null,
+                        selectedFaceCached = false,
                     )
                 }
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
             }.onFailure { error ->
+                // `runCatching` catches Throwable, so it catches the cancellation that
+                // tearing this ViewModel down throws — and reporting that as a failed
+                // download would write an error into a screen that is going away, and
+                // swallow the cancellation the coroutine machinery is owed.
+                if (error is CancellationException) throw error
                 val message = error.userMessage()
                 // A package with no container will never become editable, so record
                 // it and stop offering the download.
@@ -265,21 +445,97 @@ class LibraryViewModel @Inject constructor(
         // that screen's state — unlike the sheet, which only reads the face it was given.
         if (mutableState.value.isWorking) return
         viewModelScope.launch {
-            mutableState.update { it.copy(isOpeningProject = true, error = null) }
+            mutableState.update { it.copy(openingProjectId = project.id, error = null) }
             runCatching { repository.openProject(project.id) }
                 .onSuccess { snapshot ->
-                    mutableState.update { it.copy(isOpeningProject = false) }
+                    // The face sheet closes here, the way a finished download already
+                    // closes it. The flag has to come off — the library keeps this
+                    // ViewModel while it sits under the editor, so one left set is a
+                    // screen that comes back with every row dead — and the moment it does,
+                    // the sheet's rows are live again for as long as the editor takes to
+                    // arrive. Those are the rows under the finger, so they go with it. The
+                    // editor is asked for first for the same reason, though a buffered
+                    // channel makes that ordering a courtesy rather than a guarantee.
                     eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
+                    mutableState.update {
+                        it.copy(
+                            openingProjectId = null,
+                            selectedFace = null,
+                            selectedStyleId = null,
+                            selectedFaceCached = false,
+                        )
+                    }
                 }
                 .onFailure { error ->
                     mutableState.update {
-                        it.copy(isOpeningProject = false, error = error.userMessage())
+                        it.copy(openingProjectId = null, error = error.userMessage())
                     }
                 }
         }
     }
 
-    fun deleteProject(project: ProjectSummary) {
+    fun startRename(project: ProjectSummary) {
+        mutableState.update { it.copy(renaming = project) }
+    }
+
+    fun dismissRename() {
+        mutableState.update { it.copy(renaming = null) }
+    }
+
+    fun confirmRename(name: String) {
+        val project = mutableState.value.renaming ?: return
+        mutableState.update { it.copy(renaming = null) }
+        viewModelScope.launch {
+            runCatching { repository.renameProject(project.id, name) }
+                .onFailure { error ->
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
+     * Copies a project, and says what the copy is called.
+     *
+     * No confirmation: it takes nothing away, and the copy can be deleted in two taps from
+     * the row it appears on. The message is the whole feedback — under any sort but the
+     * default the new row can land anywhere in the list.
+     */
+    fun duplicateProject(project: ProjectSummary) {
+        if (mutableState.value.isWorking) return
+        viewModelScope.launch {
+            runCatching { repository.duplicateProject(project.id) }
+                .onSuccess { duplicate ->
+                    mutableState.update {
+                        it.copy(
+                            duplicated = DuplicateNotice(
+                                messageIds.incrementAndGet(),
+                                duplicate.name,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
+     * Deleting asks first. It discards every edit in the project and cannot be undone, and
+     * with more than one project on a face the rows beside it look very much alike.
+     */
+    fun startDelete(project: ProjectSummary) {
+        mutableState.update { it.copy(deleting = project) }
+    }
+
+    fun dismissDelete() {
+        mutableState.update { it.copy(deleting = null) }
+    }
+
+    fun confirmDelete() {
+        val project = mutableState.value.deleting ?: return
+        mutableState.update { it.copy(deleting = null) }
         viewModelScope.launch {
             runCatching { repository.deleteProject(project.id) }
                 .onFailure { error ->
@@ -318,6 +574,12 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    fun clearDuplicated(id: Long) {
+        mutableState.update { current ->
+            if (current.duplicated?.id == id) current.copy(duplicated = null) else current
+        }
+    }
+
     private fun Throwable.userMessage(): UserMessage {
         if (this is CancellationException) throw this
         // technicalDetail is the half that explains the failure and it used to stop here:
@@ -341,6 +603,7 @@ class LibraryViewModel @Inject constructor(
 
     private companion object {
         const val TAG = "LibraryViewModel"
+
         const val uneditableMessage =
             "This face is customised on the watch rather than shipped as an editable " +
                 "container, so FitFace Studio has nothing to open."
