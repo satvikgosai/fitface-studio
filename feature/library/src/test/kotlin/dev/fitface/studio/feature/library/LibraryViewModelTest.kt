@@ -17,8 +17,13 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import dev.fitface.studio.core.model.EditorSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -191,12 +196,144 @@ class LibraryViewModelTest {
 
         assertTrue(LibraryUiState(isLoadingCatalog = false).canSelectFace)
         assertFalse(
-            LibraryUiState(isLoadingCatalog = false, isOpeningProject = true).canSelectFace,
+            LibraryUiState(isLoadingCatalog = false, openingProjectId = 12L).canSelectFace,
         )
         assertFalse(
             LibraryUiState(isLoadingCatalog = false, downloadingProductId = "p00001")
                 .canSelectFace,
         )
+    }
+
+    /**
+     * The row that was tapped is named, so it can be the one that shows a spinner.
+     *
+     * A flag was enough for the guards and not enough for the screen: reading the package
+     * and parsing the container takes seconds, and with nothing on the row saying the tap
+     * had been taken, people tapped it again and then tapped its neighbours.
+     */
+    @Test
+    fun openingAProjectNamesTheProjectBeingOpened() {
+        coEvery { repository.openProject(any()) } coAnswers { awaitCancellation() }
+        val catalog = FakeCatalog(loaded = catalogue)
+
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+        viewModel.openProject(project)
+        settle()
+
+        assertEquals(project.id, viewModel.state.value.openingProjectId)
+        assertTrue(viewModel.state.value.isOpeningProject)
+    }
+
+    /** And a second row tapped while the first is still being read is refused. */
+    @Test
+    fun asecondProjectTappedWhileTheFirstIsOpeningIsIgnored() {
+        coEvery { repository.openProject(any()) } coAnswers { awaitCancellation() }
+        val catalog = FakeCatalog(loaded = catalogue)
+
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+        viewModel.openProject(project)
+        settle()
+        viewModel.openProject(project.copy(id = 13))
+        settle()
+
+        assertEquals(project.id, viewModel.state.value.openingProjectId)
+        coVerify(exactly = 1) { repository.openProject(any()) }
+        coVerify(exactly = 0) { repository.openProject(13) }
+    }
+
+    /**
+     * The sheet's own button is under those rows, and it starts an editing session too.
+     *
+     * It was gated on a download alone, so through the several seconds an open takes it sat
+     * there live — and starting a project from it then claims the repository's one session
+     * and pushes a second editor onto the back stack behind the first.
+     */
+    @Test
+    fun startingANewProjectWhileOneIsOpeningIsIgnored() {
+        coEvery { repository.openProject(any()) } coAnswers { awaitCancellation() }
+        val catalog = FakeCatalog(loaded = catalogue)
+
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+        viewModel.selectFace(faces[0])
+        viewModel.openProject(project)
+        settle()
+
+        viewModel.downloadSelectedFace()
+        settle()
+
+        assertNull(viewModel.state.value.downloadingProductId)
+        coVerify(exactly = 0) { repository.openPackage(any()) }
+    }
+
+    /** A refresh still is not a reason to refuse it, which is why the guard is not `isWorking`. */
+    @Test
+    fun startingANewProjectDuringACatalogueRefreshIsAllowed() {
+        val catalog = FakeCatalog(cached = catalogue.copy(fromCache = true))
+
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+        assertTrue(viewModel.state.value.isLoadingCatalog)
+        viewModel.selectFace(faces[0])
+
+        viewModel.downloadSelectedFace()
+        settle()
+
+        assertEquals(faces[0].productId, viewModel.state.value.downloadingProductId)
+    }
+
+    /**
+     * A finished open closes the face sheet, the way a finished download already did.
+     *
+     * The flag has to come off here — the library keeps this ViewModel while it sits under
+     * the editor, so one left set is a screen that comes back with every row dead — and the
+     * moment it does, the sheet's project rows are live again for as long as the editor
+     * takes to arrive. They are the rows under the finger, so they go with the same update
+     * rather than waiting to be tapped a second time.
+     */
+    @Test
+    fun afinishedOpenClosesTheSheetAndReleasesTheRows() {
+        val opened = CompletableDeferred<EditorSnapshot>()
+        coEvery { repository.openProject(project.id) } coAnswers { opened.await() }
+        val catalog = FakeCatalog(loaded = catalogue)
+
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+        val events = mutableListOf<LibraryEvent>()
+        val collector = CoroutineScope(Dispatchers.Main.immediate).launch {
+            viewModel.events.toList(events)
+        }
+        viewModel.selectFace(faces[0])
+        viewModel.openProject(project)
+        settle()
+        assertEquals(faces[0], viewModel.state.value.selectedFace)
+        assertEquals(project.id, viewModel.state.value.openingProjectId)
+
+        opened.complete(mockk<EditorSnapshot>(relaxed = true) { every { projectId } returns 12 })
+        settle()
+
+        assertEquals(listOf(LibraryEvent.OpenEditor(12)), events)
+        assertNull("the row must not be left spinning", viewModel.state.value.openingProjectId)
+        assertNull("the rows under the finger go with it", viewModel.state.value.selectedFace)
+        collector.cancel()
+    }
+
+    /** A failure puts the rows back rather than leaving the list inert. */
+    @Test
+    fun aFailedOpenReleasesTheRows() {
+        coEvery { repository.openProject(project.id) } throws
+            WatchFaceException("This project's package is missing.", "no local APK")
+        val catalog = FakeCatalog(loaded = catalogue)
+
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+        viewModel.openProject(project)
+        settle()
+
+        assertNull(viewModel.state.value.openingProjectId)
+        assertNotNull(viewModel.state.value.error)
     }
 
     /**

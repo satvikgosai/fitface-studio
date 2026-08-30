@@ -99,6 +99,15 @@ internal fun LibrarySearchField(
  * Generic over the sort enum because the catalogue and the projects list order different
  * things by different keys but present the choice identically.
  *
+ * The row scrolls sideways, which is a fallback and not a licence to overflow it: a chip past
+ * the right edge is a chip nothing on screen says is there. It has to fit unscrolled on the
+ * narrowest phone this app runs on, and the budget is tight. At 320dp, [LibraryPageInsets]
+ * leaves 288dp; the SORT label and its 3dp gap take 30dp, the three 7dp gaps take 21dp, and a
+ * chip is its label plus 28dp of padding at roughly 6.8dp a character — `labelMedium` is
+ * monospace, so a character really is a unit of width. Three eight-character labels come to
+ * 284dp and fit; "Face number ↑" alone put the row at 318dp and hung the last chip off the
+ * screen edge, arrow and all. `SortChipLayoutTest` holds the eight.
+ *
  * @param label the wording for an option in a direction. Not a property on the enum: those
  *   live in `:core:model`, which has no resources, and a reversible sort needs two labels per
  *   option in the reader's language.

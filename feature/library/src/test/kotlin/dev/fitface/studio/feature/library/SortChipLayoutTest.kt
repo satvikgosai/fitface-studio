@@ -13,6 +13,7 @@ import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.ui.FitFaceTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -113,6 +114,37 @@ class SortChipLayoutTest {
             }
         }
         assertEquals(catalogue, projects)
+    }
+
+    /**
+     * And the row has to fit the narrowest phone this app runs on.
+     *
+     * "Face number ↑" made the row 318dp wide against the 288dp a 320dp screen leaves inside
+     * `LibraryPageInsets`, so the last chip was cut off by the screen edge — with the arrow,
+     * the half of the label that says which way it sorts, in the part that had scrolled out
+     * of sight. The row does scroll, which is why nothing threw and no test caught it.
+     *
+     * Counted in characters rather than measured in pixels, for the reason
+     * `FitTopBarLayoutTest` gives: Robolectric's font metrics are not the device's, and a
+     * measurement that reads as fitting here can still clip in someone's hand. Characters
+     * are exact — `labelMedium` is `FontFamily.Monospace`, which is the same property the
+     * pair-length assertion above rests on. Eight is the budget at 320dp with the SORT label,
+     * three chips and the spacing between them; the arithmetic is in `strings.xml`.
+     */
+    @Test
+    fun noSortLabelIsWiderThanTheNarrowestPhoneFits() {
+        var labels = emptyList<String>()
+        compose.setContent {
+            labels = CatalogSort.entries.flatMap { option ->
+                listOf(catalogSortLabel(option, false), catalogSortLabel(option, true))
+            }
+        }
+        for (label in labels) {
+            assertTrue(
+                "\"$label\" is ${label.length} characters; the row fits 8",
+                label.length <= 8,
+            )
+        }
     }
 
     @Test

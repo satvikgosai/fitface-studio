@@ -239,7 +239,7 @@ class LibraryDerivedStateTest {
     fun theSheetOpensDuringTheLaunchWindowButNotDuringADownload() {
         assertTrue(LibraryUiState(isLoadingCatalog = true).canSelectFace)
         assertFalse(LibraryUiState(downloadingProductId = "p").canSelectFace)
-        assertFalse(LibraryUiState(isOpeningProject = true).canSelectFace)
+        assertFalse(LibraryUiState(openingProjectId = 12L).canSelectFace)
     }
 
     private fun action(

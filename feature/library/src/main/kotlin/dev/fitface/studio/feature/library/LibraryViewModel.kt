@@ -27,7 +27,17 @@ import kotlinx.coroutines.launch
 
 data class LibraryUiState(
     val isLoadingCatalog: Boolean = true,
-    val isOpeningProject: Boolean = false,
+    /**
+     * The project whose package is being read and parsed, if any.
+     *
+     * An id rather than a flag because the row that was tapped has to say so. Opening reads
+     * a 30-odd MiB package off disk and parses the container out of it, which is seconds
+     * even on a fast phone, and until this carried an identity nothing on screen changed at
+     * all in that window: the taps that followed were refused by [openProject]'s own guard
+     * and looked exactly like taps that had done nothing, so people went on tapping the row
+     * and then its neighbours.
+     */
+    val openingProjectId: Long? = null,
     val faces: List<CatalogFace> = emptyList(),
     val styleCount: Int = 0,
     val catalogFromCache: Boolean = false,
@@ -95,6 +105,9 @@ data class LibraryUiState(
      */
     val previousCrash: Boolean = false,
 ) {
+    val isOpeningProject: Boolean
+        get() = openingProjectId != null
+
     val isWorking: Boolean
         get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null
 
@@ -368,7 +381,13 @@ class LibraryViewModel @Inject constructor(
     fun downloadSelectedFace() {
         val face = mutableState.value.selectedFace ?: return
         val styleId = mutableState.value.selectedStyleId ?: return
+        // Not `isWorking`: a catalogue refresh is no reason to refuse, which is the whole
+        // point of the sheet opening during one. An open in flight is — it holds the
+        // repository's single editing session and it is about to take the screen, and this
+        // button sits under the rows that start one, live for the several seconds an open
+        // takes. Two editors on the back stack was the result.
         if (mutableState.value.downloadingProductId != null) return
+        if (mutableState.value.isOpeningProject) return
         viewModelScope.launch {
             mutableState.update {
                 it.copy(
@@ -426,15 +445,30 @@ class LibraryViewModel @Inject constructor(
         // that screen's state — unlike the sheet, which only reads the face it was given.
         if (mutableState.value.isWorking) return
         viewModelScope.launch {
-            mutableState.update { it.copy(isOpeningProject = true, error = null) }
+            mutableState.update { it.copy(openingProjectId = project.id, error = null) }
             runCatching { repository.openProject(project.id) }
                 .onSuccess { snapshot ->
-                    mutableState.update { it.copy(isOpeningProject = false) }
+                    // The face sheet closes here, the way a finished download already
+                    // closes it. The flag has to come off — the library keeps this
+                    // ViewModel while it sits under the editor, so one left set is a
+                    // screen that comes back with every row dead — and the moment it does,
+                    // the sheet's rows are live again for as long as the editor takes to
+                    // arrive. Those are the rows under the finger, so they go with it. The
+                    // editor is asked for first for the same reason, though a buffered
+                    // channel makes that ordering a courtesy rather than a guarantee.
                     eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
+                    mutableState.update {
+                        it.copy(
+                            openingProjectId = null,
+                            selectedFace = null,
+                            selectedStyleId = null,
+                            selectedFaceCached = false,
+                        )
+                    }
                 }
                 .onFailure { error ->
                     mutableState.update {
-                        it.copy(isOpeningProject = false, error = error.userMessage())
+                        it.copy(openingProjectId = null, error = error.userMessage())
                     }
                 }
         }

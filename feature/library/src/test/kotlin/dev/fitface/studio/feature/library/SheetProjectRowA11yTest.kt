@@ -39,7 +39,13 @@ class SheetProjectRowA11yTest {
     fun anOutdatedRowSaysSoToAScreenReader() {
         compose.setContent {
             FitFaceTheme {
-                SheetProjectRow(project = project(), outdated = true, enabled = true, onOpen = {})
+                SheetProjectRow(
+                    project = project(),
+                    outdated = true,
+                    enabled = true,
+                    opening = false,
+                    onOpen = {},
+                )
             }
         }
 
@@ -51,7 +57,13 @@ class SheetProjectRowA11yTest {
     fun aCurrentRowDoesNotClaimToBeOutdated() {
         compose.setContent {
             FitFaceTheme {
-                SheetProjectRow(project = project(), outdated = false, enabled = true, onOpen = {})
+                SheetProjectRow(
+                    project = project(),
+                    outdated = false,
+                    enabled = true,
+                    opening = false,
+                    onOpen = {},
+                )
             }
         }
 
@@ -70,7 +82,13 @@ class SheetProjectRowA11yTest {
     fun theDescriptionStillCarriesTheNameTheStyleAndTheAge() {
         compose.setContent {
             FitFaceTheme {
-                SheetProjectRow(project = project(), outdated = true, enabled = true, onOpen = {})
+                SheetProjectRow(
+                    project = project(),
+                    outdated = true,
+                    enabled = true,
+                    opening = false,
+                    onOpen = {},
+                )
             }
         }
 
@@ -79,6 +97,34 @@ class SheetProjectRowA11yTest {
         compose.onNodeWithContentDescription("face 00112", substring = true).assertExists()
         // styleId 2 is shown as "style 03" — the sheet's thumbnails are one-based.
         compose.onNodeWithContentDescription("style 03", substring = true).assertExists()
+    }
+
+    /**
+     * And that the spinner is not silent either.
+     *
+     * The row's own description replaces everything inside it, so a spinner drawn in place
+     * of the chevron would otherwise be a change only a sighted reader could see — and the
+     * whole reason it is there is that the wait is seconds long with nothing else to show
+     * for it.
+     */
+    @Test
+    fun anOpeningRowSaysItIsOpening() {
+        // The spinner is an endless animation, so the clock has to be held: left to advance
+        // itself the rule never sees an idle frame and times out before it can assert.
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            FitFaceTheme {
+                SheetProjectRow(
+                    project = project(),
+                    outdated = false,
+                    enabled = false,
+                    opening = true,
+                    onOpen = {},
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Opening Night mode").assertExists()
     }
 
     private fun project() = ProjectSummary(

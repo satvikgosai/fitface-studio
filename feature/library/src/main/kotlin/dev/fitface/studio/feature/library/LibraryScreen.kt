@@ -245,6 +245,7 @@ private fun LibraryScreen(
                 LibraryPage.Projects -> ProjectsList(
                     state = state,
                     enabled = !state.isWorking,
+                    openingProjectId = state.openingProjectId,
                     onQuery = onProjectQuery,
                     onSort = onProjectSort,
                     onReverseSort = onReverseProjectSort,
@@ -269,6 +270,7 @@ private fun LibraryScreen(
             uneditable = face.appId in state.uneditableAppIds,
             packageOnDevice = state.selectedFaceCached,
             projectsEnabled = !state.isWorking,
+            openingProjectId = state.openingProjectId,
             error = state.sheetError,
             onDismiss = onDismissFace,
             onStyle = onStyle,
@@ -507,7 +509,12 @@ private fun WatchFaceGrid(
             gridItems(state.visibleFaces, key = CatalogFace::productId) { face ->
                 WatchFaceCard(
                     face = face,
-                    enabled = !state.isWorking,
+                    // `canSelectFace`, like the sort chips above — not `isWorking`. The
+                    // grid is drawn from the on-disk cache before the network is touched,
+                    // so `isLoadingCatalog` is true for the whole opening window of every
+                    // launch while the screen already looks ready, and a card refusing the
+                    // tap there is the silence that predicate was added to end.
+                    enabled = state.canSelectFace,
                     uneditable = face.appId in state.uneditableAppIds,
                     projectCount = projectCounts[face.faceId] ?: 0,
                     onClick = { onFace(face) },
@@ -690,6 +697,7 @@ private fun FaceDetailsSheet(
     uneditable: Boolean,
     packageOnDevice: Boolean,
     projectsEnabled: Boolean,
+    openingProjectId: Long?,
     error: String?,
     onDismiss: () -> Unit,
     onStyle: (Int) -> Unit,
@@ -777,6 +785,7 @@ private fun FaceDetailsSheet(
                                 project = project,
                                 outdated = project.isOutdated(face.versionCode),
                                 enabled = projectsEnabled,
+                                opening = project.id == openingProjectId,
                                 onOpen = { onOpenProject(project) },
                             )
                         }
@@ -866,7 +875,11 @@ private fun FaceDetailsSheet(
                     },
                     onClick = onDownload,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !downloading && !uneditable,
+                    // `openingProjectId`, not `projectsEnabled`: the latter is `isWorking`,
+                    // and a catalogue refresh must not close this button any more than it
+                    // closes the sheet. An open in flight must, and did not — it is the
+                    // control directly under the rows that start one.
+                    enabled = !downloading && !uneditable && openingProjectId == null,
                     loading = downloading,
                 )
                 // Only while bytes are actually arriving. A determinate bar over a cached
@@ -954,6 +967,7 @@ private fun StyleThumbnail(
 private fun ProjectsList(
     state: LibraryUiState,
     enabled: Boolean,
+    openingProjectId: Long?,
     onQuery: (String) -> Unit,
     onSort: (ProjectSort) -> Unit,
     onReverseSort: () -> Unit,
@@ -1039,6 +1053,7 @@ private fun ProjectsList(
                 ProjectRow(
                     project = project,
                     enabled = enabled,
+                    opening = project.id == openingProjectId,
                     menuOpen = openMenuFor == project.id,
                     onOpen = { onOpen(project) },
                     onOpenMenu = { openMenuFor = project.id },
@@ -1104,6 +1119,7 @@ private fun ProjectsEmptyState(onBrowse: () -> Unit) {
 private fun ProjectRow(
     project: ProjectSummary,
     enabled: Boolean,
+    opening: Boolean,
     menuOpen: Boolean,
     onOpen: () -> Unit,
     onOpenMenu: () -> Unit,
@@ -1116,6 +1132,7 @@ private fun ProjectRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 84.dp)
+            .alpha(inertRowAlpha(enabled, opening))
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
@@ -1152,6 +1169,9 @@ private fun ProjectRow(
                 color = MaterialTheme.fitText.tertiary,
             )
         }
+        // Left in place while the row is opening rather than hidden: `enabled` is already
+        // false for every row then, and taking a control out of a row is a layout shift
+        // under a finger that is still on it.
         ProjectMenu(
             project = project,
             enabled = enabled,
@@ -1162,10 +1182,16 @@ private fun ProjectRow(
             onDuplicate = onDuplicate,
             onRemove = onRemove,
         )
-        Text(
-            "›",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.titleLarge,
+        // Unlike the sheet's row, this one builds no description of its own, so the label
+        // is heard beside the project's name rather than in place of it.
+        val openingLabel = stringResource(R.string.library_project_opening_a11y)
+        ProjectRowTrailing(
+            opening = opening,
+            modifier = if (opening) {
+                Modifier.semantics { contentDescription = openingLabel }
+            } else {
+                Modifier
+            },
         )
     }
 }
@@ -1240,6 +1266,7 @@ internal fun SheetProjectRow(
     project: ProjectSummary,
     outdated: Boolean,
     enabled: Boolean,
+    opening: Boolean,
     onOpen: () -> Unit,
 ) {
     val age = relativeAge(project.updatedAtEpochMillis)
@@ -1247,20 +1274,26 @@ internal fun SheetProjectRow(
     // `contentDescription`, which replaces whatever a screen reader would have assembled
     // from the text inside it — so OUTDATED was drawn and never announced, and it is the
     // only thing telling this row apart from the siblings above and below it. The grid's
-    // cards already carry a second string for exactly this reason.
-    val description = stringResource(
-        if (outdated) {
-            R.string.library_sheet_project_a11y_outdated
-        } else {
-            R.string.library_sheet_project_a11y
-        },
-        project.name,
-        projectFaceLine(project),
-        age,
-    )
+    // cards already carry a second string for exactly this reason. The same goes for the
+    // spinner: while this row is opening, "Opening <name>" is the whole of what is heard.
+    val description = if (opening) {
+        stringResource(R.string.library_sheet_project_a11y_opening, project.name)
+    } else {
+        stringResource(
+            if (outdated) {
+                R.string.library_sheet_project_a11y_outdated
+            } else {
+                R.string.library_sheet_project_a11y
+            },
+            project.name,
+            projectFaceLine(project),
+            age,
+        )
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(inertRowAlpha(enabled, opening))
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
@@ -1297,13 +1330,56 @@ internal fun SheetProjectRow(
                 color = MaterialTheme.fitText.secondary,
             )
         }
+        ProjectRowTrailing(opening)
+    }
+}
+
+/**
+ * The chevron a project row ends in, or the spinner that stands in for it while that
+ * project is being opened.
+ *
+ * In the chevron's place rather than beside it, because the row is one line of type between
+ * two edges: anything added to it either wraps the face line or pushes the `›` off the end.
+ * Replacing it also says the right thing — the row is no longer somewhere to go, it is
+ * somewhere being gone to.
+ *
+ * The spinner is a few dp wider than the chevron, so on a narrow phone the face line of the
+ * row being opened can lose its last word to an ellipsis while it spins. Reserving the wider
+ * of the two for both states fixes that and costs more than it saves: at 320dp it took the
+ * same few dp out of *every* row's title column permanently — `face 00036 · style 01` became
+ * `face 00036 · style…` on all of them, opening or not — to spare one row a wobble that
+ * lasts as long as the open does.
+ */
+@Composable
+private fun ProjectRowTrailing(opening: Boolean, modifier: Modifier = Modifier) {
+    if (opening) {
+        CircularProgressIndicator(
+            modifier = modifier.size(15.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    } else {
         Text(
             "›",
+            modifier = modifier,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.titleLarge,
         )
     }
 }
+
+/**
+ * How far a project row is faded while it cannot be tapped.
+ *
+ * Only the rows that are *not* the one being opened: that one keeps full opacity and shows
+ * the spinner, so the pair reads as "this one is going, the rest are unavailable" rather
+ * than as a list that has gone quiet for no reason. Material's own disabled alpha is .38,
+ * which on a whole card — thumbnail, border and three lines of type — reads as damage; .45
+ * is enough to be plainly inert. Both are exempt from the small-text contrast floor for the
+ * reason `AGENTS.md` gives: an inoperable control should look inert.
+ */
+private fun inertRowAlpha(enabled: Boolean, opening: Boolean): Float =
+    if (enabled || opening) 1f else .45f
 
 /**
  * "face 00112 · style 01", or just the face when the style could not be recovered.

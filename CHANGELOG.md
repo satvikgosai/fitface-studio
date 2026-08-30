@@ -36,6 +36,11 @@ Fixed:
 - Two projects on the same face looked identical in the list and traded places every time
   you opened either one. They now carry their own name and the style they were started
   on, and the list is ordered by when you last edited them.
+- On a narrow phone the last sort chip ran off the side of the screen, taking the arrow
+  that says which way the list is sorted with it. The chips are shorter and the row fits.
+- Opening a project showed nothing at all while it happened, and it takes a few seconds,
+  so the tap looked as though it had missed and people tapped the rows around it. The row
+  you picked now says it is opening and the others go quiet until it has.
 
 ## 0.1.2 (code `18`) — 2026-08-25
 

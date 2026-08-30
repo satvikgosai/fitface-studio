@@ -748,6 +748,29 @@ The four that catch people fastest:
   serves newest first, so treating it as a no-op in both directions leaves the chip inert.
   The labels are **not** on the enums — `:core:model` has no resources, and a reversible sort
   needs two labels per option in the reader's language.
+* **A row that scrolls sideways still has to fit, and a refused tap still has to look
+  refused.** Two halves of the same complaint, both in the library. The sort row is a
+  `horizontalScroll`, so "Face number ↑" overflowing it threw nothing and clipped nothing
+  visibly — it just put the last chip past the right edge of a 320dp phone with the arrow,
+  the half that says which way the list is sorted, in the part that had scrolled out of
+  sight. 288dp is what `LibraryPageInsets` leaves there and eight characters is what a chip
+  label gets; `LibrarySortRow` has the arithmetic and `SortChipLayoutTest` holds the bound in
+  characters rather than pixels, because `labelMedium` is monospace and Robolectric's metrics
+  are not the device's. The other half: `openProject` reads a 30-odd MiB package and parses a
+  container, which is seconds, and every guard around it was already correct — the rows and
+  the sheet's button refused every extra tap. Nothing said so. `Modifier.clickable(enabled =
+  false)` draws no ripple and changes no colour, so a refused tap and a tap that missed are
+  the same event to the person making it, and they went on tapping the row and then its
+  neighbours. `LibraryUiState.openingProjectId` carries an identity rather than a flag for
+  exactly this: the row that was tapped keeps full opacity and shows a spinner in place of its
+  chevron, and every other row fades. Three corollaries. The spinner is a few dp wider than
+  the `›`, and reserving the wider of the two for both states costs every row's title column
+  those dp permanently to spare one row a wobble that lasts as long as the open — so it is not
+  reserved. `downloadSelectedFace` refuses on `isOpeningProject` and **not** on `isWorking`,
+  since a catalogue refresh must not close the button any more than it closes the sheet. And
+  the grid's cards were still `!isWorking` while `canSelectFace`'s own KDoc named them as its
+  caller — the fix had been applied to the sort chips beside them and missed the cards, so a
+  tap in the cache-painted window of every launch did nothing at all.
 * **A drag accumulates the finger's position, never the clamped one.** Folding
   `constrainDragCoordinate` into the running total made a widget stick: pushed past an
   edge and brought back, it resumed from the edge instead of from under the finger, so it
