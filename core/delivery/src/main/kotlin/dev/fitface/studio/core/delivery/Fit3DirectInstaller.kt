@@ -59,10 +59,9 @@ class Fit3DirectInstaller @Inject constructor(
             // handover, not a dead end: it is exactly what the user has to undo to
             // discover again. FAILED would strand them, so this stays recoverable.
             "device_not_connected" -> needsWatchConnection(
-                "The Fit3 is not connected, and discovery needs it to be. Turn the " +
-                    "plugin's Nearby access back on if you revoked it, reconnect the watch " +
-                    "in the companion app, then discover again — the channel is only " +
-                    "released afterwards.",
+                "The Fit3 is not connected, and discovery needs it to be. $restorePlugin, " +
+                    "reconnect the watch in the companion app, then discover again — the " +
+                    "channel is only released afterwards.",
             )
             // The accessory framework refusing to initialize arrives here, not through
             // requestAgent's own callback, and it is the shape a phone with nothing
@@ -179,8 +178,7 @@ class Fit3DirectInstaller @Inject constructor(
                         acknowledgedBytes = payload.size,
                         totalBytes = payload.size,
                         message = "Install request delivered. Check the Fit3, then reconnect " +
-                            "it in the companion app — and restore the plugin's Nearby access " +
-                            "if you turned it off.",
+                            "it in the companion app. $restorePlugin.",
                     )
                 }
             ) {
@@ -314,9 +312,8 @@ class Fit3DirectInstaller @Inject constructor(
             mutableState.update {
                 it.copy(
                     phase = DirectInstallPhase.PEERS_CACHED,
-                    message = "Let the stock plugin release the accessory channel first — " +
-                        "disconnect the watch in the companion app, or turn the plugin's " +
-                        "Nearby access off.",
+                    message = "Complete step 4 to let the stock plugin release the " +
+                        "accessory channel before sending.",
                 )
             }
             return
@@ -667,17 +664,44 @@ class Fit3DirectInstaller @Inject constructor(
                     cancelWatchdog()
                     updated.copy(
                         phase = DirectInstallPhase.PEERS_CACHED,
-                        message = "Both peers are cached and stay cached. Now let the plugin " +
-                            "release the channel: disconnect the watch in the companion app, " +
-                            "or turn the plugin's Nearby access off.",
+                        message = "Both peers are cached and stay cached. Complete step 4 " +
+                            "to let the plugin release the channel.",
                     )
                 }
             }
         }
     }
 
+    /**
+     * Whether `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` are runtime permissions on this phone.
+     *
+     * The one fact three separate questions here turn on, so it is asked once rather than
+     * spelled as an inline API-level test at each of them: whether this app has to request
+     * them at all, whether the plugin has a per-app switch worth reading, and which words
+     * describe undoing step 4. `EditorScreen.hasPluginNearbySwitch` is the same line drawn
+     * for the checklist's strings; keep them in step.
+     */
+    private val nearbyIsRuntimePermission: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    /**
+     * Undoing step 4, in the terms the reader's own phone offers.
+     *
+     * Without the runtime permission the plugin has no Nearby devices switch —
+     * [pluginNearbyGranted] returns null there for exactly that reason — so telling that
+     * reader to restore one sends them looking for a control their phone does not have.
+     * The way back is re-enabling the app they disabled instead. Sentence-initial: every
+     * use starts a sentence.
+     */
+    private val restorePlugin: String
+        get() = if (nearbyIsRuntimePermission) {
+            "Turn the plugin's Nearby access back on if you revoked it"
+        } else {
+            "Re-enable the plugin if you disabled it"
+        }
+
     private fun helperNearbyGranted(): Boolean =
-        Build.VERSION.SDK_INT < 31 ||
+        !nearbyIsRuntimePermission ||
             (
                 appContext.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
                     PackageManager.PERMISSION_GRANTED &&
@@ -686,14 +710,16 @@ class Fit3DirectInstaller @Inject constructor(
                 )
 
     private fun pluginNearbyGranted(pluginInstalled: Boolean): Boolean? {
-        if (Build.VERSION.SDK_INT < 31 || !pluginInstalled) return null
+        if (!nearbyIsRuntimePermission || !pluginInstalled) return null
         val packageInfo = runCatching {
             appContext.packageManager.getPackageInfo(
                 PLUGIN_PACKAGE,
                 PackageManager.GET_PERMISSIONS,
             )
         }.getOrNull() ?: return null
-        if (packageInfo.applicationInfo?.targetSdkVersion?.let { it < 31 } != false) {
+        val pluginRequestsThemAtRuntime = packageInfo.applicationInfo?.targetSdkVersion
+            ?.let { it >= Build.VERSION_CODES.S } ?: false
+        if (!pluginRequestsThemAtRuntime) {
             return null
         }
         val requested = packageInfo.requestedPermissions?.toSet().orEmpty()
@@ -814,11 +840,14 @@ class Fit3DirectInstaller @Inject constructor(
         DirectInstallPhase.NEEDS_HELPER_PERMISSION ->
             "Grant FitFace Studio Nearby devices access."
         DirectInstallPhase.NEEDS_WATCH_CONNECTION ->
-            "Discovery needs the watch connected by the stock plugin. Turn the plugin's " +
-                "Nearby access back on, reconnect, then discover."
+            "Discovery needs the watch connected by the stock plugin. $restorePlugin, " +
+                "reconnect, then discover."
+        // How the channel is released differs by Android version and the checklist's step 4
+        // is where that is said in one place, so this points at it rather than repeating
+        // half of it. It used to name disconnecting the watch in the companion app, which
+        // does not free the channel — see docs/direct-install.md.
         DirectInstallPhase.PEERS_CACHED ->
-            "Both peers cached. Now let the plugin release the channel — disconnect the " +
-                "watch in the companion app, or turn its Nearby access off."
+            "Both peers cached. Complete step 4 to let the plugin release the channel."
         DirectInstallPhase.READY ->
             "Ready to send the validated face."
         DirectInstallPhase.IDLE ->

@@ -38,9 +38,26 @@ are opposite requirements, in that order, and it is the single most confusing pa
 of the flow.
 
 Peers stay cached once discovered, so the plugin only has to let go afterwards —
-and *either* revoking its Nearby permission *or* disconnecting the watch in the
-companion app does it. Only the first is observable to this app, so the second is
-a user acknowledgement rather than a detected state.
+and how it lets go depends on the phone. On Android 12 and later, revoking the
+plugin's **Nearby devices** access frees the channel, and this app reads that back
+through the package manager, so step 4 completes on its own. Below API 31 those
+permissions are not runtime permissions at all: there is no per-app switch to read
+or to revoke, `pluginNearbyGranted` is null on every such phone, and step 4 can
+only ever be the user's acknowledgement. What that acknowledgement stands for is
+[freezing the plugin](#android-11-and-earlier-freezing-the-plugin), below.
+
+**Disconnecting the watch in the companion app does not free the channel.** It was
+offered as the easy alternative on both routes and has been withdrawn: neither it
+nor a manual force stop released the channel on tested hardware. Every string that
+named it is gone.
+
+The wording splits on API 31 in exactly two places — `hasPluginNearbySwitch` in
+`EditorScreen.kt` for the checklist, `Fit3DirectInstaller.restorePlugin` for the
+state messages — and nothing else may name a Nearby switch, a freezing tool or
+`adb` outside them. A reader who does not know which Android version they are on
+cannot be asked to work out which half of a sentence applies to them, and telling
+them to revoke a permission their phone does not offer is the same failure as
+telling a modern phone to go and install Shizuku.
 
 Discovery without the plugin connected must land in the recoverable
 `NEEDS_WATCH_CONNECTION`, never in `FAILED`. That covers the explicit
@@ -50,6 +67,73 @@ means the same thing.
 A committed edit invalidates a finished transfer, so `payloadChanged()` re-arms
 `COMPLETE` and `FAILED` back to `READY` while keeping the cached peers. Without
 it the Install page offers nothing but "Back to canvas" after the first install.
+
+### Android 11 and earlier: freezing the plugin
+
+Android 12 introduced the runtime `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT`
+permissions that Settings shows as **Nearby devices**. Older phones hold the
+install-time `BLUETOOTH`/`BLUETOOTH_ADMIN` pair instead, which cannot be revoked
+per app, so there is nothing to switch off for step 4 and the plugin has to be
+stopped outright. The four steps themselves do not change; this is only what the
+reader does between step 3 and step 4.
+
+**This route is unverified.** No face has been sent to a watch this way. A manual
+force stop and a companion-app disconnect were both tried on hardware and neither
+released the channel, so freezing the plugin is a reason to *attempt* the
+transfer, not evidence that the channel is free. Know how to bring the plugin back
+before freezing it.
+
+Once, to set the tools up:
+
+1. Install [Shizuku](https://shizuku.rikka.app/) and
+   [Hail](https://github.com/aistra0528/Hail).
+2. Start Shizuku. On **Android 11** that is its wireless-debugging flow: turn on
+   Developer options, USB debugging and Wireless debugging, pair Shizuku with the
+   system pairing code, then start it. On **Android 10 and earlier** it needs a
+   computer with
+   [SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools):
+   turn on USB debugging, connect the unlocked phone, approve its prompt, confirm
+   with `adb devices`, then run the command Shizuku's own start screen gives — for
+   v11.2.0 and later that is
+
+   ```text
+   adb shell sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh
+   ```
+
+   Either way Shizuku stops at reboot and has to be started again.
+3. In Hail, set the working mode to **Shizuku (adb)** and the freeze action to
+   **Disable**, then add the watch plugin (`com.samsung.wearable.fit3plugin`).
+   Not **Suspend**: Hail's own documentation says suspending stops the user
+   interacting with an app and does *not* stop it running in the background, which
+   is the half that matters here. Hail also unfreezes only through the working mode
+   that froze the app, so the mode has to be the same on the way back.
+
+Then, for each attempt:
+
+1. Start Shizuku, unfreeze the plugin in Hail, and connect the watch in the
+   companion app.
+2. Complete steps 1-3 in FitFace Studio and wait until both peers are cached.
+3. Switch to Hail and freeze the plugin — only the plugin, and without unpairing
+   the watch.
+4. Return to FitFace Studio, confirm step 4 by hand, and send.
+5. However it ends, unfreeze the plugin in Hail, then reconnect the watch in the
+   companion app.
+
+With a computer already attached, `adb` does the same thing without Hail. The
+second command is not optional; the phone has no watch plugin until it is run:
+
+```text
+adb shell pm disable-user --user 0 com.samsung.wearable.fit3plugin
+adb shell pm enable --user 0 com.samsung.wearable.fit3plugin
+```
+
+Do not disable the accessory framework or the companion app, and do not uninstall
+or unpair anything — the framework is what serves the channel the transfer is
+about to use. Shizuku's [setup guide](https://shizuku.rikka.app/guide/setup/) is
+the authority on which start method applies to which Android version and on the
+restart-after-reboot limitation, and Hail's
+[README](https://github.com/aistra0528/Hail) on which freeze actions each working
+mode supports.
 
 ## Recovering after the handover
 
@@ -222,10 +306,13 @@ face-ID and container validation before an editing session opens.
 The app does **not** request `CONTROL_WEARABLE_STATUS`, bind HostManager, patch
 the stock plugin, replace reserved IDs, use Shizuku or root, or intercept another
 app's network traffic. The stock plugin is kept installed and is
-permission-isolated only after peer handles are cached.
+permission-isolated only after peer handles are cached. That holds for the
+Android 11 route too: freezing the plugin is the reader driving a separate tool of
+their own, and nothing in this app talks to Shizuku, requires it, or looks for it.
 
 Stop if the watch disconnects, the companion app becomes unstable, or protocol
-state diverges. Restore the plugin's Nearby permission before recovery.
+state diverges. Put the plugin back before recovery — its Nearby access, or the
+app itself if it was frozen.
 
 ## Unverified
 

@@ -249,8 +249,8 @@ internal object TimeoutRecovery {
      */
     const val DISCOVERY =
         "Peer discovery timed out, which normally means the watch is not connected. Check " +
-            "it in the companion app — the plugin's Nearby access has to be on for this " +
-            "step — then discover again."
+            "it in the companion app — the stock plugin has to be holding the watch for " +
+            "this step — then discover again."
     const val INITIALIZATION = "Accessory initialization timed out. Restart setup and retry."
     const val INSTALL = "The install request timed out. Check the watch, then reconnect it and " +
         "discover again before retrying."

@@ -239,7 +239,7 @@ fun EditorRoute(
         onDuplicate = viewModel::duplicateProject,
         onGrantNearby = {
             val permissions = buildList {
-                if (Build.VERSION.SDK_INT >= 31) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     add(Manifest.permission.BLUETOOTH_CONNECT)
                     add(Manifest.permission.BLUETOOTH_SCAN)
                 }
@@ -2988,22 +2988,28 @@ private fun InstallWorkspace(
         run {
             // A rewound setup shows the checklist, which says what to do next but not
             // what went wrong; the transfer panel renders its own failure banner.
-            if (!delivery.setupComplete) {
-                delivery.failure?.let { failure ->
-                    StatusBanner(
-                        FitStatus.Fail,
-                        failure,
-                        label = stringResource(R.string.editor_install_stopped_label),
-                    )
-                }
+            val stopped = if (delivery.setupComplete) null else delivery.failure
+            stopped?.let { failure ->
+                StatusBanner(
+                    FitStatus.Fail,
+                    failure,
+                    label = stringResource(R.string.editor_install_stopped_label),
+                )
             }
-            // The banner above already says this in full; showing both is noise.
-            Text(
-                delivery.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            )
+            // The banner above already says this in full; showing both is noise — and
+            // it was, on every terminal failure: `DirectInstallState.failed` writes the
+            // same string to `failure` and to `message`, so an agent that would not
+            // initialize printed itself twice, once boxed and once bare underneath. The
+            // two fields differ only after a rewind, where `failure` is what went wrong
+            // and `message` is what to do next, and there both are worth showing.
+            if (delivery.message != stopped) {
+                Text(
+                    delivery.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
         }
 
         if (delivery.setupComplete) {
@@ -3124,6 +3130,21 @@ private fun DeviceStatusRow(state: DirectInstallState, snapshot: EditorSnapshot)
     }
 }
 
+/**
+ * Whether this phone has a Nearby devices switch for the stock plugin at all.
+ *
+ * Android 12 is where `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` became runtime permissions, so
+ * below it there is no per-app switch to revoke and `Fit3DirectInstaller.pluginNearbyGranted`
+ * is always null — step 4 can only ever be the user's acknowledgement there. Every string
+ * that names that switch is therefore wrong on an older phone, and every string that names
+ * the older phones' way round it — a freezing tool, ADB — is noise on a newer one, which is
+ * how a reader who does not know their own Android version ends up following instructions
+ * meant for somebody else's. So the split is made once, here, and both halves are gated on
+ * it. See `docs/direct-install.md`.
+ */
+private val hasPluginNearbySwitch: Boolean
+    get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
 @Composable
 private fun SetupChecklist(
     state: DirectInstallState,
@@ -3134,6 +3155,7 @@ private fun SetupChecklist(
     onOpenPluginSettings: () -> Unit,
     onConfirmPluginReleased: () -> Unit,
 ) {
+    val nearbySwitch = hasPluginNearbySwitch
     val steps = listOf(
         SetupRow(
             step = SetupStep.COMPANION_PRESENT,
@@ -3167,16 +3189,31 @@ private fun SetupChecklist(
         SetupRow(
             step = SetupStep.PEERS_DISCOVERED,
             title = stringResource(R.string.editor_setup_step3_title),
-            why = stringResource(R.string.editor_setup_step3_why),
+            why = stringResource(
+                if (nearbySwitch) {
+                    R.string.editor_setup_step3_why
+                } else {
+                    R.string.editor_setup_step3_why_legacy
+                },
+            ),
             done = stringResource(R.string.editor_setup_step3_done),
             action = onDiscover,
         ),
         SetupRow(
             step = SetupStep.PLUGIN_RELEASED,
             title = stringResource(R.string.editor_setup_step4_title),
-            why = stringResource(R.string.editor_setup_step4_why),
+            why = stringResource(
+                if (nearbySwitch) {
+                    R.string.editor_setup_step4_why
+                } else {
+                    R.string.editor_setup_step4_why_legacy
+                },
+            ),
             done = stringResource(R.string.editor_setup_step4_done),
             action = onOpenPluginSettings,
+            // Amber because this is the one step whose way through is not on the phone:
+            // it needs a tool the reader has to go and set up first.
+            warning = !nearbySwitch,
         ),
     )
     val completed = steps.count { state.isStepDone(it.step) }
@@ -3184,7 +3221,13 @@ private fun SetupChecklist(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StatusBanner(
             FitStatus.Warning,
-            stringResource(R.string.editor_setup_banner),
+            stringResource(
+                if (nearbySwitch) {
+                    R.string.editor_setup_banner
+                } else {
+                    R.string.editor_setup_banner_legacy
+                },
+            ),
             label = stringResource(R.string.editor_setup_label),
         )
         Column(
@@ -3242,7 +3285,16 @@ private fun SetupChecklist(
                     style = FitButtonStyle.Secondary,
                 )
                 FitButton(
-                    stringResource(R.string.editor_setup_plugin_access),
+                    // Below Android 12 the same screen has no Nearby devices entry to
+                    // reach, so calling it "Plugin access" sends the reader looking for
+                    // a switch that is not there.
+                    stringResource(
+                        if (nearbySwitch) {
+                            R.string.editor_setup_plugin_access
+                        } else {
+                            R.string.editor_setup_plugin_access_legacy
+                        },
+                    ),
                     onOpenPluginSettings,
                     Modifier.weight(1f),
                     enabled && !busy,
@@ -3259,7 +3311,13 @@ private fun SetupChecklist(
                 style = FitButtonStyle.Secondary,
             )
             Text(
-                stringResource(R.string.editor_setup_confirm_note),
+                stringResource(
+                    if (nearbySwitch) {
+                        R.string.editor_setup_confirm_note
+                    } else {
+                        R.string.editor_setup_confirm_note_legacy
+                    },
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.fitText.secondary,
             )
@@ -3273,6 +3331,7 @@ private data class SetupRow(
     val why: String,
     val done: String,
     val action: () -> Unit,
+    val warning: Boolean = false,
 )
 
 @Composable
@@ -3288,6 +3347,7 @@ private fun SetupStepRow(
         Modifier.fillMaxWidth()
             .background(
                 if (done) MaterialTheme.colorScheme.primary.copy(alpha = .05f)
+                else if (row.warning) MaterialTheme.fitColors.warning.copy(alpha = .07f)
                 else MaterialTheme.colorScheme.surfaceContainerLow,
             )
             .clickable(enabled = enabled && !done, onClick = row.action)
@@ -3341,6 +3401,7 @@ private fun SetupStepRow(
                 modifier = Modifier.padding(top = 3.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = if (done) MaterialTheme.colorScheme.primary
+                else if (row.warning) MaterialTheme.fitColors.warning
                 else MaterialTheme.fitText.secondary,
             )
         }
@@ -3402,7 +3463,13 @@ private fun TransferPanel(
             state.phase == DirectInstallPhase.COMPLETE -> {
                 StatusBanner(
                     FitStatus.Pass,
-                    stringResource(R.string.editor_transfer_done),
+                    stringResource(
+                        if (hasPluginNearbySwitch) {
+                            R.string.editor_transfer_done
+                        } else {
+                            R.string.editor_transfer_done_legacy
+                        },
+                    ),
                     label = stringResource(R.string.editor_transfer_done_label),
                 )
                 // Sending the same bytes again is legitimate — a watch can reject a

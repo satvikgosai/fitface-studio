@@ -34,9 +34,9 @@ class DirectInstallStateTest {
     }
 
     /**
-     * The permission can stay granted: disconnecting the watch in the companion app
-     * frees the channel too, and that is not observable from here, so the user's
-     * acknowledgement is what completes the step.
+     * The channel can be freed in ways this app cannot see, so the acknowledgement has to
+     * count on its own — and it may not be inferred from the permission, which is still
+     * granted while the reader says the plugin has let go.
      */
     @Test
     fun acknowledgementReleasesTheChannelWithThePermissionStillGranted() {
@@ -46,6 +46,31 @@ class DirectInstallStateTest {
         assertFalse(granted.isStepDone(SetupStep.PLUGIN_RELEASED))
 
         val acknowledged = granted.copy(pluginNearbyReleaseAcknowledged = true)
+        assertTrue(acknowledged.pluginChannelReleased)
+        assertTrue(acknowledged.setupComplete)
+        assertTrue(acknowledged.isStepDone(SetupStep.PLUGIN_RELEASED))
+    }
+
+    /**
+     * The shape of every phone below API 31, and the reason step 4 reads differently
+     * there.
+     *
+     * `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` became runtime permissions in Android 12, so
+     * `Fit3DirectInstaller.pluginNearbyGranted` answers null on anything older — there is
+     * no per-app switch to read. Null is not "released": the setup must stay incomplete
+     * until the reader says the plugin has let go, whatever they used to make it. The
+     * checklist says so in their own terms, which is why the on-screen strings are split
+     * on the same API level rather than on this field.
+     */
+    @Test
+    fun anUnobservablePermissionLeavesTheAcknowledgementAsTheOnlyWayThrough() {
+        val unknown = ready.copy(pluginNearbyGranted = null)
+
+        assertFalse("null is not evidence of release", unknown.pluginChannelReleased)
+        assertFalse(unknown.setupComplete)
+        assertFalse(unknown.isStepDone(SetupStep.PLUGIN_RELEASED))
+
+        val acknowledged = unknown.copy(pluginNearbyReleaseAcknowledged = true)
         assertTrue(acknowledged.pluginChannelReleased)
         assertTrue(acknowledged.setupComplete)
         assertTrue(acknowledged.isStepDone(SetupStep.PLUGIN_RELEASED))

@@ -123,16 +123,20 @@ the page refuses to go on while anything is missing.
 1. Connect the watch in its companion app.
 2. Grant FitFace Studio Nearby devices access.
 3. Discover the watch-face and OTA peers. This needs the watch **connected**, so
-   the stock plugin's Nearby access has to be **on** for this step.
-4. Let the plugin release the channel, because only one app may hold it. Either
-   disconnect the watch in the companion app, or turn the plugin's Nearby access
-   off — the permission itself can stay granted. Then send.
+   the stock plugin has to be running and holding it for this step.
+4. Let the plugin release the channel, because only one app may hold it, then
+   send. On Android 12 and later that is one switch: turn the plugin's **Nearby
+   devices** access off, and the app picks the change up on its own. Older phones
+   have no such switch, so the plugin has to be frozen instead — the checklist
+   says so where it applies, and
+   [`docs/direct-install.md`](docs/direct-install.md#android-11-and-earlier-freezing-the-plugin)
+   has the walkthrough.
 
 Step 4 is the one people get stuck on: discovery needs the plugin, and the
 transfer needs it to let go. Peer handles stay cached once found, so a second
 install does not repeat the setup, and editing after an install re-arms the send
-button instead of stranding the page. Reconnect the watch when the transfer
-finishes, and restore the plugin's Nearby access if you turned it off.
+button instead of stranding the page. When the transfer finishes, put the plugin
+back the way step 4 had you leave it, then reconnect the watch.
 
 If a send fails, the page offers **Reconnect the watch and discover again**
 beside **Try again**. A cached peer only lives as long as the connection it was

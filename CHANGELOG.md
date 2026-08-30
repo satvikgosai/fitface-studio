@@ -20,9 +20,14 @@ Added:
   edits the original had and is independent of it from then on.
 - Deleting a project asks first and names the one it would remove, from the projects list
   or from inside the project itself.
+- Install setup for phones with no **Nearby devices** switch for the watch plugin, where
+  freeing the accessory channel takes a different route. The checklist shows whichever one
+  applies to your phone and never both.
 
 Fixed:
 
+- The install checklist offered disconnecting the watch in its companion app as a way to
+  free the accessory channel. It does not free it, and nothing on the page says so any more.
 - Removing a widget left the editor on a page describing nothing, with the back arrow as
   the only way out. It returns you to the widget list.
 

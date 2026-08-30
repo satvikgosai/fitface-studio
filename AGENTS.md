@@ -531,7 +531,16 @@ The four that catch people fastest:
 * **Discovery needs the plugin's channel; the transfer needs it released.** Those
   are opposite requirements in that order, which is the thing users get stuck on.
   Discovery without the plugin connected must land in the recoverable
-  `NEEDS_WATCH_CONNECTION`, never in `FAILED`.
+  `NEEDS_WATCH_CONNECTION`, never in `FAILED`. **And how the plugin lets go depends on
+  the phone**: `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` became runtime permissions in Android
+  12, so below API 31 there is no per-app switch, `pluginNearbyGranted` is null on every
+  such phone, and step 4 can only ever be the user's acknowledgement. Both halves are
+  gated in one place each — `hasPluginNearbySwitch` in `EditorScreen.kt`,
+  `Fit3DirectInstaller.restorePlugin` for the state messages — and **nothing else may
+  name a Nearby switch, a freezing tool or `adb` in user-facing text**: a reader who does
+  not know their own Android version cannot pick the half that applies to them. The one
+  route that used to serve both, disconnecting the watch in the companion app, does not
+  free the channel — it and a manual force stop were both tried on hardware.
 * **What is installed does not decide whether the channel opens — discovery does.** The
   Install page used to AND three package names and replace the whole checklist with a dead
   end if any were absent, and every part of that was wrong. **The companion app has no
