@@ -446,6 +446,7 @@ object StructuralEditor {
         // stopped drawing on the watch. Appending removes the question: the only thing
         // that names the new raster is the Static written to name it.
         val newRasterOffset = oldImageBytes.toLong()
+        val existingIndices = widgets.mapTo(mutableSetOf(), WidgetRecord::globalIndex)
         val output = ByteArrayOutputStream()
         output.write(entry.data, 0, STYLE_HEADER_SIZE)
         output.write(backgroundStaticRecord(newRasterOffset))
@@ -455,12 +456,14 @@ object StructuralEditor {
                 widget.recordOffset + widget.recordSize,
             )
             // The new Static takes index 0, so everything already in the table moves up
-            // one. No field holds another widget's index — see `requireSurvivorsUnchanged`
-            // — so this is the whole of the renumbering.
+            // one — and so does every reference to it.
             record.putU32(
                 0x0C,
                 ((widget.globalIndex + 1).toLong() shl 16) or (record.u32(0x0C) and 0xFFFF),
             )
+            remapAlignmentTarget(record, widget) { old ->
+                (old + 1).takeIf { old in existingIndices }
+            }
             output.write(record)
         }
         output.write(entry.data, oldImageOffset, entry.data.size - oldImageOffset)
@@ -593,15 +596,28 @@ object StructuralEditor {
                 "${original.basename}: widget 0 does not draw the added background",
             )
         }
+        val originalIndices = expected.mapTo(mutableSetOf(), WidgetRecord::globalIndex)
         expected.forEach { widget ->
             val after = widgets[widget.ordinal + 1]
+            // `+0x1E` is the alignment target on a Static or a Hand, and that field has
+            // just been renumbered on purpose. Everywhere else the halfword is geometry
+            // and must not have moved at all.
+            val referenceField =
+                WidgetSchema.spec(widget.widgetType).alignment?.targetOffset.takeIf {
+                    widget.liveAlignment != null
+                }
+            val geometryHeld = widget.raw1C == after.raw1C &&
+                (referenceField == 0x1E || widget.raw1E == after.raw1E)
+            val referenceHeld = after.liveAlignment?.targetGlobalIndex ==
+                shiftedTarget(widget, originalIndices)
             if (widget.widgetType != after.widgetType ||
                 widget.sequenceId != after.sequenceId ||
                 widget.x != after.x ||
                 widget.y != after.y ||
-                widget.width != after.width ||
-                widget.height != after.height ||
-                widget.recordSize != after.recordSize
+                widget.recordSize != after.recordSize ||
+                widget.liveAlignment?.code != after.liveAlignment?.code ||
+                !geometryHeld ||
+                !referenceHeld
             ) {
                 throw Fit3FormatException(
                     "${original.basename}: widget ${widget.ordinal} changed beyond its pointers",
@@ -643,6 +659,15 @@ object StructuralEditor {
             val now = style.copyOfRange(after.recordOffset, after.recordOffset + after.recordSize)
             was.putU32(0x0C, 0)
             now.putU32(0x0C, 0)
+            // Both the index and the reference to a renumbered widget are meant to
+            // differ; the decoded check above is what holds them to the right values, so
+            // the byte comparison zeroes them and speaks for everything else.
+            widget.liveAlignment?.let {
+                WidgetSchema.spec(widget.widgetType).alignment?.let { field ->
+                    was.putU16(field.targetOffset, 0)
+                    now.putU16(field.targetOffset, 0)
+                }
+            }
             if (!was.contentEquals(now)) {
                 throw Fit3FormatException(
                     "${original.basename}: widget ${widget.ordinal} was rewritten",
@@ -925,6 +950,51 @@ object StructuralEditor {
         out.write(trailer)
     }
 
+    /**
+     * Rewrite a record's alignment reference through an index renumbering.
+     *
+     * Four types position themselves against another widget by its global index —
+     * Static and Hand at `+0x1E`, Value and Composite at `+0x22` — and every one of the
+     * catalogue's 2,311 such records has a live reference. So a structural edit that
+     * renumbers the table has to carry those references with it, or a survivor ends up
+     * measured from a different widget than the one it was authored against.
+     *
+     * [renumber] returns the new index for an old one, or null for a value that named no
+     * record before the edit. Those are left alone on purpose: the catalogue's own faces
+     * store targets — 5, 10, 20, 30, 40 — that match nothing in the style, which the
+     * watch treats as "measure from the whole face". Rewriting them would invent a
+     * reference the producer never made.
+     *
+     * This is emphatically **not** a return of the guard that scanned every word for a
+     * value that looked like an index and blocked 68% of removals. Only these two fields
+     * on these four types are references; nothing else is touched.
+     */
+    private fun remapAlignmentTarget(
+        record: ByteArray,
+        widget: WidgetRecord,
+        renumber: (Int) -> Int?,
+    ) {
+        val alignment = widget.liveAlignment ?: return
+        val field = WidgetSchema.spec(widget.widgetType).alignment ?: return
+        val moved = renumber(alignment.targetGlobalIndex) ?: return
+        if (moved != alignment.targetGlobalIndex) {
+            record.putU16(field.targetOffset, moved and 0xFFFF)
+        }
+    }
+
+    /**
+     * Where a survivor's reference should point after an insert at index 0: one higher
+     * when it named a record, and untouched when it named nothing.
+     */
+    private fun shiftedTarget(widget: WidgetRecord, originalIndices: Set<Int>): Int? =
+        widget.liveAlignment?.targetGlobalIndex?.let { old ->
+            if (old in originalIndices) old + 1 else old
+        }
+
+    /** The widgets whose live alignment reference names [globalIndex]. */
+    private fun dependentsOf(widgets: List<WidgetRecord>, globalIndex: Int): List<WidgetRecord> =
+        widgets.filter { it.liveAlignment?.targetGlobalIndex == globalIndex }
+
     private fun removeWidgetEntry(
         entry: ContainerEntry,
         target: WidgetRecord,
@@ -938,6 +1008,21 @@ object StructuralEditor {
         }
         requireContiguousWidgets(entry, widgets, images)
         val survivors = widgets.filter { it.ordinal != target.ordinal }
+        // A widget other records are positioned against cannot simply go: they would
+        // fall back to being measured from the whole face and land somewhere else. In
+        // practice this is the style's background, which every aligned widget on the
+        // face refers to.
+        val dependents = dependentsOf(survivors, globalIndex)
+        if (dependents.isNotEmpty()) {
+            val names = dependents.take(3).joinToString { "widget ${it.globalIndex}" }
+            throw Fit3WidgetIsAnchorException(
+                globalIndex = globalIndex,
+                dependentGlobalIndices = dependents.map(WidgetRecord::globalIndex),
+                message = "${entry.basename}: ${dependents.size} widget(s) are positioned " +
+                    "against widget $globalIndex ($names), so removing it would move them",
+            )
+        }
+        val existingIndices = widgets.mapTo(mutableSetOf(), WidgetRecord::globalIndex)
         val oldImageOffset = entry.data.u32(0x14).checkedInt("image offset")
         val replacement = ByteArrayOutputStream()
         replacement.write(entry.data, 0, STYLE_HEADER_SIZE)
@@ -953,19 +1038,45 @@ object StructuralEditor {
                     ((widget.globalIndex - 1).toLong() shl 16) or (indexSize and 0xFFFF),
                 )
             }
+            remapAlignmentTarget(raw, widget) { old ->
+                when {
+                    old !in existingIndices -> null
+                    old > globalIndex -> old - 1
+                    else -> old
+                }
+            }
             replacement.write(raw)
         }
         replacement.write(entry.data, oldImageOffset, entry.data.size - oldImageOffset)
         val removedRecord = entry.data.copyOfRange(
             target.recordOffset,
             target.recordOffset + target.recordSize,
-        )
+        ).also { saved ->
+            // The saved bytes are what a restore writes back, so its own reference has
+            // to be expressed in the numbering that will be in force then. On every
+            // catalogue face this changes nothing — a target is either 0 or names no
+            // record — but a face that referred forwards would otherwise come back
+            // measured from the wrong widget.
+            remapAlignmentTarget(saved, target) { old ->
+                when {
+                    old !in existingIndices -> null
+                    old > globalIndex -> old - 1
+                    else -> old
+                }
+            }
+        }
         val output = replacement.toByteArray().also {
             it.putU32(0x04, widgets.size - 1)
             it.putU32(0x08, oldImageOffset - STYLE_HEADER_SIZE - target.recordSize)
             it.putU32(0x14, oldImageOffset - target.recordSize)
             validateStructuralEntry(entry, it, widgets.size - 1)
-            requireSurvivorsUnchanged(entry, it, survivors)
+            requireSurvivorsUnchanged(entry, it, survivors) { old ->
+                when {
+                    old !in existingIndices -> old
+                    old > globalIndex -> old - 1
+                    else -> old
+                }
+            }
         }
         return output to removedRecord
     }
@@ -1148,23 +1259,28 @@ object StructuralEditor {
 
     /**
      * Every surviving widget must come out of a structural edit byte-identical apart
-     * from its renumbered `global_index`, and the image section must not move at all.
+     * from its renumbered `global_index` and its renumbered alignment reference, and the
+     * image section must not move at all.
      *
-     * This replaces an older pre-check that refused the edit whenever any opaque
-     * widget word happened to equal an index in the renumbered range. That heuristic
-     * had no support in the format: `+0x08`, `+0x10` and `+0x14` are zero in every
-     * one of the 4,038 widget records across the live 100-face catalogue, `+0x20` is
-     * a Hand pivot / Sprite frame count / Pair anchor mode, and the type-specific
-     * words hold image byte offsets, colours, or `(glyph_group << 16) | sequence_id`.
-     * Nothing references another widget by global index — cross-record references go
-     * through `sequence_id`, which removal never rewrites. Meanwhile the heuristic
-     * blocked 68% of removals and left 18 of 99 faces with no removable widget at all,
-     * which is what "sometimes removing a widget does nothing" looked like.
+     * [renumber] is the same mapping the edit applied, so the check is not "the
+     * reference did not change" — it is "the reference still names the widget it named
+     * before". Passing null means the edit renumbers nothing, and then no reference may
+     * have moved either.
+     *
+     * This replaces an older pre-check that refused the edit whenever any opaque widget
+     * word happened to equal an index in the renumbered range. That heuristic had no
+     * support in the format — `+0x08`, `+0x10` and `+0x14` are zero in every one of the
+     * catalogue's 4,034 records, and the type-specific words hold image offsets, colours
+     * and format selectors — and it blocked 68% of removals, leaving 18 of 99 faces with
+     * no removable widget at all, which is what "sometimes removing a widget does
+     * nothing" looked like. The four typed reference fields are the only ones that name
+     * another widget, and they are handled by name rather than by scanning.
      */
     private fun requireSurvivorsUnchanged(
         original: ContainerEntry,
         replacement: ByteArray,
         expected: List<WidgetRecord>,
+        renumber: ((Int) -> Int?)? = null,
     ) {
         val parsed = original.copy(size = replacement.size, checksum = 0, data = replacement)
         val actual = FaceRecordParser.scanWidgets(parsed)
@@ -1174,15 +1290,32 @@ object StructuralEditor {
         }
         expected.forEachIndexed { ordinal, before ->
             val after = actual[ordinal]
+            val reference = WidgetSchema.spec(before.widgetType).alignment
+                ?.takeIf { before.liveAlignment != null }
+            val expectedTarget = before.liveAlignment?.targetGlobalIndex?.let { old ->
+                renumber?.invoke(old) ?: old
+            }
+            val referenceHeld = after.liveAlignment?.targetGlobalIndex == expectedTarget &&
+                before.liveAlignment?.code == after.liveAlignment?.code
+            // The reference lives inside one of the fields compared below, so it is
+            // masked out of those and checked by name instead: `+0x1E` for an Image or a
+            // Clock hand, and inside the `+0x20` word for a Value or a Composite.
+            val mask: (WidgetRecord) -> Pair<Int, Long> = { record ->
+                when (reference?.targetOffset) {
+                    0x1E -> 0 to record.unknown20
+                    0x22 -> record.raw1E to (record.unknown20 and 0xFFFFL)
+                    else -> record.raw1E to record.unknown20
+                }
+            }
             if (before.widgetType != after.widgetType ||
                 before.sequenceId != after.sequenceId ||
                 before.x != after.x ||
                 before.y != after.y ||
-                before.width != after.width ||
-                before.height != after.height ||
+                before.raw1C != after.raw1C ||
+                mask(before) != mask(after) ||
                 before.recordSize != after.recordSize ||
-                before.unknown20 != after.unknown20 ||
-                before.words != after.words
+                before.words != after.words ||
+                !referenceHeld
             ) {
                 throw Fit3FormatException(
                     "${original.basename}: widget $ordinal changed beyond its index",

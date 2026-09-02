@@ -16,7 +16,6 @@ import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.WatchFaceException
-import dev.fitface.studio.core.model.encodeCoordinate
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.spriteResizeLimit
 import javax.inject.Inject
@@ -39,21 +38,17 @@ data class WidgetMovePreview(
 internal data class PendingWidgetTarget(val x: Int, val y: Int)
 
 /**
- * Display position of a stored coordinate whose anchoring is already known — the exact
- * inverse of [encodeCoordinate].
+ * Display position of a stored coordinate, and its inverse.
  *
- * `displayCoordinate` infers the anchoring from the sign, which is right for a value read
- * out of a container and wrong for a coordinate a nudge is still accumulating: a widget
- * stored at `x = 0` stepped one pixel left reaches `-1`, which the sign rule reads as
- * "anchored to the far edge" and places at the opposite side of the face. The anchoring
- * belongs to the widget, so it is passed in rather than guessed.
+ * A widget's coordinates are measured from [WidgetGuide.originX]/[WidgetGuide.originY],
+ * so both directions are one addition. The pair used to infer the anchoring from the
+ * sign of the value, which broke a nudge in a way worth remembering: a widget stored at
+ * `x = 0` stepped one pixel left reaches `-1`, and the sign rule read that as "anchored
+ * to the far edge" and threw the widget across the face.
  */
-internal fun storedToDisplay(
-    stored: Int,
-    extent: Int,
-    canvasExtent: Int,
-    anchoredFromEnd: Boolean,
-): Int = if (anchoredFromEnd) canvasExtent + stored - extent else stored
+internal fun storedToDisplay(stored: Int, origin: Int): Int = origin + stored
+
+internal fun displayToStored(display: Int, origin: Int): Int = display - origin
 
 /** A copy was made and named. The screen turns it into a sentence. */
 data class DuplicateNotice(val id: Long, val name: String)
@@ -392,12 +387,13 @@ class EditorViewModel @Inject constructor(
      * Holds a nudged widget's rectangle on the panel.
      *
      * A nudge works in *stored* coordinates, and a stored coordinate is legitimately
-     * negative: a widget anchored to the far edge is stored as `x < 0`. Clamping the stored
-     * value to `>= 0` would therefore fling every end-anchored widget across the face. So
-     * the clamp is applied in display space — by the same [constrainDragCoordinate] the
-     * drag uses, offset by `drawOffset` so it is the drawn rectangle that is held, and
-     * widened to admit where the widget already is so one that starts outside can still
-     * walk back in — and the result is re-encoded with the anchoring it came in with.
+     * negative — it is an offset from whatever the widget is positioned against, and a
+     * widget aligned to the right edge of something is stored as `x < 0`. Clamping the
+     * stored value to `>= 0` would therefore fling those widgets across the face. So the
+     * clamp is applied in display space — by the same [constrainDragCoordinate] the drag
+     * uses, offset by `drawOffset` so it is the drawn rectangle that is held, and widened
+     * to admit where the widget already is so one that starts outside can still walk back
+     * in — and the result is converted back through the widget's own origin.
      *
      * Without this the nudge had no bound but the Short range, so a held press walked a
      * widget clean off the canvas, after which it could not be tapped at all and only the
@@ -409,40 +405,26 @@ class EditorViewModel @Inject constructor(
         x: Int,
         y: Int,
     ): PendingWidgetTarget {
-        val anchoredX = widget.x < 0
-        val anchoredY = widget.y < 0
         return PendingWidgetTarget(
-            x = encodeCoordinate(
+            x = displayToStored(
                 display = constrainDragCoordinate(
-                    proposed = storedToDisplay(
-                        x, widget.width, snapshot.preview.width, anchoredX,
-                    ).toFloat(),
-                    starting = storedToDisplay(
-                        widget.x, widget.width, snapshot.preview.width, anchoredX,
-                    ).toFloat(),
+                    proposed = storedToDisplay(x, widget.originX).toFloat(),
+                    starting = storedToDisplay(widget.x, widget.originX).toFloat(),
                     extent = widget.width,
                     canvasExtent = snapshot.preview.width,
                     drawOffset = widget.drawOffsetX,
                 ).roundToInt(),
-                extent = widget.width,
-                canvasExtent = snapshot.preview.width,
-                anchoredFromEnd = anchoredX,
+                origin = widget.originX,
             ),
-            y = encodeCoordinate(
+            y = displayToStored(
                 display = constrainDragCoordinate(
-                    proposed = storedToDisplay(
-                        y, widget.height, snapshot.preview.height, anchoredY,
-                    ).toFloat(),
-                    starting = storedToDisplay(
-                        widget.y, widget.height, snapshot.preview.height, anchoredY,
-                    ).toFloat(),
+                    proposed = storedToDisplay(y, widget.originY).toFloat(),
+                    starting = storedToDisplay(widget.y, widget.originY).toFloat(),
                     extent = widget.height,
                     canvasExtent = snapshot.preview.height,
                     drawOffset = widget.drawOffsetY,
                 ).roundToInt(),
-                extent = widget.height,
-                canvasExtent = snapshot.preview.height,
-                anchoredFromEnd = anchoredY,
+                origin = widget.originY,
             ),
         )
     }
@@ -467,12 +449,8 @@ class EditorViewModel @Inject constructor(
             error = null,
             pendingWidgetMove = WidgetMovePreview(
                 globalIndex = widget.globalIndex,
-                displayX = storedToDisplay(
-                    x, widget.width, snapshot.preview.width, widget.x < 0,
-                ).toFloat(),
-                displayY = storedToDisplay(
-                    y, widget.height, snapshot.preview.height, widget.y < 0,
-                ).toFloat(),
+                displayX = storedToDisplay(x, widget.originX).toFloat(),
+                displayY = storedToDisplay(y, widget.originY).toFloat(),
             ),
         )
         if (startMoveWorker) {

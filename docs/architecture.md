@@ -23,7 +23,7 @@ Editor UI -> EditorViewModel ---------------------------------------+
 | --- | --- |
 | `:app` | Application root, Hilt entry point, theme, navigation, and the two app-menu dialogs |
 | `:core:model` | Framework-free contracts and immutable state. Both repository interfaces live here. |
-| `:core:format` | Container parse, validate, edit, CRC, serialize. Pure Kotlin, JVM-tested. |
+| `:core:format` | Container parse, validate, edit, CRC, serialize, and the per-type record schema and layout resolver. Pure Kotlin, JVM-tested. |
 | `:core:data` | Catalogue client, on-disk caches, private projects, Room, DataStore, image I/O, self-update |
 | `:core:delivery` | Companion probing, accessory discovery, payload verification, RFCOMM |
 | `:core:ui` | Theme tokens and shared components |

@@ -93,7 +93,17 @@ class Fit3DirectInstaller @Inject constructor(
                         totalBytes = payload.size,
                         acknowledgedWindows = 0,
                         totalWindows = windows,
-                        message = "BIN hash verified. Opening the direct transfer.",
+                        // The boundary case goes in the message rather than into a
+                        // refusal: a payload that divides exactly into windows leaves no
+                        // short final window, which is the one transfer shape that has
+                        // never been watched end to end. Naming it here means a stall at
+                        // the last window arrives in the bug report already explained.
+                        message = if (payload.endsOnWindowBoundary) {
+                            "BIN hash verified. Opening the direct transfer; this one ends " +
+                                "exactly on a window boundary."
+                        } else {
+                            "BIN hash verified. Opening the direct transfer."
+                        },
                     )
                 }
             ) {

@@ -9,31 +9,25 @@ enum class ImageFit {
     STRETCH,
 }
 
-fun displayCoordinate(value: Int, extent: Int, canvasExtent: Int): Int =
-    if (value < 0) canvasExtent + value - extent else value
-
-fun encodeCoordinate(
-    display: Int,
-    extent: Int,
-    canvasExtent: Int,
-    anchoredFromEnd: Boolean,
-): Int = if (anchoredFromEnd) {
-    display + extent - canvasExtent
-} else {
-    display
-}
-
 /**
  * Left edge of the rectangle [WidgetGuide] draws in, in display space.
  *
- * Use this — never `displayCoordinate(x, …)` directly — anywhere a widget's rectangle
- * is drawn, hit-tested or cropped, so Badge endpoint ordering is handled once.
+ * `origin + stored` is the whole calculation, and its inverse — `display − origin` — is
+ * how an edit turns a position back into stored bytes. [WidgetGuide.originX] carries
+ * whatever the widget's coordinates are measured from: the panel for most records, and
+ * another widget's rectangle for the ones that are aligned to one.
+ *
+ * Use this — never `x` directly — anywhere a widget's rectangle is drawn, hit-tested or
+ * cropped, so Rule endpoint ordering is handled once.
+ *
+ * This used to read the sign of the coordinate to decide whether the widget was anchored
+ * to the far edge of the face. That is right for one alignment code and wrong for a
+ * coordinate that is simply negative, which is why widgets on six catalogue faces were
+ * drawn at the opposite edge from where the watch draws them.
  */
-fun WidgetGuide.drawLeft(canvasWidth: Int): Int =
-    displayCoordinate(x, width, canvasWidth) + drawOffsetX
+val WidgetGuide.drawLeft: Int get() = originX + x + drawOffsetX
 
-fun WidgetGuide.drawTop(canvasHeight: Int): Int =
-    displayCoordinate(y, height, canvasHeight) + drawOffsetY
+val WidgetGuide.drawTop: Int get() = originY + y + drawOffsetY
 
 /**
  * Where the widget's rectangle was before the current edit.
@@ -43,13 +37,11 @@ fun WidgetGuide.drawTop(canvasHeight: Int): Int =
  * clear are the ones the old rectangle covered. [WidgetGuide.drawOffsetX] is either
  * zero or a whole width, so it is re-derived at the original extent too.
  */
-fun WidgetGuide.originalDrawLeft(canvasWidth: Int): Int =
-    displayCoordinate(originalX, originalWidth, canvasWidth) +
-        if (drawOffsetX == 0) 0 else -originalWidth
+val WidgetGuide.originalDrawLeft: Int
+    get() = originalOriginX + originalX + if (drawOffsetX == 0) 0 else -originalWidth
 
-fun WidgetGuide.originalDrawTop(canvasHeight: Int): Int =
-    displayCoordinate(originalY, originalHeight, canvasHeight) +
-        if (drawOffsetY == 0) 0 else -originalHeight
+val WidgetGuide.originalDrawTop: Int
+    get() = originalOriginY + originalY + if (drawOffsetY == 0) 0 else -originalHeight
 
 /**
  * How large a Sprite may be *grown past what it shipped at*, per side.
@@ -421,12 +413,29 @@ enum class WidgetPlacement {
 enum class WidgetCategory(val label: String, val detail: String) {
     IMAGE("Image", "One static raster blitted at a fixed position."),
     SPRITE("Sprite", "A table of frames the watch indexes with a live value."),
+    ANIMATION("Animation", "A frame sequence the watch plays on its own timer."),
     HAND("Clock hand", "A hand rotated about a pivot, so it has no fixed rectangle."),
     VALUE("Value", "A live reading the watch draws with its own glyphs."),
     RULE("Rule", "A straight line between two stored endpoints."),
     COMPOSITE("Composite", "Several sub-fields laid out together, such as a date."),
-    ARC("Arc", "A curved gauge."),
+    ARC("Image arc", "A curved gauge drawn from its own artwork."),
+
+    /**
+     * The other arc, and the reason the two are named apart.
+     *
+     * It draws from a stored colour, thickness and angle range instead of a raster, so
+     * it has no artwork to replace and no pointer to relocate. 75 records across nine
+     * catalogue faces are this type, and every one of them used to be labelled "Other".
+     */
+    VECTOR_ARC("Vector arc", "A curved gauge drawn from stored colour and thickness."),
     BAR("Bar", "A straight gauge."),
+    GROUP("Complication group", "A group of live readings the watch lays out itself."),
+
+    /**
+     * A type the watch accepts and then ignores: it builds nothing and updates nothing.
+     * No catalogue face carries one. Preserved byte for byte, never offered as editable.
+     */
+    RESERVED("Reserved", "Accepted by the watch but drawn as nothing."),
     UNKNOWN("Other", "Type preserved verbatim; only its position is interpreted."),
     ;
 
@@ -435,14 +444,70 @@ enum class WidgetCategory(val label: String, val detail: String) {
             1 -> IMAGE
             2 -> HAND
             3 -> SPRITE
+            4 -> ANIMATION
             5 -> VALUE
+            6 -> VECTOR_ARC
             7 -> RULE
+            9 -> GROUP
             13 -> COMPOSITE
             16 -> ARC
             17 -> BAR
+            8, 10, 11, 12, 14, 15 -> RESERVED
             else -> UNKNOWN
         }
     }
+}
+
+/**
+ * What a widget's live-data source number means.
+ *
+ * These are the watch's own readings, not the container's: a face selects among them and
+ * cannot introduce one. The map is what a later analysis pass established, joined against
+ * the rendered previews shipped in the packages themselves — a face whose steps widget
+ * previews `3457` beside a label reading `steps` settles that number.
+ *
+ * Where no name is available the number is shown as itself. Guessing a label from a
+ * plausible-looking sample value is how source 41 was once read as calories and 48 as
+ * battery, and both were wrong.
+ */
+object DataSourceLabels {
+    private val labels = mapOf(
+        0 to "constant zero",
+        1 to "hour", 2 to "hour tens", 3 to "hour units",
+        5 to "AM/PM",
+        9 to "minute", 10 to "minute tens", 11 to "minute units",
+        13 to "second", 14 to "second tens", 15 to "second units",
+        17 to "weekday",
+        18 to "day of month", 19 to "day tens", 20 to "day units",
+        21 to "month", 22 to "month tens", 23 to "month units",
+        24 to "year", 25 to "year thousands", 26 to "year hundreds",
+        27 to "year tens", 28 to "year units",
+        29 to "steps",
+        37 to "battery",
+        41 to "heart rate",
+        48 to "calories",
+        55 to "distance",
+        62 to "temperature",
+        69 to "weather icon",
+        71 to "active minutes",
+        72 to "floors",
+        75 to "complication group",
+        102 to "blood oxygen",
+        104 to "sleep",
+        106 to "second clock hour tens", 107 to "second clock hour units",
+        109 to "second clock minute tens", 110 to "second clock minute units",
+        115 to "water",
+        116 to "second time zone",
+        120 to "weather description",
+        122 to "second zone month", 123 to "second zone weekday", 124 to "second zone day",
+        125 to "second zone AM/PM",
+    )
+
+    /** The reading [source] selects, or null when this format has no name for it. */
+    fun labelOrNull(source: Int): String? = labels[source]
+
+    /** `steps`, or `source 70` where no name is established. */
+    fun label(source: Int): String = labels[source] ?: "source $source"
 }
 
 data class WidgetGuide(
@@ -471,6 +536,30 @@ data class WidgetGuide(
     val canEditPosition: Boolean,
     val canResize: Boolean = false,
     val placement: WidgetPlacement = WidgetPlacement.CANVAS,
+    /**
+     * The display position [x] is measured from — zero for a widget positioned against
+     * the panel, and another widget's edge for one aligned to it.
+     *
+     * Every Image, Clock hand, Value and Composite record in the catalogue is aligned to
+     * something, so this is the normal case rather than the exception.
+     */
+    val originX: Int = 0,
+    val originY: Int = 0,
+    /** The origin before the current edit, for the same reason as [originalWidth]. */
+    val originalOriginX: Int = originX,
+    val originalOriginY: Int = originY,
+    /** The widget this one is positioned against, when its reference resolved to one. */
+    val alignedToGlobalIndex: Int? = null,
+    /** The live reading this widget follows, where the format names one. */
+    val sourceLabel: String? = null,
+    /**
+     * Whether this widget follows a live reading at all.
+     *
+     * Separate from [sourceLabel] being null, which only means the reading has no
+     * established name. A Composite gives each of its parts its own reading and ignores
+     * the record's, so calling it "reading 0" would be noise.
+     */
+    val followsReading: Boolean = false,
     /**
      * Offset from the stored coordinate to the left edge of the drawn rectangle.
      *
@@ -695,8 +784,25 @@ class DirectInstallPayload(
 
     fun copyBytes(): ByteArray = payload.copyOf()
 
+    /**
+     * Whether this payload ends exactly on a transfer window boundary.
+     *
+     * The transfer sends [TRANSFER_WINDOW_BYTES] at a time and the watch acknowledges
+     * each window, with the last one normally short. A payload that divides exactly
+     * leaves no short window at all, and that is the one shape of transfer this project
+     * has never been able to observe end to end. It is not refused — the bytes are as
+     * sound as any other, and refusing an install that would probably work is worse than
+     * the risk — but it is worth having in a bug report if a transfer ever stalls right
+     * at the end.
+     */
+    val endsOnWindowBoundary: Boolean
+        get() = payload.size % TRANSFER_WINDOW_BYTES == 0
+
     companion object {
         const val MAX_DIRECT_INSTALL_BYTES: Int = 16 * 1024 * 1024
+
+        /** Data bytes per acknowledged transfer window. */
+        const val TRANSFER_WINDOW_BYTES: Int = 39_600
 
         fun create(
             faceId: Int,

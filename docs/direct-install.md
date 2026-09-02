@@ -22,14 +22,29 @@ the framework assign dynamic IDs while discovery targets the two peers by path.
 2. Send dynamic metadata through the OTA Accessory peer.
 3. Obtain Bluetooth transfer access and open RFCOMM/SPP.
 4. Negotiate `30/300`.
-5. Send `/user/wf/<canonical filename>` in descriptor `330`.
+5. Send `/user/wf/<canonical filename>` in the descriptor accepted with `330`.
 6. Stream 39,600-byte windows in 960-byte chunks with CRC32.
 7. Accept `310`, retry bounded `311`, require `320`.
-8. Close with `32/320` and require `34/340`.
-9. Send the final watch-face install request.
+8. Finish with `32/320`; on the success path the watch queues the completed
+   `/user/wf` path for extraction and manager registration, then close with
+   `34/340`.
+9. Send command 4 (`INSTALL_BANDFACE`) to finalize the face/style pair the watch
+   has now registered.
 
-No install command is sent unless the complete payload reaches the verified close
-state.
+No finalization request is sent unless the complete payload reaches the verified
+close state. Unpacking and registration are the watch's own work, not something
+this command asks for: a successful `32` queues the completed `/user/wf` path
+before it answers `320`, so `320` proves the work was queued and not that it has
+finished. The final five-byte message is command 4, which is neither the unpack
+step nor the current-face selector — command 3 is what selects the current face.
+
+**The result the watch computes for that command does not come back to this app.**
+It is addressed to the fixed component the stock plugin owns, so the app's honest
+ceiling is "the install request was delivered", which is what the Install page
+says. The watch distinguishes success, low battery, a wrong path, a wrong binary
+format, storage full and a full favourites list; none of those reach the phone
+here, which is exactly why a face that transfers cleanly and never appears has to
+be diagnosed from the watch rather than from the app.
 
 ## The channel handover users get stuck on
 

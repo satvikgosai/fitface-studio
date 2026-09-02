@@ -128,8 +128,8 @@ class CanvasIntegrityTest {
     /** Nothing the canvas draws may spill outside the panel. */
     private fun checkBoxesOnPanel(label: String, canvas: Canvas, failures: MutableList<String>) {
         canvas.guides.filter { it.placement == WidgetPlacement.CANVAS }.forEach { guide ->
-            val left = guide.drawLeft(canvas.width)
-            val top = guide.drawTop(canvas.height)
+            val left = guide.drawLeft
+            val top = guide.drawTop
             if (left + guide.width <= 0 || top + guide.height <= 0 ||
                 left >= canvas.width || top >= canvas.height
             ) {

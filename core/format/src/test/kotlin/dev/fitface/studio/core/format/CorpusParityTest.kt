@@ -269,7 +269,7 @@ class CorpusParityTest {
             val source = Fit3Container.parse(originalBytes)
             val entry = source.entryByBasename("style0.bin")
             val widget = FaceRecordParser.scanWidgets(entry)
-                .first { it.width in 1..255 && it.height in 1..401 }
+                .first { it.raw1C in 1..255 && it.raw1E in 1..401 }
             val targetX = if (widget.x < Short.MAX_VALUE) widget.x + 1 else widget.x - 1
             val targetY = if (widget.y < Short.MAX_VALUE) widget.y + 1 else widget.y - 1
 
@@ -450,8 +450,8 @@ class CorpusParityTest {
         val badge = FaceRecordParser.scanWidgets(entry).single {
             it.widgetType == WIDGET_BADGE
         }
-        val originalEndX = badge.width.toShort().toInt()
-        val originalEndY = badge.height.toShort().toInt()
+        val originalEndX = badge.raw1C.toShort().toInt()
+        val originalEndY = badge.raw1E.toShort().toInt()
         val deltaX = 3
         val deltaY = 4
 
@@ -480,8 +480,8 @@ class CorpusParityTest {
 
         assertEquals(badge.x + deltaX, moved.x)
         assertEquals(badge.y + deltaY, moved.y)
-        assertEquals(originalEndX + deltaX, moved.width.toShort().toInt())
-        assertEquals(originalEndY + deltaY, moved.height.toShort().toInt())
+        assertEquals(originalEndX + deltaX, moved.raw1C.toShort().toInt())
+        assertEquals(originalEndY + deltaY, moved.raw1E.toShort().toInt())
         assertTrue(changedOffsets.all(allowedOffsets::contains))
         assertArrayEquals(originalBytes, source.toByteArray())
         assertTrue(edit.container.validate().isValid)

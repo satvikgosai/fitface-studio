@@ -154,8 +154,8 @@ internal object EditPreviewComposer {
         canvasWidth: Int,
         canvasHeight: Int,
     ) {
-        val sourceLeft = widget.originalDrawLeft(canvasWidth)
-        val sourceTop = widget.originalDrawTop(canvasHeight)
+        val sourceLeft = widget.originalDrawLeft
+        val sourceTop = widget.originalDrawTop
         for (localY in 0 until widget.originalHeight.coerceAtLeast(0)) {
             for (localX in 0 until widget.originalWidth.coerceAtLeast(0)) {
                 val x = sourceLeft + localX
@@ -186,8 +186,8 @@ internal object EditPreviewComposer {
         canvasWidth: Int,
         canvasHeight: Int,
     ) {
-        val targetLeft = widget.drawLeft(canvasWidth)
-        val targetTop = widget.drawTop(canvasHeight)
+        val targetLeft = widget.drawLeft
+        val targetTop = widget.drawTop
         for (localY in 0 until frame.height) {
             for (localX in 0 until frame.width) {
                 val pixel = frame.argb[localY * frame.width + localX]
@@ -213,10 +213,10 @@ internal object EditPreviewComposer {
         widget: WidgetGuide,
         widgets: List<WidgetGuide>,
     ) {
-        val sourceLeft = widget.originalDrawLeft(canvasWidth)
-        val sourceTop = widget.originalDrawTop(canvasHeight)
-        val targetLeft = widget.drawLeft(canvasWidth)
-        val targetTop = widget.drawTop(canvasHeight)
+        val sourceLeft = widget.originalDrawLeft
+        val sourceTop = widget.originalDrawTop
+        val targetLeft = widget.drawLeft
+        val targetTop = widget.drawTop
         val sourceWidth = widget.originalWidth
         val sourceHeight = widget.originalHeight
         if (widget.width <= 0 || widget.height <= 0 || sourceWidth <= 0 || sourceHeight <= 0) {
@@ -271,8 +271,8 @@ internal object EditPreviewComposer {
         canvasWidth: Int,
         canvasHeight: Int,
     ) {
-        val sourceLeft = widget.originalDrawLeft(canvasWidth)
-        val sourceTop = widget.originalDrawTop(canvasHeight)
+        val sourceLeft = widget.originalDrawLeft
+        val sourceTop = widget.originalDrawTop
         for (row in 0 until widget.originalHeight.coerceAtLeast(0)) {
             for (column in 0 until widget.originalWidth.coerceAtLeast(0)) {
                 val x = sourceLeft + column
@@ -307,8 +307,8 @@ internal object EditPreviewComposer {
         widget: WidgetGuide,
         widgets: List<WidgetGuide>,
     ) {
-        val sourceLeft = widget.originalDrawLeft(canvasWidth)
-        val sourceTop = widget.originalDrawTop(canvasHeight)
+        val sourceLeft = widget.originalDrawLeft
+        val sourceTop = widget.originalDrawTop
         for (row in 0 until widget.originalHeight.coerceAtLeast(0)) {
             for (column in 0 until widget.originalWidth.coerceAtLeast(0)) {
                 val x = sourceLeft + column
@@ -421,8 +421,8 @@ internal object EditPreviewComposer {
             ) {
                 return@any false
             }
-            val left = other.originalDrawLeft(canvasWidth)
-            val top = other.originalDrawTop(canvasHeight)
+            val left = other.originalDrawLeft
+            val top = other.originalDrawTop
             x in left until left + other.originalWidth &&
                 y in top until top + other.originalHeight &&
                 x in 0 until canvasWidth &&

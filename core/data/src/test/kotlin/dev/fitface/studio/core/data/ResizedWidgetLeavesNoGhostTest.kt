@@ -123,10 +123,10 @@ class ResizedWidgetLeavesNoGhostTest {
         resized: WidgetGuide,
         widgets: List<WidgetGuide>,
     ): Int {
-        val oldLeft = resized.originalDrawLeft(overlay.width)
-        val oldTop = resized.originalDrawTop(overlay.height)
-        val newLeft = resized.drawLeft(overlay.width)
-        val newTop = resized.drawTop(overlay.height)
+        val oldLeft = resized.originalDrawLeft
+        val oldTop = resized.originalDrawTop
+        val newLeft = resized.drawLeft
+        val newTop = resized.drawTop
         val others = widgets.filter { it.globalIndex != resized.globalIndex }
         var ghosts = 0
         for (row in 0 until resized.originalHeight) {
@@ -146,8 +146,8 @@ class ResizedWidgetLeavesNoGhostTest {
 
     private fun covers(widget: WidgetGuide, x: Int, y: Int, frame: PreviewFrame): Boolean {
         if (widget.originalWidth <= 0 || widget.originalHeight <= 0) return false
-        val left = widget.originalDrawLeft(frame.width)
-        val top = widget.originalDrawTop(frame.height)
+        val left = widget.originalDrawLeft
+        val top = widget.originalDrawTop
         return x in left until left + widget.originalWidth &&
             y in top until top + widget.originalHeight
     }

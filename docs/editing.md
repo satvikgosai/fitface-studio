@@ -279,7 +279,7 @@ corpus.
   those Badges landed off the panel — face `00089` had one at x=271 on a 256-wide
   panel — and could not be selected. `WidgetGuide.drawOffsetX/Y` carries it, and
   `drawLeft`/`drawTop` in `:core:model` are the only correct way to derive a
-  widget rectangle. Never call `displayCoordinate` on a widget directly.
+  widget rectangle.
 - **A Hand's sprite is `words[1]`** — the one word that resolves to a raster in
   all 469 Hand records. It is resolved to give the record a real artwork size, but
   a Hand stays `HIDDEN`: the watch rotates it about the pivot in `+0x20`, so
@@ -288,9 +288,10 @@ corpus.
   it is because all its non-background records are clock hands. That is the
   assertion that would catch a regression making more of the catalogue
   uneditable.
-- **Widget type 6 exists** — 75 records, absent from the format census. It is
-  uninterpreted, so it reports as `WidgetCategory.UNKNOWN`; its position is still
-  editable and its bytes are preserved.
+- **Widget type 6 is a vector arc** — 75 records across nine faces. It draws a
+  gauge from a stored colour, thickness and angle range and names no raster, which
+  is what separates it from type 16, the arc that draws from artwork. It used to
+  report as `WidgetCategory.UNKNOWN`.
 - **A Static's pointer is `+0x20` only.** `words[0]` is `0x0` in every corpus
   Static, and `0x0` is the background raster's own relative offset — so scanning
   the type-word list for "something that resolves" silently aliases unrelated
@@ -298,20 +299,43 @@ corpus.
 - **A Sprite addresses exactly `+0x20` frames.** Take that many words, no more.
 - **A raster-backed widget's extent is its raster's**, not `0x1C`/`0x1E`. Face
   `00079` stores width 1 for sprites whose frames are 52 px wide; `00022` stores
-  height 20 for frames 136 px tall. Only Pair, Comp, Badge, Arc and LineBar have
-  no raster to measure, and only Badge reinterprets those fields.
+  height 20 for frames 136 px tall. `0x1C`/`0x1E` is a signed extent only on
+  Value, Composite, both arcs and LineBar; on a Static or a Hand it is the
+  alignment pair below, and on a Badge it is the second endpoint. That is why
+  `WidgetRecord` calls the halfwords `raw1C`/`raw1E` and exposes
+  `storedWidth`/`storedHeight` only where they mean one.
 
-## No field holds another widget's index
+## Four fields hold another widget's index
 
-No field has ever been shown to hold another widget's global index.
-Cross-record references go through `sequence_id` or image byte offsets, both of
-which structural edits preserve.
+Static and Hand keep an alignment code at `+0x1C` and the global index it is
+measured from at `+0x1E`; Value and Composite keep the same pair at `+0x20` and
+`+0x22`. `0xFFFF` in the code makes the coordinates absolute — and **no record in
+the catalogue does that**. All 2,311 of them position themselves against
+something, which is why the app's old sign-based anchoring survived so long: 1,914
+of those references name widget 0, and in every one of those styles widget 0 is a
+full-panel background at the origin, where "inset from the panel edge" and "offset
+from the target's edge" are the same sum. The other 397 name 5, 10, 20, 30 or 40,
+which are records in no style, and an unresolvable reference falls back to the
+whole face.
 
-This matters. An earlier version refused any removal where an opaque word
-happened to equal an index in the renumbered range, which blocked **68% of
-removals** and left 18 of 99 faces with nothing removable. It is now replaced by
-post-edit invariants in `StructuralEditor.requireSurvivorsUnchanged`. Do not
-reinstate the guess.
+Three rules follow, and all three are enforced:
+
+- **A renumbering carries the references with it.** `remapAlignmentTarget` rewrites
+  exactly those fields, only where the reference names a record that existed
+  before, so the producer's non-referencing values are left alone.
+- **A widget others are positioned against cannot be removed.** On face `00106`
+  twelve of nineteen widgets are measured from widget 0; renumbering alone would
+  leave all twelve naming index 0, which by then is a different widget. They would
+  be laid out against it and land somewhere else on the watch, with the container
+  parsing, validating and installing perfectly.
+- **The survivor invariant compares what a reference names, not its integer.**
+  `requireSurvivorsUnchanged` takes the same mapping the edit applied.
+
+The guess this replaces was the *opposite* claim — that no field holds an index —
+and the guard built on the guess before that scanned every word for a value that
+looked like one, which blocked **68% of removals** and left 18 of 99 faces with
+nothing removable. Neither extreme is right: four named fields are references, and
+nothing else is.
 
 Image references are offsets **relative to the style's image-section start**, so
 a style entry can be relocated wholesale without touching a widget word.

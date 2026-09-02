@@ -222,24 +222,25 @@ class EditorViewModelTest {
         val moved = requireNotNull(
             viewModel.state.value.snapshot?.widgets?.single { it.globalIndex == 1 },
         )
-        assertEquals("held at the left edge", 0, moved.drawLeft(PanelWidth))
-        assertEquals("held at the top edge", 0, moved.drawTop(PanelHeight))
+        assertEquals("held at the left edge", 0, moved.drawLeft)
+        assertEquals("held at the top edge", 0, moved.drawTop)
     }
 
     /**
-     * An end-anchored widget is stored as a negative coordinate, so the clamp cannot work on
-     * the stored value: `displayCoordinate` reads the sign to decide the anchoring, and a
-     * widget stored at 0 stepped one pixel left reaches -1, which that rule places at the
-     * opposite side of the face. The anchoring travels with the widget instead.
+     * A widget aligned to the far edge of something stores a negative offset, so the clamp
+     * cannot work on the stored value. It cannot read the sign to decide either: a widget
+     * stored at 0 stepped one pixel left reaches -1, and reading that as "anchored to the
+     * far edge" put it on the opposite side of the face. The origin travels with the widget
+     * instead, and everything is measured through it.
      */
     @Test
     fun nudgingAnEndAnchoredWidgetKeepsItAgainstTheEndItIsAnchoredTo() {
-        val anchored = widget(globalIndex = 1, x = -30, y = -40)
+        val anchored = widget(globalIndex = 1, x = -30, y = -40, originX = 216, originY = 362)
         val repository = FakeRepository(snapshot(listOf(anchored)), commitImmediately = true)
         val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
-        val before = anchored.drawLeft(PanelWidth)
+        val before = anchored.drawLeft
 
         viewModel.nudgeWidget(globalIndex = 1, deltaX = 1, deltaY = 0)
         settle()
@@ -248,7 +249,7 @@ class EditorViewModelTest {
             viewModel.state.value.snapshot?.widgets?.single { it.globalIndex == 1 },
         )
         assertTrue("still stored from the end", moved.x < 0)
-        assertEquals("one pixel right, not flung across the face", before + 1, moved.drawLeft(PanelWidth))
+        assertEquals("one pixel right, not flung across the face", before + 1, moved.drawLeft)
     }
 
     /** Nudging into an edge the widget is already against changes nothing at all. */
@@ -274,13 +275,21 @@ class EditorViewModelTest {
     /** Runs everything `viewModelScope` has queued on the test dispatcher. */
     private fun settle() = scope.advanceUntilIdle()
 
-    private fun widget(globalIndex: Int, x: Int, y: Int) = WidgetGuide(
+    private fun widget(
+        globalIndex: Int,
+        x: Int,
+        y: Int,
+        originX: Int = 0,
+        originY: Int = 0,
+    ) = WidgetGuide(
         ordinal = globalIndex,
         globalIndex = globalIndex,
         type = 3,
         sequenceId = globalIndex,
         x = x,
         y = y,
+        originX = originX,
+        originY = originY,
         width = 40,
         height = 40,
         recordSize = 40,

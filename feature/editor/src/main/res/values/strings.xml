@@ -51,7 +51,7 @@
     <!-- Page subtitles -->
     <string name="editor_subtitle_canvas">face %1$s · %2$s</string>
     <string name="editor_subtitle_widgets">%1$d on canvas · %2$d records</string>
-    <string name="editor_subtitle_inspector">type %1$d · seq %2$d</string>
+    <string name="editor_subtitle_inspector">%1$s · %2$s</string>
     <string name="editor_subtitle_background_positioning">positioning · unapplied</string>
     <string name="editor_subtitle_background_can_add">no background yet · one can be added</string>
     <string name="editor_subtitle_background_no_room">%1$s · no room for one</string>
@@ -96,7 +96,11 @@
     <string name="editor_row_placement_hidden">No preview</string>
     <string name="editor_row_placement_last">Last</string>
     <string name="editor_row_opaque">Opaque</string>
-    <string name="editor_row_record">type %1$d · seq %2$d · %3$d×%4$d</string>
+    <string name="editor_row_record">%1$s · %2$s · %3$d×%4$d</string>
+    <!-- Shown in place of a reading's name where the format does not name one. -->
+    <string name="editor_widget_reading_unnamed">reading %1$d</string>
+    <!-- Shown in place of a reading for a widget that does not follow one. -->
+    <string name="editor_widget_index">#%1$d</string>
     <!--
       The frame count is a badge beside OPAQUE rather than a fifth clause on the record line.
       Appended, the line overflowed the row's flexible column on a third of the widgets and
@@ -121,13 +125,16 @@
     <string name="editor_position_heading">Position · display space</string>
     <string name="editor_axis_x">X</string>
     <string name="editor_axis_y">Y</string>
-    <string name="editor_encoded">encoded %1$d, %2$d</string>
-    <string name="editor_encoded_anchored">encoded %1$d, %2$d · anchored from end</string>
+    <string name="editor_encoded">stored %1$d, %2$d</string>
+    <!-- Shown when the stored value is an offset from another widget rather than from the
+         panel, so the numbers above and the numbers in the file legitimately differ. -->
+    <string name="editor_encoded_offset">stored %1$d, %2$d · measured from widget #%3$d</string>
+    <string name="editor_encoded_offset_panel">stored %1$d, %2$d · measured from the face</string>
     <string name="editor_record_heading">Record</string>
     <string name="editor_record_detail">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d</string>
     <string name="editor_record_detail_frames">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d   frames %6$d</string>
     <string name="editor_duplicate_of">Duplicate of #%1$d · selected clone</string>
-    <string name="editor_pair_color">Pair color · #%1$s</string>
+    <string name="editor_pair_color">Value color · #%1$s</string>
     <string name="editor_color_white">White</string>
     <string name="editor_color_cyan">Cyan</string>
     <string name="editor_color_pink">Pink</string>

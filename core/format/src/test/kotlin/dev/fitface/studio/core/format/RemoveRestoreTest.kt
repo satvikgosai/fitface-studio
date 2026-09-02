@@ -7,6 +7,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -32,10 +33,13 @@ class RemoveRestoreTest {
     fun removingWidgetZeroIsNoLongerBlockedByAlwaysZeroRecordFields() {
         // Every widget record in the live catalogue stores zero at +0x08, +0x10 and
         // +0x14. Treating those as possible index references made "remove widget 0"
-        // fail on every face, because 0 is always in the affected range.
+        // fail on every face, because 0 is always in the affected range. A zero-valued
+        // field is still not a reference, and this face's `aod.bin` is where that can be
+        // shown on its own: nothing in it is positioned against its widget 0, so the only
+        // thing that could refuse the removal is a scan of always-zero words.
         val source = load(live00106)
-        val styles = listOf("style0.bin")
-        val target = FaceRecordParser.scanWidgets(source.entryByBasename("style0.bin"))
+        val styles = listOf("aod.bin")
+        val target = FaceRecordParser.scanWidgets(source.entryByBasename("aod.bin"))
             .single { it.globalIndex == 0 }
 
         val edit = StructuralEditor.removeWidget(
@@ -51,8 +55,46 @@ class RemoveRestoreTest {
 
         assertTrue(edit.container.validate().isValid)
         assertEquals(
-            FaceRecordParser.scanWidgets(source.entryByBasename("style0.bin")).size - 1,
-            FaceRecordParser.scanWidgets(edit.container.entryByBasename("style0.bin")).size,
+            FaceRecordParser.scanWidgets(source.entryByBasename("aod.bin")).size - 1,
+            FaceRecordParser.scanWidgets(edit.container.entryByBasename("aod.bin")).size,
+        )
+    }
+
+    /**
+     * The other half of the same rule, and the reason the removal above had to move to
+     * `aod.bin`: a widget that other records are *actually* positioned against cannot be
+     * cut out.
+     *
+     * Twelve of this style's nineteen widgets are measured from widget 0. Renumbering
+     * alone would leave all twelve still naming index 0 — which by then is a different
+     * widget — so they would be laid out against it and land somewhere else on the watch.
+     * The container would parse, validate and install; only the face would be wrong.
+     */
+    @Test
+    fun removingAWidgetOthersArePositionedAgainstIsRefused() {
+        val source = load(live00106)
+        val entry = source.entryByBasename("style0.bin")
+        val widgets = FaceRecordParser.scanWidgets(entry)
+        val target = widgets.single { it.globalIndex == 0 }
+        val dependents = widgets.count { it.liveAlignment?.targetGlobalIndex == 0 && it != target }
+        assertTrue("this face is expected to align widgets to widget 0", dependents > 0)
+
+        val failure = assertThrows(Fit3FormatException::class.java) {
+            StructuralEditor.removeWidget(
+                source = source,
+                entryBasenames = listOf("style0.bin"),
+                globalIndex = target.globalIndex,
+                widgetType = target.widgetType,
+                sequenceId = target.sequenceId,
+                x = target.x,
+                y = target.y,
+                requireFinal = false,
+            )
+        }
+
+        assertTrue(
+            "the message has to name the cost: ${failure.message}",
+            failure.message!!.contains("positioned against"),
         )
     }
 

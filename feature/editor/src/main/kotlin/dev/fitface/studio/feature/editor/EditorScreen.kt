@@ -105,12 +105,10 @@ import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetPlacement
-import dev.fitface.studio.core.model.displayCoordinate
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.mebibytes
 import dev.fitface.studio.core.model.drawTop
-import dev.fitface.studio.core.model.encodeCoordinate
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
@@ -592,7 +590,11 @@ private fun EditorHeader(
             snapshot.widgets.size,
         )
         EditorPage.Inspector -> selected?.let {
-            stringResource(R.string.editor_subtitle_inspector, it.type, it.sequenceId)
+            stringResource(
+                R.string.editor_subtitle_inspector,
+                it.category.label,
+                it.readingLabel(),
+            )
         }
         EditorPage.Background -> when {
             pendingImage -> stringResource(R.string.editor_subtitle_background_positioning)
@@ -971,11 +973,11 @@ private fun SelectionPeek(
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onInspect: () -> Unit,
 ) {
-    // The rectangle the canvas outlines, not the stored endpoint. Reading
-    // `displayCoordinate(widget.x, …)` here reported a far-end Badge's far endpoint — a
-    // whole width away from the left edge the user is looking at while they nudge.
-    val displayX = widget.drawLeft(snapshot.preview.width)
-    val displayY = widget.drawTop(snapshot.preview.height)
+    // The rectangle the canvas outlines, not the stored endpoint. Reading the stored
+    // coordinate here reported a far-end Rule's far endpoint — a whole width away from
+    // the left edge the user is looking at while they nudge.
+    val displayX = widget.drawLeft
+    val displayY = widget.drawTop
     Column(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1299,8 +1301,8 @@ private fun WidgetRow(
             Text(
                 stringResource(
                     R.string.editor_row_record,
-                    widget.type,
-                    widget.sequenceId,
+                    widget.category.label,
+                    widget.readingLabel(),
                     widget.width,
                     widget.height,
                 ),
@@ -1314,8 +1316,8 @@ private fun WidgetRow(
         Text(
             stringResource(
                 R.string.editor_row_position,
-                widget.drawLeft(snapshot.preview.width),
-                widget.drawTop(snapshot.preview.height),
+                widget.drawLeft,
+                widget.drawTop,
             ),
             style = FitFaceType.numeric,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1390,11 +1392,30 @@ private fun WidgetThumbnail(
     }
 }
 
+/**
+ * What this widget follows, in words where the format names it.
+ *
+ * The number is not a label. It selects one of the watch's own readings, and where the
+ * evidence does not name one — reading 70, and the hour offsets — it is shown as itself
+ * rather than given an invented name.
+ */
+@Composable
+private fun WidgetGuide.readingLabel(): String = when (val reading = sourceLabel) {
+    is String -> reading
+    else -> if (followsReading) {
+        stringResource(R.string.editor_widget_reading_unnamed, sequenceId)
+    } else {
+        // A widget that follows no reading of its own is better identified by its place
+        // in the table than by a number that means nothing on it.
+        stringResource(R.string.editor_widget_index, globalIndex)
+    }
+}
+
 /** The composed-preview pixels under [widget], or null when it covers nothing. */
 private fun cropWidgetPreview(frame: PreviewFrame, widget: WidgetGuide): PreviewFrame? {
     if (widget.width <= 0 || widget.height <= 0) return null
-    val left = widget.drawLeft(frame.width)
-    val top = widget.drawTop(frame.height)
+    val left = widget.drawLeft
+    val top = widget.drawTop
     val startX = left.coerceIn(0, frame.width)
     val startY = top.coerceIn(0, frame.height)
     val endX = (left + widget.width).coerceIn(0, frame.width)
@@ -1481,8 +1502,8 @@ private fun InspectorWorkspace(
     // Same rule as `SelectionPeek`: the number beside the canvas is the rectangle's own
     // left/top edge. The stored pair is reported separately as "encoded x, y" below, and
     // the nudge buttons move the stored coordinate a pixel either way regardless.
-    val displayX = widget.drawLeft(snapshot.preview.width)
-    val displayY = widget.drawTop(snapshot.preview.height)
+    val displayX = widget.drawLeft
+    val displayY = widget.drawTop
     var confirmRemoval by rememberSaveable(widget.globalIndex) { mutableStateOf(false) }
     if (confirmRemoval) {
         AlertDialog(
@@ -1570,15 +1591,32 @@ private fun InspectorWorkspace(
                 )
             }
             Text(
-                stringResource(
-                    if (widget.x < 0 || widget.y < 0) {
-                        R.string.editor_encoded_anchored
-                    } else {
-                        R.string.editor_encoded
-                    },
-                    widget.x,
-                    widget.y,
-                ),
+                // What the file holds, and what it is measured from. The stored value is
+                // only the same as the display position when the widget is placed against
+                // the face itself; when it is placed against another widget, the numbers
+                // differ and the reader needs to know why. This line used to read
+                // "anchored from end" whenever a coordinate was negative, which was the
+                // old guess about what a negative value meant.
+                widget.alignedToGlobalIndex.let { anchor ->
+                    when {
+                        widget.originX == 0 && widget.originY == 0 -> stringResource(
+                            R.string.editor_encoded,
+                            widget.x,
+                            widget.y,
+                        )
+                        anchor != null -> stringResource(
+                            R.string.editor_encoded_offset,
+                            widget.x,
+                            widget.y,
+                            anchor,
+                        )
+                        else -> stringResource(
+                            R.string.editor_encoded_offset_panel,
+                            widget.x,
+                            widget.y,
+                        )
+                    }
+                },
                 modifier = Modifier.padding(top = 9.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.fitText.secondary,
@@ -2757,19 +2795,11 @@ private fun DirectWatchCanvas(
                                 draggingIndex = widget.globalIndex
                                 // A drag carries the *stored* coordinate in display space,
                                 // not `drawLeft`: the outline adds `drawOffset` when it
-                                // draws and `encodeCoordinate` expects the stored value
-                                // back. The clamp is what knows about the offset.
+                                // draws and the move expects the stored value back. The
+                                // clamp is what knows about the offset.
                                 draggingPosition = Offset(
-                                    x = displayCoordinate(
-                                        widget.x,
-                                        widget.width,
-                                        current.preview.width,
-                                    ).toFloat(),
-                                    y = displayCoordinate(
-                                        widget.y,
-                                        widget.height,
-                                        current.preview.height,
-                                    ).toFloat(),
+                                    x = (widget.originX + widget.x).toFloat(),
+                                    y = (widget.originY + widget.y).toFloat(),
                                 )
                                 dragTrack = draggingPosition
                             } else {
@@ -2783,16 +2813,8 @@ private fun DirectWatchCanvas(
                                 val widget = current.widgets.firstOrNull {
                                     it.globalIndex == draggingIndex
                                 } ?: return@detectDragGestures
-                                val startX = displayCoordinate(
-                                    widget.x,
-                                    widget.width,
-                                    current.preview.width,
-                                ).toFloat()
-                                val startY = displayCoordinate(
-                                    widget.y,
-                                    widget.height,
-                                    current.preview.height,
-                                ).toFloat()
+                                val startX = (widget.originX + widget.x).toFloat()
+                                val startY = (widget.originY + widget.y).toFloat()
                                 val horizontal = stepDragAxis(
                                     track = dragTrack.x,
                                     delta = amount.x * current.preview.width / size.width,
@@ -2832,18 +2854,8 @@ private fun DirectWatchCanvas(
                                 if (widget != null) {
                                     onMoveWidget(
                                         draggingIndex,
-                                        encodeCoordinate(
-                                            display = draggingPosition.x.roundToInt(),
-                                            extent = widget.width,
-                                            canvasExtent = current.preview.width,
-                                            anchoredFromEnd = widget.x < 0,
-                                        ),
-                                        encodeCoordinate(
-                                            display = draggingPosition.y.roundToInt(),
-                                            extent = widget.height,
-                                            canvasExtent = current.preview.height,
-                                            anchoredFromEnd = widget.y < 0,
-                                        ),
+                                        draggingPosition.x.roundToInt() - widget.originX,
+                                        draggingPosition.y.roundToInt() - widget.originY,
                                     )
                                 }
                             }
@@ -2917,12 +2929,12 @@ private fun DirectWatchCanvas(
                     val x = if (visualMoveIndex == widget.globalIndex) {
                         visualMovePosition.x + widget.drawOffsetX
                     } else {
-                        widget.drawLeft(snapshot.preview.width).toFloat()
+                        widget.drawLeft.toFloat()
                     }
                     val y = if (visualMoveIndex == widget.globalIndex) {
                         visualMovePosition.y + widget.drawOffsetY
                     } else {
-                        widget.drawTop(snapshot.preview.height).toFloat()
+                        widget.drawTop.toFloat()
                     }
                     drawRect(
                         color = if (selected) selectedGuideColor else guideColor,
@@ -3628,8 +3640,8 @@ internal fun hitWidget(
     val candidates = widgets.asSequence()
         .filter { it.placement.isVisibleOnCanvas && it.canEditPosition }
         .filter {
-            val left = it.drawLeft(faceWidth)
-            val top = it.drawTop(faceHeight)
+            val left = it.drawLeft
+            val top = it.drawTop
             // Half-open on purpose. Testing `x <= left + width` made the rectangle
             // width+1 px wide, so two abutting widgets shared a one-pixel column and
             // the right and bottom edges belonged to both of them.
@@ -3739,8 +3751,8 @@ private fun EditorSnapshot.rememberWidgetDragLayer(
 ) {
     val selected = widgets.singleOrNull { it.globalIndex == globalIndex }
         ?: return@remember null
-    val sourceX = selected.drawLeft(preview.width)
-    val sourceY = selected.drawTop(preview.height)
+    val sourceX = selected.drawLeft
+    val sourceY = selected.drawTop
     val embeddedFrame = widgetImageLayers
         .singleOrNull { it.globalIndex == globalIndex }
         ?.frame
@@ -3795,8 +3807,8 @@ private fun EditorSnapshot.rememberWidgetDragLayer(
             other.height > 0 &&
             other.width.toLong() * other.height < selectedArea
     }.forEach { other ->
-        val left = other.drawLeft(preview.width)
-        val top = other.drawTop(preview.height)
+        val left = other.drawLeft
+        val top = other.drawTop
         val right = (left + other.width).coerceAtMost(preview.width)
         val bottom = (top + other.height).coerceAtMost(preview.height)
         for (y in top.coerceAtLeast(0) until bottom) {

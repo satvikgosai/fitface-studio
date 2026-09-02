@@ -60,8 +60,8 @@ object FaceEditor {
             val endpoint = if (record.widgetType == WIDGET_BADGE) {
                 val deltaX = x - record.x
                 val deltaY = y - record.y
-                val endpointX = record.width.toShort().toInt() + deltaX
-                val endpointY = record.height.toShort().toInt() + deltaY
+                val endpointX = record.raw1C.toShort().toInt() + deltaX
+                val endpointY = record.raw1E.toShort().toInt() + deltaY
                 if (endpointX !in Short.MIN_VALUE..Short.MAX_VALUE ||
                     endpointY !in Short.MIN_VALUE..Short.MAX_VALUE
                 ) {

@@ -14,6 +14,7 @@ import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.Fit3Apk
 import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.format.Fit3FormatException
+import dev.fitface.studio.core.format.Fit3WidgetIsAnchorException
 import dev.fitface.studio.core.format.ImageRecord
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StructuralEdit
@@ -754,16 +755,33 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val guide = FaceRecordParser.widgetGuides(
                 current.currentContainer.entryByBasename(styleName),
             ).firstOrNull { it.globalIndex == globalIndex }
-            val edit = StructuralEditor.removeWidget(
-                current.currentContainer,
-                styleNames,
-                globalIndex,
-                widgetType,
-                sequenceId,
-                x,
-                y,
-                requireFinal,
-            )
+            val edit = try {
+                StructuralEditor.removeWidget(
+                    current.currentContainer,
+                    styleNames,
+                    globalIndex,
+                    widgetType,
+                    sequenceId,
+                    x,
+                    y,
+                    requireFinal,
+                )
+            } catch (error: Fit3WidgetIsAnchorException) {
+                // A refusal the reader can trigger by tapping a button they can see, so
+                // it gets a sentence rather than the format layer's own wording.
+                val others = error.dependentGlobalIndices.size
+                throw WatchFaceException(
+                    "This widget is what $others other " +
+                        (if (others == 1) "widget is" else "widgets are") +
+                        " positioned against, so removing it would move " +
+                        (if (others == 1) "it" else "them") +
+                        ". Move or remove " +
+                        (if (others == 1) "that widget" else "those widgets") +
+                        " first.",
+                    error.message,
+                    error,
+                )
+            }
             val removed = RemovedWidget(
                 id = removedWidgetIds.incrementAndGet(),
                 label = "Widget #$globalIndex",
@@ -1558,6 +1576,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 widget.copy(
                     originalX = original?.x ?: widget.x,
                     originalY = original?.y ?: widget.y,
+                    // The origin has to come from the original too: an alignment target
+                    // that has been moved, resized or renumbered by this edit sits
+                    // somewhere else now, and the pixels to clear are the ones the old
+                    // rectangle covered.
+                    originalOriginX = original?.originX ?: widget.originX,
+                    originalOriginY = original?.originY ?: widget.originY,
                     // A resize follows the new raster immediately; the reference
                     // render still shows the old one, so the composer needs the
                     // extent it was drawn at to know what to clear.

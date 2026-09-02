@@ -24,6 +24,20 @@ class Fit3NoContainerException(val hasFaceMetadata: Boolean) : Fit3FormatExcepti
     },
 )
 
+/**
+ * The selected widget is what other widgets are positioned against, so it cannot go.
+ *
+ * Removing it would leave every dependent measured from whichever record inherited its
+ * index — a container that parses, validates and installs, showing a face with widgets
+ * somewhere else. The count is what the reader needs, so it is carried separately from
+ * the technical message.
+ */
+class Fit3WidgetIsAnchorException(
+    val globalIndex: Int,
+    val dependentGlobalIndices: List<Int>,
+    message: String,
+) : Fit3FormatException(message)
+
 data class ContainerHeader(
     val magic: String,
     val version: Long,
@@ -318,5 +332,6 @@ private fun validateContainer(
             "${source.size - container.bodyOffset} body bytes with no entries",
         )
     }
+    issues += crossResourceIssues(container)
     return ValidationReport(issues)
 }

@@ -1,5 +1,6 @@
 package dev.fitface.studio.core.format
 
+import dev.fitface.studio.core.model.DataSourceLabels
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.WidgetCategory
 import dev.fitface.studio.core.model.WidgetGuide
@@ -26,9 +27,21 @@ const val INDEXED_PALETTE_ENTRIES = 256
 const val INDEXED_PALETTE_BYTES = INDEXED_PALETTE_ENTRIES * 4
 const val IMAGE_HEADER_SIZE = 12
 const val STYLE_HEADER_SIZE = 24
+
+/**
+ * Where [WidgetRecord.words] starts, which is `0x24`.
+ *
+ * Not a fixed header size, whatever the name suggests: a record's common prefix ends at
+ * `0x18`, and everything from there is type-specific. This constant survives only
+ * because `words` is a raw view over the tail for code that moves bytes; anything
+ * reading meaning goes through [WidgetSchema].
+ */
 const val WIDGET_FIXED_SIZE = 36
 
 const val WIDGET_STATIC = 1
+const val WIDGET_ANIMATION = 4
+const val WIDGET_VECTOR_ARC = 6
+const val WIDGET_SOURCE_GROUP = 9
 const val WIDGET_HAND = 2
 const val WIDGET_SPRITE = 3
 const val WIDGET_PAIR = 5
@@ -91,20 +104,153 @@ data class ImageRecord(
     }
 }
 
+/**
+ * A widget positioned against another widget's rectangle rather than the panel.
+ *
+ * Four types carry one of these — Static, Hand, Value and Composite — and it is live
+ * unless [code] is [WidgetSchema.ALIGNMENT_DISABLED]. When it is live the record's
+ * `x`/`y` are **offsets from the target's rectangle**, and [targetGlobalIndex] names the
+ * widget they are measured from. A target that is not an earlier record in the same
+ * style falls back to the panel, which is a real and common state, not an error: the
+ * catalogue's own faces use target values that name no record at all.
+ *
+ * This is the field the format layer used to insist did not exist. Every Static, Hand,
+ * Value and Composite record in the catalogue has one, and all of them are live.
+ */
+data class AlignmentRef(val code: Int, val targetGlobalIndex: Int) {
+    val isLive: Boolean get() = code != WidgetSchema.ALIGNMENT_DISABLED
+}
+
 data class WidgetRecord(
     val ordinal: Int,
     val recordOffset: Int,
     val recordSize: Int,
     val globalIndex: Int,
     val widgetType: Int,
+    /**
+     * `+0x04` verbatim. It selects one of the watch's own live readings — see
+     * [dev.fitface.studio.core.model.DataSourceLabels] — and a container cannot
+     * introduce a new one. The name is historical; [sourceId] is the value that means
+     * something. No catalogue record uses the high half.
+     */
     val sequenceId: Int,
     val x: Int,
     val y: Int,
-    val width: Int,
-    val height: Int,
+    /**
+     * `+0x1C` and `+0x1E` verbatim, unsigned.
+     *
+     * Deliberately not called `width`/`height`: this pair is a signed extent only on the
+     * five types that draw their own geometry ([storedWidth]/[storedHeight]). On a Static
+     * or a Hand it is the [alignment] code and target index, and on a Rule it is the
+     * second endpoint. Reading it as an extent everywhere is what let an alignment code
+     * be reported as a widget's width.
+     */
+    val raw1C: Int,
+    val raw1E: Int,
     val unknown20: Long,
+    /**
+     * The record tail as 32-bit words from `+0x24`, for code that moves bytes rather
+     * than reading meaning. Prefer the named accessors and [WidgetSchema] for anything
+     * semantic — a word index is not a field name, and the same word is a colour on one
+     * type and a raster pointer on another.
+     */
     val words: List<Long>,
-)
+    val alignment: AlignmentRef? = null,
+    /** The type's own signed width, or null for a type that stores no extent. */
+    val storedWidth: Int? = null,
+    val storedHeight: Int? = null,
+    /** Frames a Sprite or an Animation indexes, from its own count byte. */
+    val frameCount: Int? = null,
+) {
+    /** The live reading this record follows. */
+    val sourceId: Int get() = sequenceId and 0xFFFF
+
+    /** The alignment reference, but only when it is actually in effect. */
+    val liveAlignment: AlignmentRef? get() = alignment?.takeIf(AlignmentRef::isLive)
+
+    /** A Value or Composite's stored text colour, `0xAARRGGBB`. */
+    val textColorArgb: Long?
+        get() = when (widgetType) {
+            WIDGET_PAIR -> words.getOrNull(0)
+            WIDGET_COMP -> words.getOrNull((0x58 - 0x24) / 4)
+            else -> null
+        }
+
+    /** A Rule's stored line thickness. */
+    val ruleThickness: Int?
+        get() = if (widgetType == WIDGET_BADGE) {
+            words.getOrNull((0x30 - 0x24) / 4)?.toInt()?.and(0xFF)
+        } else {
+            null
+        }
+
+    /** Byte offset of [field] inside the entry this record was read from. */
+    fun fieldOffset(field: Int): Int = recordOffset + field
+
+    /**
+     * A byte or halfword of the type-specific tail, by its offset in the record.
+     *
+     * Both read out of [words], which is safe for either width because every field the
+     * format defines sits at an even offset and no halfword straddles a word boundary.
+     * Offsets below `+0x24` are the common prefix and have named properties instead.
+     */
+    private fun byteAt(offset: Int): Int? = wordFor(offset)?.let { (word, shift) ->
+        ((word ushr shift) and 0xFF).toInt()
+    }
+
+    private fun u16At(offset: Int): Int? = wordFor(offset)?.let { (word, shift) ->
+        ((word ushr shift) and 0xFFFF).toInt()
+    }
+
+    private fun wordFor(offset: Int): Pair<Long, Int>? {
+        if (offset < WIDGET_FIXED_SIZE) return null
+        val relative = offset - WIDGET_FIXED_SIZE
+        return words.getOrNull(relative / 4)?.let { it to (relative % 4) * 8 }
+    }
+
+    /** Which `font_N.bin` a text widget draws with, or null for a type that has none. */
+    val fontBindingIndex: Int?
+        get() = when (widgetType) {
+            WIDGET_PAIR -> byteAt(0x28)
+            WIDGET_COMP -> byteAt(0x5E)
+            else -> null
+        }
+
+    /**
+     * Locale-dictionary items this record reads, as far as they can be known statically.
+     *
+     * A Value's base is added to its live reading, and a Composite's dynamic parts do the
+     * same, so these are the lowest items each field can reach rather than the highest.
+     * `0xFFFF` means the field is not a dictionary reference at all — a Value with that
+     * base formats a number instead — and a Composite's ordering item is also disabled by
+     * zero.
+     */
+    val dictionaryIndices: List<Int>
+        get() = when (widgetType) {
+            WIDGET_PAIR -> listOfNotNull(u16At(0x2C)?.takeIf { it != DISABLED_INDEX })
+            WIDGET_COMP -> COMP_PART_OFFSETS.flatMap { part ->
+                listOf(part + 0x02, part + 0x04, part + 0x06).mapNotNull { field ->
+                    u16At(field)?.takeIf { it != DISABLED_INDEX }
+                }
+            } + listOfNotNull(
+                u16At(0x62)?.takeIf { it != DISABLED_INDEX && it != 0 },
+            )
+            else -> emptyList()
+        }
+
+    /** The live reading each enabled part of a Composite follows. */
+    val compositePartSources: List<Int>
+        get() = if (widgetType == WIDGET_COMP) {
+            COMP_PART_OFFSETS.mapNotNull { u16At(it)?.takeIf { source -> source != DISABLED_INDEX } }
+        } else {
+            emptyList()
+        }
+
+    private companion object {
+        const val DISABLED_INDEX = 0xFFFF
+        val COMP_PART_OFFSETS = listOf(0x24, 0x30, 0x3C, 0x48)
+    }
+}
 
 object FaceRecordParser {
     private val SUPPORTED_IMAGE_FORMATS =
@@ -180,35 +326,68 @@ object FaceRecordParser {
         val records = mutableListOf<WidgetRecord>()
         var cursor = STYLE_HEADER_SIZE
         while (cursor < imageOffset) {
-            if (cursor + WIDGET_FIXED_SIZE > imageOffset) {
+            if (cursor + WidgetSchema.MINIMUM_RECORD_SIZE > imageOffset) {
                 throw Fit3FormatException("${entry.basename}: truncated widget")
             }
             val indexSize = data.u32(cursor + 0x0C)
             val recordSize = (indexSize and 0xFFFF).toInt()
             val globalIndex = (indexSize ushr 16).toInt()
-            if (recordSize < WIDGET_FIXED_SIZE || recordSize > 600 || recordSize % 2 != 0) {
+            val widgetType = data.u32(cursor).checkedInt("widget type")
+            // A record whose type is outside 1..17 is not a widget with an unfamiliar
+            // layout, it is a misparse: the watch dispatches exactly those seventeen and
+            // ignores everything else. Reading one as a generic record because its size
+            // looked plausible is how a broken stream used to reach the canvas.
+            val spec = WidgetSchema.specOrNull(widgetType) ?: throw Fit3FormatException(
+                "${entry.basename}: widget ${records.size} has unsupported type $widgetType",
+            )
+            if (recordSize < spec.minimumSize) {
                 throw Fit3FormatException(
-                    "${entry.basename}: invalid widget size $recordSize",
+                    "${entry.basename}: ${spec.name} widget ${records.size} is $recordSize " +
+                        "bytes, which is below the ${spec.minimumSize} its fields need",
                 )
             }
             if (cursor + recordSize > imageOffset) {
                 throw Fit3FormatException("${entry.basename}: widget exceeds stream")
             }
-            val wordCount = (recordSize - WIDGET_FIXED_SIZE) / 4
+            // Exact, not "at least": every one of the catalogue's 4,034 records is exactly
+            // its type's size, a variable frame table included. An extra tail would mean
+            // either a field this layer does not know about or a size that disagrees with
+            // the frame count, and both are worth refusing rather than reading past.
+            spec.expectedSize(data, cursor)?.let { expected ->
+                if (recordSize != expected) {
+                    throw Fit3FormatException(
+                        "${entry.basename}: ${spec.name} widget ${records.size} declares " +
+                            "$recordSize bytes, its fields need exactly $expected",
+                    )
+                }
+            }
+            val wordCount = (recordSize - WIDGET_FIXED_SIZE).coerceAtLeast(0) / 4
+            val alignment = spec.alignment?.let {
+                AlignmentRef(
+                    code = data.u16(cursor + it.codeOffset),
+                    targetGlobalIndex = data.u16(cursor + it.targetOffset),
+                )
+            }
             records += WidgetRecord(
                 ordinal = records.size,
                 recordOffset = cursor,
                 recordSize = recordSize,
                 globalIndex = globalIndex,
-                widgetType = data.u32(cursor).checkedInt("widget type"),
+                widgetType = widgetType,
                 sequenceId = data.u32(cursor + 4).checkedInt("sequence id"),
                 x = data.i16(cursor + 0x18),
                 y = data.i16(cursor + 0x1A),
-                width = data.u16(cursor + 0x1C),
-                height = data.u16(cursor + 0x1E),
+                raw1C = data.u16(cursor + 0x1C),
+                raw1E = data.u16(cursor + 0x1E),
                 unknown20 = data.u32(cursor + 0x20),
                 words = List(wordCount) { word ->
                     data.u32(cursor + WIDGET_FIXED_SIZE + word * 4)
+                },
+                alignment = alignment,
+                storedWidth = if (spec.hasStoredExtent) data.i16(cursor + 0x1C) else null,
+                storedHeight = if (spec.hasStoredExtent) data.i16(cursor + 0x1E) else null,
+                frameCount = (spec.pointers as? WidgetSchema.PointerLayout.Table)?.let {
+                    data[cursor + it.countOffset].toInt() and 0xFF
                 },
             )
             cursor += recordSize
@@ -288,11 +467,31 @@ object FaceRecordParser {
         }
     }
 
-    /** `+0x20` of a Sprite is its frame count, followed by that many pointers. */
+    /**
+     * How many frames a Sprite indexes.
+     *
+     * The count is the single byte at `+0x20`; `+0x21..+0x23` are not part of it. This
+     * used to read the low 24 bits and then clamp the result to the number of words
+     * available, which cannot be wrong on a catalogue face — the scan now requires the
+     * record's size to equal `0x24 + 4 × count` exactly — but hid a disagreement between
+     * the count and the table instead of refusing it.
+     */
+    /**
+     * The reading a widget follows, named, or null where naming it would be a guess.
+     *
+     * Only offered for a type that actually follows the common source word, so a
+     * Static's registered-but-never-updated source and a Composite's unused common word
+     * are not dressed up as a live value the widget shows.
+     */
+    private fun sourceLabelOf(record: WidgetRecord): String? =
+        if (WidgetSchema.spec(record.widgetType).followsCommonSource) {
+            DataSourceLabels.labelOrNull(record.sourceId)
+        } else {
+            null
+        }
+
     private fun spriteFrameCount(record: WidgetRecord): Int =
-        (record.unknown20 and 0xFF_FFFFL)
-            .coerceIn(0L, record.words.size.toLong())
-            .toInt()
+        if (record.widgetType == WIDGET_SPRITE) record.frameCount ?: 0 else 0
 
     /**
      * Rasters a widget record addresses, in record order.
@@ -413,58 +612,117 @@ object FaceRecordParser {
         record: WidgetRecord,
         imagesByRelativeOffset: Map<Long, ImageRecord>,
     ): List<ImagePointerField> {
-        fun word(index: Int): ImagePointerField {
-            val value = record.words.getOrNull(index) ?: throw Fit3FormatException(
-                "widget ${record.ordinal} type ${record.widgetType} has no word $index",
-            )
+        val spec = WidgetSchema.spec(record.widgetType)
+        fun pointer(fieldOffset: Int, label: String): ImagePointerField {
+            val value = record.words.getOrNull((fieldOffset - WIDGET_FIXED_SIZE) / 4)
+                ?: throw Fit3FormatException(
+                    "${spec.name} widget ${record.ordinal} is too short for its $label pointer",
+                )
             val image = imagesByRelativeOffset[value] ?: throw Fit3FormatException(
-                "widget ${record.ordinal} type ${record.widgetType} word $index " +
-                    "does not point at a raster",
+                "${spec.name} widget ${record.ordinal} $label does not point at a raster",
             )
             return ImagePointerField(
-                offset = record.recordOffset + WIDGET_FIXED_SIZE + index * 4,
+                offset = record.fieldOffset(fieldOffset),
                 value = value,
                 image = image,
             )
         }
-        return when (record.widgetType) {
-            WIDGET_STATIC -> {
-                val image = imagesByRelativeOffset[record.unknown20]
-                    ?: throw Fit3FormatException(
-                        "Static widget ${record.ordinal} does not point at a raster",
+        return when (val layout = spec.pointers) {
+            is WidgetSchema.PointerLayout.None -> emptyList()
+
+            is WidgetSchema.PointerLayout.Single -> {
+                // A Static keeps its pointer at +0x20, which is the one field this map
+                // cannot read out of `words`.
+                if (layout.offset == 0x20) {
+                    val image = imagesByRelativeOffset[record.unknown20]
+                        ?: throw Fit3FormatException(
+                            "${spec.name} widget ${record.ordinal} does not point at a raster",
+                        )
+                    listOf(
+                        ImagePointerField(
+                            offset = record.fieldOffset(0x20),
+                            value = record.unknown20,
+                            image = image,
+                        ),
                     )
-                listOf(
-                    ImagePointerField(
-                        offset = record.recordOffset + 0x20,
-                        value = record.unknown20,
-                        image = image,
-                    ),
-                )
+                } else {
+                    listOf(pointer(layout.offset, "image"))
+                }
             }
-            WIDGET_SPRITE -> {
-                val frames = spriteFrameCount(record)
+
+            is WidgetSchema.PointerLayout.Table -> {
+                val frames = record.frameCount ?: 0
                 if (frames <= 0) {
                     throw Fit3FormatException(
-                        "Sprite widget ${record.ordinal} declares $frames frames",
+                        "${spec.name} widget ${record.ordinal} declares $frames frames",
                     )
                 }
-                (0 until frames).map(::word)
+                (0 until frames).map {
+                    pointer(layout.firstOffset + it * 4, "frame $it")
+                }
             }
-            WIDGET_HAND -> listOf(word(1))
-            WIDGET_ARC -> listOf(word(4))
-            WIDGET_LINE_BAR -> listOf(word(2))
-            else -> emptyList()
         }
     }
 
     /** Widget types [imagePointerFields] knows the pointer schema of. */
-    internal val POINTER_BEARING_TYPES = setOf(
-        WIDGET_STATIC,
-        WIDGET_SPRITE,
-        WIDGET_HAND,
-        WIDGET_ARC,
-        WIDGET_LINE_BAR,
-    )
+    internal val POINTER_BEARING_TYPES: Set<Int> get() = WidgetSchema.pointerBearingTypes
+
+    /**
+     * The rectangle each record covers, keyed by ordinal.
+     *
+     * Three different things decide it, which is why the old single `width`/`height`
+     * pair could not express it: a raster-backed widget is as big as the artwork the
+     * watch blits, a Value, Composite, arc or bar carries its own signed extent, and a
+     * Rule stores a second endpoint whose span may run backwards.
+     */
+    private fun drawnExtents(
+        records: List<WidgetRecord>,
+        imagesByRelativeOffset: Map<Long, ImageRecord>,
+    ): Map<Int, DrawnExtent> = records.associate { record ->
+        val referenced = referencedImages(record, imagesByRelativeOffset)
+        // A raster-backed widget is exactly as big as the raster the watch blits, and
+        // faces do leave the stored extent at a placeholder: 00079 stores width 1 for
+        // digit sprites whose frames are 52 px wide, and 00022 stores height 20 for
+        // frames that are 136 px tall. Trusting the stored value there drew a 1-pixel
+        // sliver instead of the widget.
+        val rasterWidth = referenced.maxOfOrNull(ImageRecord::width)
+        val rasterHeight = referenced.maxOfOrNull(ImageRecord::height)
+        record.ordinal to if (record.widgetType == WIDGET_BADGE) {
+            // A Rule's +0x1C/+0x1E is its second endpoint, not an extent, and the stored
+            // endpoint is the *larger* one in 52 of the catalogue's 84 Rules. So the span
+            // is the absolute difference, and the rectangle starts a whole span earlier
+            // whenever the stored coordinate is the far end.
+            val thickness = record.ruleThickness?.takeIf { it >= 2 } ?: 8
+            val endX = record.raw1C.toShort().toInt()
+            val endY = record.raw1E.toShort().toInt()
+            val width = abs(endX - record.x).coerceAtLeast(thickness)
+            val height = abs(endY - record.y).coerceAtLeast(thickness)
+            DrawnExtent(
+                width = width,
+                height = height,
+                offsetX = if (endX < record.x) -width else 0,
+                offsetY = if (endY < record.y) -height else 0,
+            )
+        } else {
+            DrawnExtent(
+                width = rasterWidth ?: record.storedWidth ?: 0,
+                height = rasterHeight ?: record.storedHeight ?: 0,
+            )
+        }
+    }
+
+    /**
+     * Where each record's stored coordinates are measured from, in this entry.
+     *
+     * Anything that turns a stored coordinate into a position on the face has to go
+     * through this — the canvas, the preview composer and the editor's write-back — or
+     * they disagree about where a widget is.
+     */
+    internal fun placements(entry: ContainerEntry): Map<Int, ResolvedPlacement> {
+        val records = scanWidgets(entry)
+        val images = imagesByRelativeOffset(entry)
+        return WidgetLayout.resolve(records, drawnExtents(records, images), panelSize(entry))
+    }
 
     fun widgetGuides(entry: ContainerEntry): List<WidgetGuide> {
         val records = scanWidgets(entry)
@@ -475,6 +733,8 @@ object FaceRecordParser {
         }
         val panel = panelSize(entry)
         val background = backgroundImage(entry)
+        val extents = drawnExtents(records, imagesByRelativeOffset)
+        val placements = WidgetLayout.resolve(records, extents, panel)
         return records.map {
             val pairMatches = records.count { candidate ->
                 candidate.widgetType == WIDGET_PAIR && candidate.sequenceId == it.sequenceId
@@ -532,45 +792,12 @@ object FaceRecordParser {
                         image.reserved == 0 &&
                         image.opaqueTrailerSize == 4
                 }
-            val badgeThickness = it.words.getOrNull(3)?.toInt()
-                ?.and(0xFF)
-                ?.takeIf { thickness -> thickness >= 2 }
-                ?: 8
-            // A raster-backed widget is exactly as big as the raster the watch
-            // blits, and faces do leave the stored extent at a placeholder: 00079
-            // stores width 1 for digit sprites whose frames are 52 px wide, and
-            // 00022 stores height 20 for frames that are 136 px tall. Trusting the
-            // stored value there drew a 1-pixel sliver instead of the widget.
-            val rasterWidth = referencedImages.maxOfOrNull(ImageRecord::width)
-            val rasterHeight = referencedImages.maxOfOrNull(ImageRecord::height)
-            // A Badge's 0x1C/0x1E are the second endpoint, not an extent, and the
-            // stored endpoint is the *larger* one in 52 of the corpus's 84 Badges. So
-            // the span is the absolute difference, and the rectangle starts a whole
-            // span earlier whenever the stored coordinate is the far end.
-            val badgeEndX = it.width.toShort().toInt()
-            val badgeEndY = it.height.toShort().toInt()
-            val visualWidth = when {
-                it.widgetType == WIDGET_BADGE ->
-                    abs(badgeEndX - it.x).coerceAtLeast(badgeThickness)
-                rasterWidth != null -> rasterWidth
-                else -> it.width
-            }
-            val visualHeight = when {
-                it.widgetType == WIDGET_BADGE ->
-                    abs(badgeEndY - it.y).coerceAtLeast(badgeThickness)
-                rasterHeight != null -> rasterHeight
-                else -> it.height
-            }
-            val drawOffsetX = if (it.widgetType == WIDGET_BADGE && badgeEndX < it.x) {
-                -visualWidth
-            } else {
-                0
-            }
-            val drawOffsetY = if (it.widgetType == WIDGET_BADGE && badgeEndY < it.y) {
-                -visualHeight
-            } else {
-                0
-            }
+            val extent = extents.getValue(it.ordinal)
+            val place = placements.getValue(it.ordinal)
+            val visualWidth = extent.width
+            val visualHeight = extent.height
+            val drawOffsetX = extent.offsetX
+            val drawOffsetY = extent.offsetY
             val placement = when {
                 paintsBackground -> WidgetPlacement.BACKGROUND
                 // The watch rotates a Hand about the pivot in its `+0x20`, so its
@@ -597,18 +824,29 @@ object FaceRecordParser {
                 height = visualHeight,
                 recordSize = it.recordSize,
                 isFinal = it.ordinal == records.lastIndex,
-                canEditPosition = true,
+                // An unresolved alignment code is the one case where the editor cannot
+                // say what a stored coordinate means, so it does not offer to change it.
+                // No catalogue face contains one.
+                canEditPosition = place.isMovable,
                 canResize = canResizeSprite,
                 placement = placement,
+                originX = place.originX,
+                originY = place.originY,
+                alignedToGlobalIndex = place.targetGlobalIndex,
                 drawOffsetX = drawOffsetX,
                 drawOffsetY = drawOffsetY,
                 category = WidgetCategory.forWidgetType(it.widgetType),
+                sourceLabel = sourceLabelOf(it),
+                followsReading = WidgetSchema.spec(it.widgetType).followsCommonSource,
                 frameCount = spriteFrameCount(it).takeIf { count ->
                     it.widgetType == WIDGET_SPRITE && count > 0
                 },
                 hasOpaqueBackdrop = opaqueBackdrop && placement == WidgetPlacement.CANVAS,
                 colorArgb = pairColor.takeIf { canEditPair },
                 supportMessage = when {
+                    !place.isMovable ->
+                        "This widget is positioned in a way the editor cannot measure, so " +
+                            "moving it is disabled. Everything else about it is preserved."
                     placement == WidgetPlacement.BACKGROUND ->
                         "Covers the whole face. Replace it from Background instead of dragging it."
                     it.widgetType == WIDGET_HAND ->
@@ -618,11 +856,11 @@ object FaceRecordParser {
                     placement == WidgetPlacement.HIDDEN ->
                         "This record has no drawn rectangle, so the editor cannot preview it. " +
                             "Nudging still rewrites its stored coordinates."
-                    canEditPair -> "Drag to move; choose an opaque Pair color below"
+                    canEditPair -> "Drag to move; choose an opaque Value color below"
                     canResizeSprite -> resizeMessage(resizePool, records, imagesByRelativeOffset, it)
                     it.widgetType == WIDGET_SPRITE ->
                         "Drag to move; this Sprite does not match the proven resize schema"
-                    it.widgetType == WIDGET_PAIR -> "Drag to move; Pair color schema is opaque"
+                    it.widgetType == WIDGET_PAIR -> "Drag to move; Value color schema is opaque"
                     else -> "Drag to move; ${WidgetCategory.forWidgetType(it.widgetType).label
                         .lowercase()} internals are preserved verbatim"
                 },
@@ -802,10 +1040,16 @@ object FaceRecordParser {
             ?: blackPanel(panel)
             ?: return emptyList()
 
+        // Anything read out of the reference render is measured with the *original*
+        // geometry, origins included: an alignment target that this edit has moved puts
+        // the widget somewhere else now, and the reference still shows where it was.
+        val originalPlacements = placements(originalEntry)
         return currentRecords.mapNotNull { current ->
             val original = originalSources[current.globalIndex]?.let(originalRecords::get)
                 ?: duplicateSources[current.globalIndex]?.let(originalRecords::get)
                 ?: return@mapNotNull null
+            val originalPlacement = originalPlacements[original.ordinal]
+                ?: ResolvedPlacement(0, 0, PlacementBasis.ABSOLUTE)
             val image = when (current.widgetType) {
                 WIDGET_STATIC -> {
                     val candidate = referencedImages(current, currentImages).singleOrNull()
@@ -836,6 +1080,7 @@ object FaceRecordParser {
                                 entry = originalEntry,
                                 image = candidate,
                                 widget = original,
+                                origin = originalPlacement,
                                 background = originalBackground,
                                 reference = reference,
                             )
@@ -864,6 +1109,7 @@ object FaceRecordParser {
                     maskEmbeddedFrameBackground(
                         frame = decoded,
                         widget = original,
+                        origin = originalPlacement,
                         background = originalBackground,
                     )
                 },
@@ -882,12 +1128,11 @@ object FaceRecordParser {
     private fun maskEmbeddedFrameBackground(
         frame: PreviewFrame,
         widget: WidgetRecord,
+        origin: ResolvedPlacement,
         background: PreviewFrame,
     ): PreviewFrame {
-        val extentWidth = widget.width.takeIf { it > 0 } ?: frame.width
-        val extentHeight = widget.height.takeIf { it > 0 } ?: frame.height
-        val left = anchoredCoordinate(widget.x, extentWidth, background.width)
-        val top = anchoredCoordinate(widget.y, extentHeight, background.height)
+        val left = origin.originX + widget.x
+        val top = origin.originY + widget.y
         val pixels = frame.argb.copyOf()
         for (localY in 0 until frame.height) {
             for (localX in 0 until frame.width) {
@@ -906,7 +1151,7 @@ object FaceRecordParser {
         return PreviewFrame(frame.width, frame.height, pixels)
     }
 
-    private fun imagesByRelativeOffset(entry: ContainerEntry): Map<Long, ImageRecord> {
+    internal fun imagesByRelativeOffset(entry: ContainerEntry): Map<Long, ImageRecord> {
         val images = scanImages(entry)
         val firstOffset = images.firstOrNull()?.recordOffset ?: return emptyMap()
         return images.associateBy { (it.recordOffset - firstOffset).toLong() }
@@ -923,14 +1168,13 @@ object FaceRecordParser {
         entry: ContainerEntry,
         image: ImageRecord,
         widget: WidgetRecord,
+        origin: ResolvedPlacement,
         background: PreviewFrame,
         reference: PreviewFrame,
     ): Long {
         val frame = decodeImage(entry, image)
-        val extentWidth = widget.width.takeIf { it > 0 } ?: frame.width
-        val extentHeight = widget.height.takeIf { it > 0 } ?: frame.height
-        val left = anchoredCoordinate(widget.x, extentWidth, background.width)
-        val top = anchoredCoordinate(widget.y, extentHeight, background.height)
+        val left = origin.originX + widget.x
+        val top = origin.originY + widget.y
         var difference = 0L
         var compared = 0
         for (localY in 0 until frame.height) {
@@ -979,9 +1223,6 @@ object FaceRecordParser {
         val blue = (first and 0xFF) - (second and 0xFF)
         return red.toLong() * red + green.toLong() * green + blue.toLong() * blue
     }
-
-    private fun anchoredCoordinate(value: Int, extent: Int, canvasExtent: Int): Int =
-        if (value < 0) canvasExtent + value - extent else value
 
     private fun imageSection(entry: ContainerEntry): Pair<Int, Int> {
         if (entry.basename == "preview.bin") return 0 to entry.data.size

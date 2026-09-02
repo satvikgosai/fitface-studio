@@ -103,11 +103,21 @@ The four that catch people fastest:
 * **The panel is not raster 0.** Use `FaceRecordParser.panelSize` and
   `backgroundImage`, never `scanImages(entry).first()`.
 * **`drawLeft`/`drawTop` in `:core:model` are the only correct way to derive a
-  widget rectangle.** Never call `displayCoordinate` on a widget directly — Badge
-  endpoint ordering is handled once, there.
-* **No field holds another widget's global index.** An earlier guard based on that
-  guess blocked 68% of removals. It is replaced by
-  `StructuralEditor.requireSurvivorsUnchanged`. Do not reinstate it.
+  widget rectangle.** They are `origin + stored`, where the origin comes from
+  `WidgetLayout` — Badge endpoint ordering and relative alignment are both handled
+  once, there. Never add a coordinate to a panel extent by hand, and never infer an
+  anchor from the sign of a coordinate: that is what put 62 widgets across ten faces
+  at the opposite edge of the face from where the watch draws them.
+* **Four fields hold another widget's global index**, and they are the only ones
+  that do: Static and Hand at `+0x1E`, Value and Composite at `+0x22`, live unless
+  the code beside them is `0xFFFF`. Every one of the catalogue's 2,311 such records
+  is live, so this is the normal case. `WidgetSchema` owns the offsets,
+  `StructuralEditor.remapAlignmentTarget` carries them through a renumbering, and
+  removing a widget others are positioned against is refused.
+  **Do not go back to scanning words for a value that looks like an index** — that
+  guard blocked 68% of removals and left 18 of 99 faces with nothing removable. The
+  fix for it was never "no field is a reference"; it was "find the reference by
+  name".
 * **Compare image pointers as record indices, never as raw offsets.** A widget's
   pointers are byte offsets into the image section, so relocating that section rewrites
   them without changing what the widget refers to. `originalWidgetSources` resolves them
@@ -132,6 +142,43 @@ The four that catch people fastest:
 
 ## Traps that already bit this codebase
 
+* **A widget's position is `origin + stored`, and the origin is never guessed.** The
+  canvas used to read the sign of a stored coordinate to decide whether the widget was
+  anchored to the far edge of the face. That is exactly right for one alignment code and
+  wrong for a coordinate that is simply negative, and the two are indistinguishable from
+  the value alone: 43 gauges, sprites and rules that start off the left or top of the
+  panel were drawn at the *opposite* edge, 14 Value labels with a small negative offset
+  were thrown about 200 px sideways, and 5 Composites that the watch centres on their
+  target were drawn 48 px to the left of it. 62 records over ten faces — `00015`,
+  `00016`, `00018`, `00023`, `00027`, `00030`, `00051`, `00066`, `00089` and
+  `00096` — all of them drawn somewhere the watch does not draw them, with a drag
+  then writing back a
+  coordinate measured from an edge it was never measured from. `WidgetLayout` resolves
+  the origin once and `WidgetGuide.originX/originY` carry it; the write-back is
+  `display − origin`, so the canvas and the editor are inverses by construction.
+  `WidgetCensusTest` pins the count of disagreements at zero.
+* **A record is a 24-byte common prefix plus a per-type layout, and `+0x1C`/`+0x1E` is
+  the field that punishes assuming otherwise.** It is a signed extent only on Value,
+  Composite, both arcs and LineBar. On a Static or a Hand it is an alignment code and
+  the index of the widget the coordinates are measured from — so the old model reported
+  1,150 records' alignment code as their width, and only got away with it because a
+  raster-backed widget's extent comes from its artwork instead. On a Rule it is the
+  second endpoint. `WidgetSchema` is the single table for all 17 types; parsing,
+  relocation, capability checks and labels all read it, because a type added to one
+  `when` and missed in another is how a valid container becomes a blank widget.
+* **The record size is exact, not a minimum.** Every one of the catalogue's 4,034
+  records is exactly its type's size, frame tables included, so `scanWidgets` requires
+  it — along with the type being one of 1..17, which nothing checked before. The old
+  flat 36-byte minimum would read a 40-byte Composite as though its remaining 60 bytes
+  of fields were there.
+* **Cross-resource checks are warnings, and that is deliberate.** `setting.bin`'s style
+  count against the styles present, the preview stride and count, consecutive
+  `font_N.bin` files against each style's declared count, dictionary bounds, font
+  indices, image trailers: all of them hold across the whole catalogue, so none should
+  ever fire on a face the app can open. But `validate()` gates delivery, and a container
+  that is merely *unusual* must not become uninstallable because a join this layer has
+  only ever seen one shape of disagrees. Errors belong on the app's own edits, where the
+  structural invariants hold them to exact byte ranges.
 * **Styles do not carry the same widgets.** `style0` of face `00001` has Value
   widgets for data sources 17 and 18 and `style1` has neither. Requiring a match
   in every variant made 183 selectable widgets across 20 faces refuse to move —
