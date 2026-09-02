@@ -98,10 +98,13 @@ import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.EnvironmentAdvisory
 import dev.fitface.studio.core.delivery.SetupStep
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.AOD_ENTRY_NAME
+import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.RemovedWidget
+import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetPlacement
@@ -123,6 +126,7 @@ import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
 import dev.fitface.studio.core.ui.fitColors
 import dev.fitface.studio.core.ui.fitText
+import dev.fitface.studio.core.ui.styleLabel
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -210,7 +214,7 @@ fun EditorRoute(
         onReportProblem = viewModel::showDiagnostics,
         onAbout = onAbout,
         onCheckForUpdate = onCheckForUpdate,
-        onStyle = viewModel::selectStyle,
+        onVariant = viewModel::selectVariant,
         onWidget = viewModel::selectWidget,
         onMoveWidget = viewModel::moveWidget,
         onNudgeWidget = viewModel::nudgeWidget,
@@ -300,7 +304,7 @@ private fun EditorScreen(
     onReportProblem: () -> Unit,
     onAbout: () -> Unit,
     onCheckForUpdate: () -> Unit,
-    onStyle: (String) -> Unit,
+    onVariant: (EditorVariant) -> Unit,
     onWidget: (Int?) -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
@@ -417,7 +421,7 @@ private fun EditorScreen(
                         snapshot = snapshot,
                         selected = selected,
                         onNavigate = navigate,
-                        onStyle = onStyle,
+                        onVariant = onVariant,
                         onWidget = onWidget,
                         onMoveWidget = onMoveWidget,
                         onNudgeWidget = onNudgeWidget,
@@ -548,6 +552,49 @@ private fun EditorUnavailable(
     }
 }
 
+/**
+ * What to call a face entry in copy — never a container basename.
+ *
+ * `style0.bin` is "Style 1" and `aod.bin` is "Always-on display": the entry names are the
+ * format's, the numbering is zero-based, and neither is something a reader should have to
+ * translate. The number comes from [EditorVariant.displayNumberOf], which reads it out of
+ * the name, so this screen and the library label the same colourway the same way.
+ *
+ * Every site that shows an entry name goes through here — the header subtitle, the Styles
+ * rows, the background notices, the thumbnail copy and the install summary — because the
+ * ones that formatted their own `removeSuffix(".bin")` are exactly how "style0" kept
+ * reaching the screen.
+ */
+@Composable
+private fun variantLabel(basename: String): String =
+    EditorVariant.styleNumberOf(basename)
+        ?.let { styleLabel(it) }
+        ?: if (basename == AOD_ENTRY_NAME) {
+            stringResource(R.string.editor_aod_label)
+        } else {
+            // Not a shape this app has seen. Showing the raw entry beats showing nothing.
+            basename.removeSuffix(".bin")
+        }
+
+/**
+ * [variantLabel] for a list of entries, as "Style 1, Style 3".
+ *
+ * `map` is inline, so the label lookup stays a composable call; `joinToString`'s own
+ * transform is not, which is why the two steps are separate.
+ */
+@Composable
+private fun variantLabels(basenames: List<String>): String =
+    basenames.map { variantLabel(it) }.joinToString()
+
+/** [variantLabel] for [EditorSnapshot.selectedVariant]. */
+@Composable
+private fun EditorSnapshot.selectedVariantLabel(): String =
+    if (isAodSelected) {
+        stringResource(R.string.editor_aod_label)
+    } else {
+        variantLabel(selectedVariant.basename)
+    }
+
 @Composable
 private fun EditorHeader(
     page: EditorPage,
@@ -582,7 +629,7 @@ private fun EditorHeader(
         EditorPage.Canvas -> stringResource(
             R.string.editor_subtitle_canvas,
             snapshot.faceId,
-            snapshot.selectedStyle.removeSuffix(".bin"),
+            snapshot.selectedVariantLabel(),
         )
         EditorPage.Widgets -> stringResource(
             R.string.editor_subtitle_widgets,
@@ -608,8 +655,19 @@ private fun EditorHeader(
                 stringResource(R.string.editor_subtitle_background_none)
             else -> stringResource(R.string.editor_subtitle_background_idle)
         }
-        EditorPage.Styles ->
-            stringResource(R.string.editor_subtitle_styles, snapshot.styleNames.size)
+        EditorPage.Styles -> if (snapshot.hasAod) {
+            pluralStringResource(
+                R.plurals.editor_subtitle_styles_with_aod,
+                snapshot.styleNames.size,
+                snapshot.styleNames.size,
+            )
+        } else {
+            pluralStringResource(
+                R.plurals.editor_subtitle_styles,
+                snapshot.styleNames.size,
+                snapshot.styleNames.size,
+            )
+        }
         EditorPage.Validate -> stringResource(R.string.editor_subtitle_validate)
         EditorPage.Install -> stringResource(R.string.editor_subtitle_install)
         EditorPage.Project -> snapshot.sourceName
@@ -715,7 +773,7 @@ private fun EditorPageContent(
     snapshot: EditorSnapshot,
     selected: WidgetGuide?,
     onNavigate: (EditorPage) -> Unit,
-    onStyle: (String) -> Unit,
+    onVariant: (EditorVariant) -> Unit,
     onWidget: (Int?) -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
@@ -773,7 +831,7 @@ private fun EditorPageContent(
             onChooseImage, onResetImagePlacement, onDiscardImage, onApplyImage, onTintCyan,
             onTintMagenta, modifier,
         )
-        EditorPage.Styles -> StylesWorkspace(snapshot, !state.isWorking, onStyle, modifier)
+        EditorPage.Styles -> StylesWorkspace(snapshot, !state.isWorking, onVariant, modifier)
         EditorPage.Validate -> ValidateWorkspace(
             snapshot = snapshot,
             state = state,
@@ -902,9 +960,16 @@ private fun CanvasHint(
         Text(
             stringResource(
                 when {
-                    selected == null -> R.string.editor_canvas_hint_none
-                    state.applyWidgetEditsToAllStyles -> R.string.editor_canvas_hint_all_styles
-                    else -> R.string.editor_canvas_hint_this_style
+                    selected != null && state.snapshot?.isAodSelected == true ->
+                        R.string.editor_canvas_hint_aod
+                    selected != null && state.applyWidgetEditsToAllStyles ->
+                        R.string.editor_canvas_hint_all_styles
+                    selected != null -> R.string.editor_canvas_hint_this_style
+                    // What the render leaves out, said where the reader is looking at it
+                    // rather than left to a flag nothing shows.
+                    state.snapshot?.selectedVariantApproximate == true ->
+                        R.string.editor_canvas_hint_none_approximate
+                    else -> R.string.editor_canvas_hint_none
                 },
             ),
             modifier = Modifier.widthIn(max = 300.dp),
@@ -1141,7 +1206,7 @@ private fun CanvasSidePane(
             )
         }
         Text(
-            snapshot.selectedStyle.removeSuffix(".bin"),
+            snapshot.selectedVariantLabel(),
             modifier = Modifier.padding(top = 12.dp),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1411,6 +1476,38 @@ private fun WidgetGuide.readingLabel(): String = when (val reading = sourceLabel
     }
 }
 
+/**
+ * The reading a removed record followed, named the way a live row names it.
+ *
+ * The same three cases as [WidgetGuide.readingLabel] and deliberately worded identically:
+ * the Removed list sits directly under the live one, and a record that read "Sprite ·
+ * steps" before it was cut must not read "type 4 · seq 29" after.
+ */
+@Composable
+private fun RemovedWidget.removedReadingLabel(): String = when (val reading = sourceLabel) {
+    is String -> reading
+    else -> if (followsReading) {
+        stringResource(R.string.editor_widget_reading_unnamed, sequenceId)
+    } else {
+        stringResource(R.string.editor_widget_index, globalIndex)
+    }
+}
+
+/**
+ * What the removal reached: some number of numbered styles, or the always-on display.
+ *
+ * Not `recordsByVariant.size`, which counts *entries* — an always-on removal writes one
+ * entry that is not a style, and it used to be reported as "1 styles". AOD is never joined
+ * to a style edit, so the two cases do not overlap.
+ */
+@Composable
+private fun RemovedWidget.removedScopeLabel(): String =
+    if (touchedAod) {
+        stringResource(R.string.editor_aod_label)
+    } else {
+        pluralStringResource(R.plurals.editor_row_removed_styles, styleCount, styleCount)
+    }
+
 /** The composed-preview pixels under [widget], or null when it covers nothing. */
 private fun cropWidgetPreview(frame: PreviewFrame, widget: WidgetGuide): PreviewFrame? {
     if (widget.width <= 0 || widget.height <= 0) return null
@@ -1454,15 +1551,22 @@ private fun RemovedWidgetRow(
                 .background(MaterialTheme.fitColors.warning.copy(alpha = .6f)),
         )
         Column(Modifier.weight(1f)) {
-            Text(removed.label, style = MaterialTheme.typography.titleSmall)
+            Text(
+                stringResource(
+                    R.string.editor_selection_widget_or_unknown,
+                    removed.globalIndex.takeIf { it >= 0 }?.toString()
+                        ?: stringResource(R.string.editor_widget_index_unknown),
+                ),
+                style = MaterialTheme.typography.titleSmall,
+            )
             Text(
                 stringResource(
                     R.string.editor_row_removed,
-                    removed.widgetType,
-                    removed.sequenceId,
+                    removed.category.label,
+                    removed.removedReadingLabel(),
                     removed.width,
                     removed.height,
-                    removed.recordsByStyle.size,
+                    removed.removedScopeLabel(),
                 ),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.fitText.secondary,
@@ -1513,12 +1617,12 @@ private fun InspectorWorkspace(
             },
             text = {
                 Text(
-                    if (state.applyWidgetEditsToAllStyles) {
+                    if (state.applyWidgetEditsToAllStyles && !snapshot.isAodSelected) {
                         stringResource(R.string.editor_remove_body_all_styles)
                     } else {
                         stringResource(
                             R.string.editor_remove_body_one_style,
-                            snapshot.selectedStyle.removeSuffix(".bin"),
+                            snapshot.selectedVariantLabel(),
                         )
                     },
                 )
@@ -1706,36 +1810,45 @@ private fun InspectorWorkspace(
                 }
             }
         }
-        Row(
-            Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                .clickable { onApplyAll(!state.applyWidgetEditsToAllStyles) }.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    stringResource(R.string.editor_apply_all_title),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    if (state.applyWidgetEditsToAllStyles) {
-                        stringResource(
-                            R.string.editor_apply_all_on,
-                            snapshot.styleNames.size,
-                        )
-                    } else {
-                        stringResource(
-                            R.string.editor_apply_all_off,
-                            snapshot.selectedStyle.removeSuffix(".bin"),
-                        )
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        if (snapshot.isAodSelected) {
+            Text(
+                stringResource(R.string.editor_apply_all_aod),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        } else {
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                    .clickable { onApplyAll(!state.applyWidgetEditsToAllStyles) }.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.editor_apply_all_title),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        if (state.applyWidgetEditsToAllStyles) {
+                            pluralStringResource(
+                                R.plurals.editor_apply_all_on,
+                                snapshot.styleNames.size,
+                                snapshot.styleNames.size,
+                            )
+                        } else {
+                            stringResource(
+                                R.string.editor_apply_all_off,
+                                snapshot.selectedVariantLabel(),
+                            )
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = state.applyWidgetEditsToAllStyles, onCheckedChange = onApplyAll)
             }
-            Switch(checked = state.applyWidgetEditsToAllStyles, onCheckedChange = onApplyAll)
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             MicroLabel(stringResource(R.string.editor_destructive_heading))
@@ -2085,14 +2198,20 @@ private fun AddBackgroundNotice(snapshot: EditorSnapshot) {
             style = MaterialTheme.typography.titleMedium,
         )
         Text(
-            if (skipped.isEmpty()) {
-                stringResource(R.string.editor_bg_adds_all, snapshot.styleNames.size)
+            if (snapshot.isAodSelected) {
+                stringResource(R.string.editor_bg_adds_aod)
+            } else if (skipped.isEmpty()) {
+                pluralStringResource(
+                    R.plurals.editor_bg_adds_all,
+                    snapshot.styleNames.size,
+                    snapshot.styleNames.size,
+                )
             } else {
                 stringResource(
                     R.string.editor_bg_adds_some,
-                    snapshot.backgroundAddTargets.joinToString { it.removeSuffix(".bin") },
+                    variantLabels(snapshot.backgroundAddTargets),
                     mebibytes(WATCH_CONTAINER_BYTE_CEILING),
-                    skipped.joinToString { it.removeSuffix(".bin") },
+                    variantLabels(skipped),
                 )
             },
             modifier = Modifier.padding(top = 7.dp),
@@ -2116,14 +2235,17 @@ private fun PartialBackgroundNotice(snapshot: EditorSnapshot) {
     // with an empty list.
     if (snapshot.backgroundStyles.isEmpty()) return
     if (snapshot.backgroundStyles.size == snapshot.styleNames.size) return
-    val targets = snapshot.backgroundStyles.joinToString { it.removeSuffix(".bin") }
+    // "Partial" is about the style group: some carry a panel raster and some do not. An
+    // AOD edit writes one entry, so which styles carry one says nothing about it.
+    if (snapshot.isAodSelected) return
+    val targets = variantLabels(snapshot.backgroundStyles)
     Text(
-        if (snapshot.selectedStyleHasBackground) {
+        if (snapshot.selectedVariantHasBackground) {
             stringResource(R.string.editor_bg_partial_applies, targets)
         } else {
             stringResource(
                 R.string.editor_bg_partial_elsewhere,
-                snapshot.selectedStyle.removeSuffix(".bin"),
+                snapshot.selectedVariantLabel(),
                 targets,
             )
         },
@@ -2233,18 +2355,24 @@ private fun signedPixels(value: Float): String {
 }
 
 /**
- * Styles, shown as pictures rather than as a list of names.
+ * The variants, shown as pictures rather than as a list of names.
  *
  * A name alone says nothing about which colourway you are about to load. The selected
- * style is drawn from the composed preview, so it carries the edit; every other one is
- * the package's own render, which is the only per-style image available without
- * reparsing a container per row.
+ * variant is drawn from the composed preview, so it carries the edit; an unselected style
+ * is the package's own render, which is the only per-style image available without
+ * reparsing a container per row, and an unselected always-on display is this app's own
+ * render, because the package ships none.
+ *
+ * One row composable for both kinds, and the order comes from
+ * [EditorSnapshot.variants] — the same reason the library's two pages share one. Assembled
+ * twice, the AOD row and the style row had already begun to drift apart in what "edited"
+ * meant.
  */
 @Composable
 private fun StylesWorkspace(
     snapshot: EditorSnapshot,
     enabled: Boolean,
-    onStyle: (String) -> Unit,
+    onVariant: (EditorVariant) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -2252,9 +2380,16 @@ private fun StylesWorkspace(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        items(snapshot.styleNames, key = { it }) { style ->
-            val selected = snapshot.selectedStyle == style
-            val imagePath = snapshot.stylePreviewPaths[style]
+        items(snapshot.variants, key = { it.basename }) { variant ->
+            val isAod = variant.kind == VariantKind.AOD
+            val selected = snapshot.selectedVariant.basename == variant.basename
+            // Only a style has a packaged picture; AOD's comes from the composer.
+            val imagePath = snapshot.stylePreviewPaths[variant.basename]
+            val label = if (isAod) {
+                stringResource(R.string.editor_aod_label)
+            } else {
+                variantLabel(variant.basename)
+            }
             Row(
                 modifier = Modifier.fillMaxWidth()
                     .background(
@@ -2268,28 +2403,45 @@ private fun StylesWorkspace(
                         else MaterialTheme.colorScheme.outlineVariant,
                         MaterialTheme.shapes.medium,
                     )
-                    .clickable(enabled = enabled) { onStyle(style) }
+                    .clickable(enabled = enabled) { onVariant(variant) }
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(13.dp),
             ) {
                 FacePreview(
-                    frame = snapshot.composedPreview.takeIf { selected },
-                    imagePath = imagePath,
+                    frame = if (selected) {
+                        snapshot.composedPreview
+                    } else if (isAod) {
+                        snapshot.aodThumbnail
+                    } else {
+                        null
+                    },
+                    imagePath = imagePath.takeIf { !isAod },
                     contentDescription = stringResource(
                         R.string.editor_style_preview_a11y,
-                        style.removeSuffix(".bin"),
+                        label,
                     ),
                     modifier = Modifier.width(54.dp).height(85.dp),
                 )
                 Column(Modifier.weight(1f)) {
-                    Text(style.removeSuffix(".bin"), style = MaterialTheme.typography.titleMedium)
+                    Text(label, style = MaterialTheme.typography.titleMedium)
                     Text(
                         stringResource(
                             when {
-                                selected && snapshot.isDirty ->
+                                // Per variant, not per project: with AOD in the list, "the
+                                // project is dirty" says nothing about whether *this* row's
+                                // picture carries an edit.
+                                selected && snapshot.isSelectedVariantDirty -> if (isAod) {
+                                    R.string.editor_aod_current_edited
+                                } else {
                                     R.string.editor_style_current_edited
-                                selected -> R.string.editor_style_current
+                                }
+                                selected -> if (isAod) {
+                                    R.string.editor_aod_current
+                                } else {
+                                    R.string.editor_style_current
+                                }
+                                isAod -> R.string.editor_aod_tap_to_load
                                 imagePath != null -> R.string.editor_style_tap_to_load
                                 else -> R.string.editor_style_tap_to_load_no_image
                             },
@@ -2411,6 +2563,11 @@ private fun ValidateWorkspace(
             }
         }
         snapshot.validationWarnings.forEach { warning -> StatusBanner(FitStatus.Warning, warning) }
+        // This page presents the picture above as what is about to be installed, so what
+        // the picture cannot show has to be said here and not only on the canvas.
+        if (snapshot.selectedVariantApproximate) {
+            StatusBanner(FitStatus.Warning, stringResource(R.string.editor_aod_approximate))
+        }
         ThumbnailCard(
             snapshot = snapshot,
             working = state.isWorking,
@@ -2425,18 +2582,29 @@ private fun ValidateWorkspace(
             ) {
                 MicroLabel(stringResource(R.string.editor_audit_heading))
                 Text(
-                    stringResource(
-                        R.string.editor_audit_detail,
-                        audit.operation,
-                        audit.changedPayloadBytes,
-                        "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
-                        audit.changedStyles.size,
-                        snapshot.styleNames.size,
-                        // The watch ignores a container over the ceiling, so how close this
-                        // edit is to it belongs beside the rest of the audit.
-                        mebibytes(snapshot.containerBytes),
-                        mebibytes(WATCH_CONTAINER_BYTE_CEILING),
-                    ),
+                    if (snapshot.auditTouchedOnlyAod) {
+                        stringResource(
+                            R.string.editor_audit_detail_aod,
+                            audit.operation,
+                            audit.changedPayloadBytes,
+                            "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
+                            // The watch ignores a container over the ceiling, so how close this
+                            // edit is to it belongs beside the rest of the audit.
+                            mebibytes(snapshot.containerBytes),
+                            mebibytes(WATCH_CONTAINER_BYTE_CEILING),
+                        )
+                    } else {
+                        stringResource(
+                            R.string.editor_audit_detail,
+                            audit.operation,
+                            audit.changedPayloadBytes,
+                            "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
+                            audit.changedStyles.size,
+                            snapshot.styleNames.size,
+                            mebibytes(snapshot.containerBytes),
+                            mebibytes(WATCH_CONTAINER_BYTE_CEILING),
+                        )
+                    },
                     modifier = Modifier.padding(top = 9.dp),
                     style = FitFaceType.numeric,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2493,9 +2661,13 @@ private fun ThumbnailCard(
         }
         Text(
             when {
+                snapshot.isAodSelected -> stringResource(
+                    R.string.editor_thumbnail_aod,
+                    variantLabel(snapshot.activeStyleName),
+                )
                 snapshot.thumbnailRefreshed -> stringResource(
                     R.string.editor_thumbnail_in_sync,
-                    snapshot.selectedStyle.removeSuffix(".bin"),
+                    variantLabel(snapshot.activeStyleName),
                 )
                 !snapshot.isDirty -> stringResource(R.string.editor_thumbnail_unedited)
                 snapshot.validationErrors.isNotEmpty() ->
@@ -2679,14 +2851,14 @@ private fun DirectWatchCanvas(
     val composedBitmap = snapshot.composedPreview.rememberBitmap()
     val overlayBitmap = snapshot.widgetOverlay.rememberBitmap()
     val pendingBitmap = pendingImage?.preview?.rememberBitmap()
-    var draggingIndex by remember(snapshot.selectedStyle) { mutableIntStateOf(-1) }
-    var draggingPosition by remember(snapshot.selectedStyle) { mutableStateOf(Offset.Zero) }
+    var draggingIndex by remember(snapshot.selectedVariant.basename) { mutableIntStateOf(-1) }
+    var draggingPosition by remember(snapshot.selectedVariant.basename) { mutableStateOf(Offset.Zero) }
     // Where the finger has actually taken the widget, before the panel clamp.
     // Accumulating the *clamped* position instead is what made a widget stick: push it
     // past an edge, come back, and it started moving again from the edge rather than
     // from under the finger — so it trailed the finger by however far it had overshot,
     // for the rest of the drag. The clamp belongs on the way out, not in the running total.
-    var dragTrack by remember(snapshot.selectedStyle) { mutableStateOf(Offset.Zero) }
+    var dragTrack by remember(snapshot.selectedVariant.basename) { mutableStateOf(Offset.Zero) }
     val latestEnabled by rememberUpdatedState(enabled)
     // Everything the gesture handlers read has to come through `rememberUpdatedState`.
     // `pointerInput` only restarts its block when a *key* changes, and the keys below are
@@ -2702,7 +2874,7 @@ private fun DirectWatchCanvas(
     // Resolved here rather than inside `semantics`, which is not a composable scope.
     val canvasDescription = stringResource(
         R.string.editor_canvas_a11y,
-        snapshot.selectedStyle,
+        snapshot.selectedVariantLabel(),
         snapshot.canvasWidgets.size,
     )
     val visualMoveIndex = draggingIndex.takeIf { it >= 0 }
@@ -2744,7 +2916,7 @@ private fun DirectWatchCanvas(
                     }
                 }
             }
-            .pointerInput(snapshot.selectedStyle, pendingImage?.uri, editing) {
+            .pointerInput(snapshot.selectedVariant.basename, pendingImage?.uri, editing) {
                 if (pendingImage == null && editing) {
                     detectTapGestures { position ->
                         if (!latestEnabled) return@detectTapGestures
@@ -2763,7 +2935,7 @@ private fun DirectWatchCanvas(
                     }
                 }
             }
-            .pointerInput(snapshot.selectedStyle, pendingImage?.uri, editing) {
+            .pointerInput(snapshot.selectedVariant.basename, pendingImage?.uri, editing) {
                 if (pendingImage == null && editing) {
                     detectDragGestures(
                         onDragStart = { position ->
@@ -3084,9 +3256,15 @@ private fun DeviceStatusRow(state: DirectInstallState, snapshot: EditorSnapshot)
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(13.dp),
     ) {
+        // This row says what installs, which is `activeStyleName` — never whatever
+        // `selectedVariant` the canvas happens to be showing. Looking at AOD must not
+        // make the Install page claim AOD is what is about to go to the watch: the
+        // sampler always names the last selected numbered style, AOD or not.
+        val activeIsOnCanvas = snapshot.selectedVariant.basename == snapshot.activeStyleName
         FacePreview(
-            frame = snapshot.composedPreview,
-            imagePath = null,
+            frame = snapshot.composedPreview.takeIf { activeIsOnCanvas },
+            imagePath = snapshot.stylePreviewPaths[snapshot.activeStyleName]
+                .takeIf { !activeIsOnCanvas },
             contentDescription = stringResource(R.string.editor_device_face_a11y),
             modifier = Modifier.width(44.dp).height(69.dp),
             shape = RoundedCornerShape(7.dp),
@@ -3096,17 +3274,18 @@ private fun DeviceStatusRow(state: DirectInstallState, snapshot: EditorSnapshot)
                 stringResource(R.string.editor_device_name),
                 style = MaterialTheme.typography.titleMedium,
             )
+            val activeStyleLabel = variantLabel(snapshot.activeStyleName)
             Text(
                 snapshot.faceName?.let {
                     stringResource(
                         R.string.editor_device_face_named,
                         it,
-                        snapshot.selectedStyle.removeSuffix(".bin"),
+                        activeStyleLabel,
                     )
                 } ?: stringResource(
                     R.string.editor_device_face_unnamed,
                     snapshot.faceId,
-                    snapshot.selectedStyle.removeSuffix(".bin"),
+                    activeStyleLabel,
                 ),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,

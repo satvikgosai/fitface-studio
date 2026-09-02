@@ -7,6 +7,7 @@ import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.ReplacementImage
@@ -15,6 +16,7 @@ import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.UserMessage
+import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.spriteResizeLimit
@@ -34,8 +36,24 @@ data class WidgetMovePreview(
     val displayY: Float,
 )
 
-/** Where a widget is being moved to, in stored coordinate space. */
-internal data class PendingWidgetTarget(val x: Int, val y: Int)
+/**
+ * Where a widget is being moved to, in stored coordinate space.
+ *
+ * [widgetType] and [sequenceId] are captured at enqueue time, from the widget on the
+ * variant that was on canvas then — not re-read from whatever the canvas shows when this
+ * finally commits, which by then may be a different variant entirely. A style's widget 3
+ * and AOD's widget 3 are unrelated records; reading the wrong one's type back would send
+ * the repository the wrong widget's move.
+ */
+internal data class PendingWidgetTarget(
+    val x: Int,
+    val y: Int,
+    val widgetType: Int,
+    val sequenceId: Int,
+)
+
+/** Which variant's widget a queued move targets — see [PendingWidgetTarget]. */
+private data class PendingMoveKey(val variantBasename: String, val globalIndex: Int)
 
 /**
  * Display position of a stored coordinate, and its inverse.
@@ -118,7 +136,7 @@ class EditorViewModel @Inject constructor(
     // widget A and then replaced by one for widget B lost A's move outright, so two
     // back-to-back drags of different widgets only landed the second. Access is guarded
     // because the worker drains it from its own coroutine.
-    private val pendingMoves = LinkedHashMap<Int, PendingWidgetTarget>()
+    private val pendingMoves = LinkedHashMap<PendingMoveKey, PendingWidgetTarget>()
     /** Whether a worker is committing [pendingMoves]. Guarded by that map's own lock. */
     private var moveWorkerDraining = false
 
@@ -233,12 +251,30 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun selectStyle(style: String) {
+    /**
+     * Switches what the canvas shows and edits — a numbered style or `aod.bin`.
+     *
+     * A pending background image is dropped rather than carried across: it was decoded
+     * and framed against whichever variant's panel was on screen when it was prepared, so
+     * applying it after a switch would place a style's draft background onto AOD, or the
+     * reverse. Dropping it here is simpler and stricter than carrying it and checking its
+     * origin later.
+     */
+    fun selectVariant(variant: EditorVariant) {
         mutableState.value = mutableState.value.copy(
             selectedWidgetIndex = null,
             previewReviewed = false,
+            pendingImage = null,
+            // Never carried into AOD. The repository already refuses to let it reach
+            // AOD, but leaving the switch on would still *read* as though it applied —
+            // in the canvas hint, in the remove-confirmation body, anywhere that asks
+            // this flag without also asking what is selected.
+            applyWidgetEditsToAllStyles = when (variant.kind) {
+                VariantKind.AOD -> false
+                VariantKind.STYLE -> mutableState.value.applyWidgetEditsToAllStyles
+            },
         )
-        operate { repository.currentSnapshot(style) }
+        operate { repository.currentSnapshot(variant.basename) }
     }
 
     fun selectWidget(globalIndex: Int?) {
@@ -371,7 +407,8 @@ class EditorViewModel @Inject constructor(
         val snapshot = mutableState.value.snapshot ?: return
         val widget = snapshot.widgets.firstOrNull { it.globalIndex == globalIndex } ?: return
         if (!widget.canEditPosition) return
-        val base = pendingTarget(globalIndex) ?: PendingWidgetTarget(widget.x, widget.y)
+        val base = pendingTarget(snapshot.selectedVariant.basename, globalIndex)
+            ?: PendingWidgetTarget(widget.x, widget.y, widget.type, widget.sequenceId)
         val next = clampToPanel(snapshot, widget, base.x + deltaX, base.y + deltaY)
         if (next.x !in Short.MIN_VALUE..Short.MAX_VALUE ||
             next.y !in Short.MIN_VALUE..Short.MAX_VALUE
@@ -426,6 +463,8 @@ class EditorViewModel @Inject constructor(
                 ).roundToInt(),
                 origin = widget.originY,
             ),
+            widgetType = widget.type,
+            sequenceId = widget.sequenceId,
         )
     }
 
@@ -435,11 +474,15 @@ class EditorViewModel @Inject constructor(
         x: Int,
         y: Int,
     ) {
+        // The variant is captured now, from the canvas this drag/nudge is actually on —
+        // never re-read at commit time, when the user may have switched to a different
+        // one entirely. See `PendingWidgetTarget`.
+        val key = PendingMoveKey(snapshot.selectedVariant.basename, widget.globalIndex)
         // Queueing the target and deciding whether a worker is needed happen together, or
         // a target queued in the instant a worker is finishing would sit there with nobody
         // left to commit it.
         val startMoveWorker = synchronized(pendingMoves) {
-            pendingMoves[widget.globalIndex] = PendingWidgetTarget(x, y)
+            pendingMoves[key] = PendingWidgetTarget(x, y, widget.type, widget.sequenceId)
             val alreadyDraining = moveWorkerDraining
             moveWorkerDraining = true
             !alreadyDraining
@@ -467,22 +510,32 @@ class EditorViewModel @Inject constructor(
      */
     private suspend fun drainWidgetMoves() {
         while (true) {
-            val (globalIndex, target) = takePendingMove() ?: break
-            val snapshot = mutableState.value.snapshot
-            if (snapshot == null) {
+            val (key, target) = takePendingMove() ?: break
+            val liveSnapshot = mutableState.value.snapshot
+            if (liveSnapshot == null) {
                 clearPendingMoves()
                 break
             }
-            val widget = snapshot.widgets.firstOrNull { it.globalIndex == globalIndex }
-            // The widget is gone, or the snapshot has already caught up with the target.
-            if (widget == null) continue
-            if (widget.x == target.x && widget.y == target.y) continue
+            // The snapshot can only answer for the variant it is *of*: this target may
+            // have been queued against a style the canvas has since switched away from,
+            // and a global index means something different in every entry, so comparing
+            // against the wrong one would skip a real move or commit a stale one. Where
+            // it can answer, the two questions it settles are whether the widget is still
+            // there and whether the container has already caught up with the target.
+            // Where it cannot, the commit goes ahead: `moveWidget` resolves its target by
+            // variant and global index, never by what is on screen.
+            if (liveSnapshot.selectedVariant.basename == key.variantBasename) {
+                val widget = liveSnapshot.widgets
+                    .firstOrNull { it.globalIndex == key.globalIndex }
+                    ?: continue
+                if (widget.x == target.x && widget.y == target.y) continue
+            }
             val updated = runCatching {
                 repository.moveWidget(
-                    styleName = snapshot.selectedStyle,
-                    globalIndex = widget.globalIndex,
-                    widgetType = widget.type,
-                    sequenceId = widget.sequenceId,
+                    styleName = key.variantBasename,
+                    globalIndex = key.globalIndex,
+                    widgetType = target.widgetType,
+                    sequenceId = target.sequenceId,
                     x = target.x,
                     y = target.y,
                     applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
@@ -505,11 +558,11 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    private fun pendingTarget(globalIndex: Int): PendingWidgetTarget? =
-        synchronized(pendingMoves) { pendingMoves[globalIndex] }
+    private fun pendingTarget(variantBasename: String, globalIndex: Int): PendingWidgetTarget? =
+        synchronized(pendingMoves) { pendingMoves[PendingMoveKey(variantBasename, globalIndex)] }
 
     /** The next target to commit, or null — which also retires the worker asking. */
-    private fun takePendingMove(): Pair<Int, PendingWidgetTarget>? {
+    private fun takePendingMove(): Pair<PendingMoveKey, PendingWidgetTarget>? {
         synchronized(pendingMoves) {
             // Every exit that returns null must retire the worker. Leaving
             // `moveWorkerDraining` true on the way out would convince `queueWidgetMove`
@@ -519,10 +572,10 @@ class EditorViewModel @Inject constructor(
                 moveWorkerDraining = false
                 return null
             }
-            val globalIndex = entry.key
+            val key = entry.key
             val target = entry.value
-            pendingMoves.remove(globalIndex)
-            return globalIndex to target
+            pendingMoves.remove(key)
+            return key to target
         }
     }
 
@@ -544,7 +597,7 @@ class EditorViewModel @Inject constructor(
         if (next.width == selected.width && next.height == selected.height) return
         operate {
             repository.resizeSprite(
-                styleName = snapshot.selectedStyle,
+                styleName = snapshot.selectedVariant.basename,
                 sequenceId = selected.sequenceId,
                 width = next.width,
                 height = next.height,
@@ -561,7 +614,7 @@ class EditorViewModel @Inject constructor(
         if (selected.colorArgb == null || selected.colorArgb == colorArgb) return
         operate {
             repository.recolorPairWidget(
-                styleName = snapshot.selectedStyle,
+                styleName = snapshot.selectedVariant.basename,
                 globalIndex = selected.globalIndex,
                 sequenceId = selected.sequenceId,
                 x = selected.x,
@@ -586,7 +639,7 @@ class EditorViewModel @Inject constructor(
             },
         ) {
             repository.removeWidget(
-                snapshot.selectedStyle,
+                snapshot.selectedVariant.basename,
                 selected.globalIndex,
                 selected.type,
                 selected.sequenceId,
@@ -613,7 +666,7 @@ class EditorViewModel @Inject constructor(
             },
         ) {
             repository.duplicateWidget(
-                snapshot.selectedStyle,
+                snapshot.selectedVariant.basename,
                 selected.globalIndex,
                 selected.type,
                 selected.sequenceId,

@@ -77,7 +77,8 @@
     <!-- Face sheet -->
     <string name="library_sheet_kind">Watch face</string>
     <string name="library_sheet_face_version">face %1$s · version %2$s</string>
-    <string name="library_sheet_preview_a11y">Selected preview for %1$s, style %2$d</string>
+    <!-- The style name is `:core:ui`'s `styleLabel`, the same one the editor shows. -->
+    <string name="library_sheet_preview_a11y">Selected preview for %1$s, %2$s</string>
     <string name="library_sheet_choose_style">Choose starting style</string>
     <string name="library_sheet_package">Package</string>
     <string name="library_sheet_error_label">FAILED</string>
@@ -113,8 +114,8 @@
          replaces the description above rather than adding to it, for the same reason the
          badge had to go into one — the row sets its own, and nothing else is heard. -->
     <string name="library_sheet_project_a11y_opening">Opening %1$s</string>
-    <string name="library_style_thumb_a11y">%1$s style %2$d</string>
-    <string name="library_style_thumb_a11y_selected">%1$s style %2$d, selected</string>
+    <string name="library_style_thumb_a11y">%1$s, %2$s</string>
+    <string name="library_style_thumb_a11y_selected">%1$s, %2$s, selected</string>
 
     <!-- Projects -->
     <string name="library_projects_saved">Saved automatically</string>
@@ -124,7 +125,6 @@
     <string name="library_browse">Browse watch faces</string>
     <string name="library_project_face_line">face %1$s · %2$s</string>
     <string name="library_project_face_line_plain">face %1$s</string>
-    <string name="library_project_style">style %1$s</string>
     <string name="library_projects_search_placeholder">Search your projects</string>
     <string name="library_projects_no_matches_title">No matching projects</string>
     <string name="library_projects_no_matches_detail">Try a project name or a numeric face ID.</string>

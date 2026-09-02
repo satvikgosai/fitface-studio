@@ -56,6 +56,7 @@ class BackgroundReplacementSweepTest {
                     val panel = FaceRecordParser.panelSize(styles.first())
                     FaceEditor.replaceBackgrounds(
                         source,
+                        styles.map { it.basename },
                         panel.width,
                         panel.height,
                         IntArray(panel.width * panel.height) { FLAT_FILL },
@@ -72,6 +73,7 @@ class BackgroundReplacementSweepTest {
             val edit = try {
                 FaceEditor.replaceBackgrounds(
                     source,
+                    styles.map { it.basename },
                     panel.width,
                     panel.height,
                     IntArray(panel.width * panel.height) { FLAT_FILL },
@@ -175,8 +177,10 @@ class BackgroundReplacementSweepTest {
             val panel = FaceRecordParser.backgroundImage(
                 source.entryByBasename(expected.first()),
             )!!
+            val styles = styleEntries(source)
             val edit = FaceEditor.replaceBackgrounds(
                 source,
+                styles.map { it.basename },
                 panel.width,
                 panel.height,
                 IntArray(panel.width * panel.height) { FLAT_FILL },
@@ -201,7 +205,7 @@ class BackgroundReplacementSweepTest {
         assumeTrue("corpus holds no partially backed face", mixed != null)
         val (source, bare, withBackground) = mixed!!
 
-        val edit = FaceEditor.tintBackgrounds(source, 0, 255, 255)
+        val edit = FaceEditor.tintBackgrounds(source, styleEntries(source).map { it.basename }, 0, 255, 255)
 
         assertEquals(withBackground, edit.changedStyles)
         bare.forEach { name ->

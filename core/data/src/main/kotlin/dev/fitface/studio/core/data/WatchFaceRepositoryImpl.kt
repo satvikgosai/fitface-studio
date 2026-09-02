@@ -11,6 +11,7 @@ import dev.fitface.studio.core.format.CONTAINER_HEADER_SIZE
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
+import dev.fitface.studio.core.format.FaceResources
 import dev.fitface.studio.core.format.Fit3Apk
 import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.format.Fit3FormatException
@@ -18,12 +19,14 @@ import dev.fitface.studio.core.format.Fit3WidgetIsAnchorException
 import dev.fitface.studio.core.format.ImageRecord
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StructuralEdit
+import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.DuplicatedProject
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.format.Fit3NoContainerException
@@ -35,6 +38,7 @@ import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.mebibytes
+import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WatchFaceException
@@ -52,6 +56,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -105,7 +110,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 fallbackName = download.displayName,
                 projectId = 0,
                 editedBinPath = null,
-                selectedStyle = desiredStyle,
+                activeStyleName = desiredStyle,
             )
             if (loaded.apk.faceId != download.expectedFaceId) {
                 throw WatchFaceException(
@@ -197,7 +202,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     fallbackName = project.displayName,
                     projectId = project.id,
                     editedBinPath = project.editedBinPath,
-                    selectedStyle = project.selectedStyle,
+                    activeStyleName = project.selectedStyle,
                 )
                 val localApk = project.localApkPath
                     .let(::File)
@@ -346,7 +351,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 current.snapshot(styleName).also {
                     if (styleName != null && current.projectId > 0) {
                         projectDao.findById(current.projectId)?.let { project ->
-                            projectDao.insert(project.copy(selectedStyle = current.selectedStyle))
+                            projectDao.insert(project.copy(selectedStyle = current.activeStyleName))
                         }
                     }
                 }
@@ -365,14 +370,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val prepared = withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                if (current.styleEntries().isEmpty()) {
+                val targets = current.backgroundTargetEntries()
+                if (targets.isEmpty()) {
                     throw IllegalArgumentException("No editable style entries found")
                 }
                 // Measured against a style that actually carries a background, and the
                 // selected one first. Reading style0 unconditionally made faces whose
                 // first style paints onto black — 00011, and 00108 up to style3 —
                 // refuse an edit their remaining styles could take.
-                val image = current.backgroundRaster()
+                val image = current.selectedBackgroundRaster()
                     ?: throw WatchFaceException(
                         "No style of this face has a full-face background image to " +
                             "replace — it draws its widgets straight onto black.",
@@ -383,6 +389,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     container = current.currentContainer,
                     width = image.width,
                     height = image.height,
+                    styleNames = targets.map { it.basename },
                 )
             }
         }
@@ -404,6 +411,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
             val edit = FaceEditor.replaceBackgrounds(
                 current.currentContainer,
+                prepared.styleNames ?: current.backgroundTargetEntries().map { it.basename },
                 prepared.width,
                 prepared.height,
                 pixels,
@@ -436,10 +444,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val prepared = withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                val bare = current.styleEntries().filter {
-                    FaceRecordParser.backgroundImage(it) == null
-                }
-                if (bare.size != current.styleEntries().size) {
+                val scope = current.backgroundTargetEntries()
+                val bare = scope.filter { FaceRecordParser.backgroundImage(it) == null }
+                if (bare.size != scope.size) {
                     throw WatchFaceException(
                         "This face already has a background in at least one style, so it " +
                             "takes a same-size replacement instead.",
@@ -453,20 +460,21 @@ class WatchFaceRepositoryImpl @Inject constructor(
                             "add a background at.",
                     )
                 }
-                // A panel raster costs 205,880 bytes a style and the watch ignores a
-                // container over the ceiling, so a big face gets one in as many styles as
-                // fit — the selected style first, because that is the one the install
-                // activates and the only one the canvas shows.
+                // A panel raster costs 205,880 bytes each and the watch ignores a container
+                // over the ceiling, so a big face gets one in as many entries as fit — the
+                // one on the canvas first, because it is the only one you can see. With AOD
+                // selected that list is `aod.bin` alone; a normal style is never joined to
+                // it, nor it to them.
                 val targets = current.backgroundAddTargets()
                 if (targets.isEmpty()) {
                     val cost = StructuralEditor.addedBackgroundBytes(panel.width, panel.height)
                     throw WatchFaceException(
                         "This face is already ${mebibytes(current.currentContainer.fileSize)} " +
-                            "and a full-face background adds ${mebibytes(cost)} per style, " +
+                            "and a full-face background adds ${mebibytes(cost)} each, " +
                             "which would take it over the " +
                             "${mebibytes(WATCH_CONTAINER_BYTE_CEILING)} the watch accepts. " +
                             "Everything else on this face still works.",
-                        "container=${current.currentContainer.fileSize} styles=${bare.size}",
+                        "container=${current.currentContainer.fileSize} bare=${bare.size}",
                     )
                 }
                 PreparedBackground(
@@ -506,7 +514,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     EditAuditSummary(
                         edit.changedPayloadBytes,
                         edit.changedStyles,
-                        operation = if (targets.size == current.styleEntries().size) {
+                        operation = if (targets == listOf(AOD_ENTRY_NAME)) {
+                            "Added a full-face background to the always-on display"
+                        } else if (targets.size == current.styleEntries().size) {
                             "Added a full-face background"
                         } else {
                             "Added a full-face background to ${targets.size} of " +
@@ -528,7 +538,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            if (current.backgroundRaster() == null) {
+            if (current.selectedBackgroundRaster() == null) {
                 throw WatchFaceException(
                     "No style of this face has a full-face background image to tint — it " +
                         "draws its widgets straight onto black.",
@@ -537,6 +547,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
             val edit = FaceEditor.tintBackgrounds(
                 current.currentContainer,
+                current.backgroundTargetEntries().map { it.basename },
                 red,
                 green,
                 blue,
@@ -596,7 +607,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.targetStyleNames(styleName, applyToAllStyles)
+            val styleNames = current.editTargets(styleName, applyToAllStyles)
             val edit = FaceEditor.recolorPairWidgetAcrossStyles(
                 source = current.currentContainer,
                 entryBasenames = styleNames,
@@ -612,11 +623,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 EditAuditSummary(
                     edit.changedPayloadBytes,
                     edit.changedStyles,
-                    operation = if (applyToAllStyles) {
-                        "Pair widget color changed across all styles"
-                    } else {
-                        "Pair widget color changed on selected style"
-                    },
+                    operation = "Pair widget color changed " +
+                        editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
             )
@@ -634,21 +642,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = if (applyToAllStyles) {
-                buildList {
-                    add(styleName)
-                    addAll(
-                        current.styleEntries()
-                            .map { it.basename }
-                            .filterNot { it == styleName },
-                    )
-                    if (current.currentContainer.entries.any { it.basename == "aod.bin" }) {
-                        add("aod.bin")
-                    }
-                }
-            } else {
-                listOf(styleName)
-            }
+            val styleNames = current.editTargets(styleName, applyToAllStyles)
             val edit = FaceEditor.moveWidgetAcrossStyles(
                 source = current.currentContainer,
                 entryBasenames = styleNames,
@@ -664,11 +658,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 EditAuditSummary(
                     edit.changedPayloadBytes,
                     edit.changedStyles,
-                    operation = if (applyToAllStyles) {
-                        "Widget moved across all style and AOD variants"
-                    } else {
-                        "Widget moved on selected style"
-                    },
+                    operation = "Widget moved " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
             )
@@ -679,7 +669,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
         withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                val first = current.styleEntries().first()
+                val targets = current.backgroundTargetEntries()
+                val first = targets.firstOrNull()
+                    ?: throw WatchFaceException("No editable style entries found")
                 val background = FaceRecordParser.backgroundImage(first)
                     ?: throw WatchFaceException(
                         "This face has no full-face background image to resize.",
@@ -687,10 +679,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     )
                 val frame = FaceRecordParser.decodeImage(first, background)
                 val pixels = imageSource.resize(frame, width, height)
-                val styles = current.styleEntries().map { it.basename }
                 val edit = StructuralEditor.resizeBackgrounds(
                     current.currentContainer,
-                    styles,
+                    targets.map { it.basename },
                     width,
                     height,
                     pixels,
@@ -712,7 +703,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.targetStyleNames(styleName, applyToAllStyles)
+            val styleNames = current.editTargets(styleName, applyToAllStyles)
             val edit = StructuralEditor.resizeSprite(
                 current.currentContainer,
                 styleNames,
@@ -727,13 +718,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             commit(
                 current,
                 edit.container,
-                edit.audit(
-                    if (applyToAllStyles) {
-                        "Sprite resized across all styles"
-                    } else {
-                        "Sprite resized on selected style"
-                    },
-                ),
+                edit.audit("Sprite resized " + editScope(styleName, applyToAllStyles)),
                 styleName,
             )
         }
@@ -751,7 +736,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.targetStyleNames(styleName, applyToAllStyles)
+            val styleNames = current.editTargets(styleName, applyToAllStyles)
             val guide = FaceRecordParser.widgetGuides(
                 current.currentContainer.entryByBasename(styleName),
             ).firstOrNull { it.globalIndex == globalIndex }
@@ -784,14 +769,18 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
             val removed = RemovedWidget(
                 id = removedWidgetIds.incrementAndGet(),
-                label = "Widget #$globalIndex",
+                globalIndex = globalIndex,
                 widgetType = widgetType,
                 sequenceId = sequenceId,
                 x = x,
                 y = y,
                 width = guide?.width ?: 0,
                 height = guide?.height ?: 0,
-                recordsByStyle = edit.removedRecords,
+                // Copied off the guide because it is about to stop existing: the record is
+                // leaving the container, so nothing can look its reading up again.
+                sourceLabel = guide?.sourceLabel,
+                followsReading = guide?.followsReading ?: false,
+                recordsByVariant = edit.removedRecords,
             )
             val previousRemoved = current.removedWidgets.toList()
             current.removedWidgets += removed
@@ -799,13 +788,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 commit(
                     current,
                     edit.container,
-                    edit.audit(
-                        if (applyToAllStyles) {
-                            "Widget removed across all styles"
-                        } else {
-                            "Widget removed on selected style"
-                        },
-                    ),
+                    edit.audit("Widget removed " + editScope(styleName, applyToAllStyles)),
                     styleName,
                 )
             } catch (error: Throwable) {
@@ -824,8 +807,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ?: throw WatchFaceException("That removed widget is no longer available.")
                 val edit = StructuralEditor.appendWidget(
                     current.currentContainer,
-                    removed.recordsByStyle.keys.toList(),
-                    removed.recordsByStyle,
+                    removed.recordsByVariant.keys.toList(),
+                    removed.recordsByVariant,
                 )
                 val previousRemoved = current.removedWidgets.toList()
                 current.removedWidgets.remove(removed)
@@ -833,7 +816,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     commit(
                         current,
                         edit.container,
-                        edit.audit("${removed.label} restored at the end of the table"),
+                        // No index in the sentence: `appendWidget` puts the record at the
+                        // end, so the one it carried when it was cut is not where it lands
+                        // and naming it here would be pointing at another widget.
+                        edit.audit("Widget restored at the end of the table"),
                     )
                 } catch (error: Throwable) {
                     current.removedWidgets.clear()
@@ -846,8 +832,21 @@ class WatchFaceRepositoryImpl @Inject constructor(
     override suspend fun refreshThumbnail(): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
+            // `preview.bin` holds one frame per numbered style and none for AOD, and the
+            // picture written into it is whatever the canvas is composing. So with AOD on
+            // the canvas this would paint the always-on render into the *active style's*
+            // frame — the face picker would show the AOD face for a style that looks
+            // nothing like it. The button is hidden for AOD (`canRefreshThumbnail`), but
+            // the refusal belongs here: a UI that forgets is not what keeps the two apart.
+            if (current.selectedVariantName == AOD_ENTRY_NAME) {
+                throw WatchFaceException(
+                    "The face-picker thumbnail is rendered from a numbered style. Select " +
+                        "one to update it.",
+                    "selectedVariant=aod.bin",
+                )
+            }
             val snapshot = current.snapshot()
-            val styleIndex = snapshot.styleNames.indexOf(snapshot.selectedStyle)
+            val styleIndex = snapshot.styleNames.indexOf(snapshot.activeStyleName)
             if (styleIndex < 0) {
                 throw WatchFaceException("The selected style is no longer part of this face.")
             }
@@ -872,7 +871,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         edit.changedPayloadBytes,
                         edit.changedStyles,
                         operation = "Face-picker thumbnail re-rendered for " +
-                            snapshot.selectedStyle,
+                            snapshot.activeStyleName,
                     ),
                 )
             } catch (error: Throwable) {
@@ -893,7 +892,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.targetStyleNames(styleName, applyToAllStyles)
+            val styleNames = current.editTargets(styleName, applyToAllStyles)
             val edit = StructuralEditor.duplicateWidget(
                 current.currentContainer,
                 styleNames,
@@ -906,13 +905,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             commit(
                 current,
                 edit.container,
-                edit.audit(
-                    if (applyToAllStyles) {
-                        "Widget duplicated across all styles"
-                    } else {
-                        "Widget duplicated on selected style"
-                    },
-                ),
+                edit.audit("Widget duplicated " + editScope(styleName, applyToAllStyles)),
                 styleName,
             )
         }
@@ -959,7 +952,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
         return DiagnosticsSection(
             title = "face",
             lines = buildList {
-                add("face=${current.apk.faceId} style=${current.selectedStyle ?: "none"}")
+                add(
+                    "face=${current.apk.faceId} style=${current.activeStyleName ?: "none"} " +
+                        "canvas=${current.selectedVariantName ?: "none"}",
+                )
                 add(
                     "styles=${current.styleEntries().size} " +
                         "original=${current.originalContainer.fileSize} " +
@@ -1009,7 +1005,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot {
         val previousContainer = current.currentContainer
         val previousAudit = current.audit
-        val previousStyle = current.selectedStyle
+        val previousActiveStyle = current.activeStyleName
+        val previousVariant = current.selectedVariantName
         current.currentContainer = container
         current.audit = audit
         return try {
@@ -1033,7 +1030,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         } catch (error: Throwable) {
             current.currentContainer = previousContainer
             current.audit = previousAudit
-            current.selectedStyle = previousStyle
+            current.activeStyleName = previousActiveStyle
+            current.selectedVariantName = previousVariant
             throw error
         }
     }
@@ -1071,7 +1069,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         projectDao.insert(
             project.copy(
                 editedBinPath = editedFile.absolutePath.takeIf { keepEdited },
-                selectedStyle = current.selectedStyle,
+                selectedStyle = current.activeStyleName,
                 // The Projects page sorts on this. `importedAtEpochMillis` is bumped by
                 // merely opening a project, so it cannot answer "which did I work on last"
                 // — and with two projects on one face, that was the only thing telling
@@ -1137,7 +1135,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         fallbackName: String,
         projectId: Long = 0,
         editedBinPath: String? = null,
-        selectedStyle: String? = null,
+        activeStyleName: String? = null,
     ): Session {
         val apk = try {
             Fit3Apk.parse(apkBytes, retainMembers = false)
@@ -1177,7 +1175,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             originalContainer = original,
             currentContainer = current,
             sourceName = resolvedName,
-            selectedStyle = selectedStyle,
+            activeStyleName = activeStyleName,
         ).also {
             if (projectId > 0 && current !== original) {
                 restoreSessionState(projectDirectory(projectId), it)
@@ -1278,7 +1276,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
         /** Read from the project row, and rewritten in place by a rename. */
         var projectName: String = sourceName,
         var audit: EditAuditSummary? = null,
-        var selectedStyle: String? = null,
+        /** The style that installs and supplies the sampler id — never `aod.bin`. */
+        var activeStyleName: String? = null,
+        /**
+         * What the canvas currently shows and edits — a numbered style or `aod.bin`.
+         *
+         * Split from [activeStyleName] so that looking at AOD never changes which style is
+         * queued to install: selecting AOD updates this alone, selecting a style updates
+         * both together. See [snapshot].
+         */
+        var selectedVariantName: String? = null,
         /** Style index → the package's preview for it, extracted to app storage. */
         var stylePreviewFiles: Map<Int, String> = emptyMap(),
         val removedWidgets: MutableList<RemovedWidget> = mutableListOf(),
@@ -1304,8 +1311,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val thumbnailRefreshed: Boolean
             get() = thumbnailContainer != null && thumbnailContainer === currentContainer
 
-        fun styleEntries() = currentContainer.entries
-            .filter { it.basename.matches(Regex("""style\d+\.bin""")) }
+        /**
+         * The numbered styles, in numeric order — which is the order `preview.bin`
+         * frames and the packaged style pictures are indexed in.
+         *
+         * Everything that counts styles, picks an install sampler or indexes a preview
+         * reads this. [variantEntries] is the other list, and the difference between
+         * them is the isolation model.
+         */
+        fun styleEntries(): List<ContainerEntry> =
+            FaceResources.selectableStyles(currentContainer)
+
+        /** The styles plus `aod.bin` — every entry the editor can put on the canvas. */
+        fun variantEntries(): List<ContainerEntry> =
+            FaceResources.variantEntries(currentContainer)
 
         /**
          * Adds one line to the report's account of this session, oldest dropped first.
@@ -1329,10 +1348,17 @@ class WatchFaceRepositoryImpl @Inject constructor(
          * Only meaningful on a face where no style carries a background — a face that has
          * one anywhere takes the same-size replacement instead, which changes no sizes.
          */
+        /**
+         * Scoped to [backgroundTargetEntries], so with AOD on the canvas the answer is
+         * about `aod.bin` alone and never mentions a style. The size decision itself is
+         * [StructuralEditor.backgroundStylesThatFit]'s — it already skips an entry that
+         * has a background or no panel geometry and stops at the watch's ceiling, and a
+         * second copy of that arithmetic here is a second copy to keep in step.
+         */
         fun backgroundAddTargets(): List<String> = StructuralEditor.backgroundStylesThatFit(
             source = currentContainer,
-            entryBasenames = styleEntries().map { it.basename },
-            preferred = selectedStyle,
+            entryBasenames = backgroundTargetEntries().map { it.basename },
+            preferred = selectedVariantName,
         )
 
         /**
@@ -1347,12 +1373,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
          */
         fun backgroundRaster(): ImageRecord? {
             val entries = styleEntries()
-            val preferred = selectedStyle?.let { name ->
+            val preferred = activeStyleName?.let { name ->
                 entries.singleOrNull { it.basename == name }
             }
             return listOfNotNull(preferred).plus(entries)
                 .firstNotNullOfOrNull(FaceRecordParser::backgroundImage)
         }
+
+        /** [backgroundRaster], but scoped to whatever [backgroundTargetEntries] resolves to. */
+        fun selectedBackgroundRaster(): ImageRecord? =
+            if (selectedVariantName == AOD_ENTRY_NAME) {
+                backgroundTargetEntries().firstOrNull()?.let(FaceRecordParser::backgroundImage)
+            } else {
+                backgroundRaster()
+            }
 
         fun targetStyleNames(styleName: String, applyToAllStyles: Boolean): List<String> =
             if (applyToAllStyles) {
@@ -1362,6 +1396,35 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 }
             } else {
                 listOf(styleName)
+            }
+
+        /**
+         * The entry basenames one widget edit should touch, given what is selected.
+         *
+         * The one rule every operation shares: AOD is edited alone, always, whatever
+         * [applyToAllStyles] says, and normal-style apply-to-all never reaches into it.
+         * Deciding this here — once — is what makes it a repository guarantee instead of
+         * something each call site has to remember to enforce; the UI hiding the apply-all
+         * switch for AOD is a convenience, not the thing that makes isolation hold.
+         */
+        fun editTargets(styleName: String, applyToAllStyles: Boolean): List<String> =
+            if (styleName == AOD_ENTRY_NAME) {
+                listOf(AOD_ENTRY_NAME)
+            } else {
+                targetStyleNames(styleName, applyToAllStyles)
+            }
+
+        /**
+         * The entries a background edit should touch: `aod.bin` alone when it is what is
+         * selected, otherwise the normal styles [styleEntries] already scopes background
+         * work to. AOD never joins a normal-style background edit and a normal-style
+         * background edit never reaches AOD.
+         */
+        fun backgroundTargetEntries(): List<ContainerEntry> =
+            if (selectedVariantName == AOD_ENTRY_NAME) {
+                listOfNotNull(FaceResources.aodOrNull(currentContainer))
+            } else {
+                styleEntries()
             }
 
         fun directInstallPayload(): DirectInstallPayload {
@@ -1381,7 +1444,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 )
             }
             val styleCount = styleEntries().size
-            val samplerId = selectedStyle
+            val samplerId = activeStyleName
                 ?.removePrefix("style")
                 ?.removeSuffix(".bin")
                 ?.toIntOrNull()
@@ -1389,7 +1452,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 ?: apk.samplerId?.takeIf { it in 0 until styleCount }
                 ?: throw WatchFaceException(
                     "FitFace Studio could not work out which style to activate.",
-                    "selectedStyle=$selectedStyle styles=$styleCount",
+                    "activeStyleName=$activeStyleName styles=$styleCount",
                 )
             return DirectInstallPayload.create(
                 faceId = faceId,
@@ -1458,9 +1521,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
             // Container CRCs can be perfectly valid over payloads whose internal
             // record tables are broken, so every editable entry is re-walked too.
-            val styles = reparsed.entries.filter {
-                it.basename.matches(Regex("""style\d+\.bin""")) || it.basename == "aod.bin"
-            }
+            val styles = FaceResources.variantEntries(reparsed)
             if (styles.none { it.basename.startsWith("style") }) {
                 throw WatchFaceException("The edited watch face has no style entries left.")
             }
@@ -1502,6 +1563,68 @@ class WatchFaceRepositoryImpl @Inject constructor(
             )
         }
 
+        /** The container and `aod.bin` payload [cachedAodPreview] was rendered from. */
+        private class AodRender(
+            val container: Fit3Container,
+            val payload: ByteArray,
+            val preview: AodPreview,
+        )
+
+        private var cachedAodPreview: AodRender? = null
+
+        /**
+         * [AodPreviewComposer.compose] for the current `aod.bin`. Null when the container
+         * carries none.
+         *
+         * Memoized because every snapshot needs it — the Styles page shows the AOD row a
+         * thumbnail whichever variant is selected — and a snapshot is taken on every
+         * commit, which on a press-and-hold nudge is many a second. Two steps, cheapest
+         * first: the same container object cannot have changed at all, and a rebuild that
+         * left `aod.bin` byte-identical (every normal-style edit) reuses the render too.
+         *
+         * The second step compares the payload rather than hashing it. Both are one pass
+         * over the entry, but a 32-bit hash can collide, and a collision here would keep
+         * showing the pre-edit picture as though the edit had not landed.
+         */
+        fun aodPreview(): AodPreview? {
+            val entry = FaceResources.aodOrNull(currentContainer) ?: return null
+            cachedAodPreview?.let { cached ->
+                if (cached.container === currentContainer) return cached.preview
+                if (cached.payload.contentEquals(entry.data)) {
+                    cachedAodPreview = AodRender(currentContainer, entry.data, cached.preview)
+                    return cached.preview
+                }
+            }
+            val preview = AodPreviewComposer.compose(entry)
+            cachedAodPreview = AodRender(currentContainer, entry.data, preview)
+            return preview
+        }
+
+        private var cachedEditedVariants: Pair<Fit3Container, Set<String>>? = null
+
+        /**
+         * Which of [variants] hold a payload the pristine container does not.
+         *
+         * Keyed on the container's identity: a rebuild replaces the object, so an
+         * unchanged one cannot have changed its entries, and the comparison is not redone
+         * for every snapshot taken of the same container.
+         */
+        fun editedVariantNames(variants: List<ContainerEntry>): Set<String> {
+            if (currentContainer === originalContainer) return emptySet()
+            cachedEditedVariants?.let { (container, names) ->
+                if (container === currentContainer) return names
+            }
+            val names = variants.mapNotNullTo(mutableSetOf()) { entry ->
+                val pristine = originalContainer.entries
+                    .singleOrNull { it.basename == entry.basename }
+                entry.basename.takeIf {
+                    pristine == null || !pristine.data.contentEquals(entry.data)
+                }
+            }
+            cachedEditedVariants = currentContainer to names
+            return names
+        }
+
         /**
          * Everything a snapshot needs that is derived from the *unedited* container.
          *
@@ -1517,9 +1640,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
         private val originalStyleCache = mutableMapOf<String, OriginalStyleState>()
 
+        /**
+         * [styleIndex] is the entry's frame in `preview.bin`, or null for one that has
+         * none — which is `aod.bin`, always: that raster holds exactly one frame per
+         * numbered style. Everything else here is as useful for AOD as for a style, so
+         * this is the only part that has to know the difference.
+         */
         private fun originalStateFor(
             styleName: String,
-            styleIndex: Int,
+            styleIndex: Int?,
         ): OriginalStyleState = originalStyleCache.getOrPut(styleName) {
             val originalStyle = originalContainer.entryByBasename(styleName)
             OriginalStyleState(
@@ -1530,13 +1659,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // as the reference would diff each edit against the previous
                 // composite instead of against the vendor render — the preview would
                 // drift a little further every time the thumbnail was refreshed.
-                reference = originalContainer.entries
-                    .singleOrNull { it.basename == "preview.bin" }
-                    ?.let { previewEntry ->
+                reference = styleIndex?.let { index ->
+                    FaceResources.previewOrNull(originalContainer)?.let { previewEntry ->
                         FaceRecordParser.scanImages(previewEntry)
-                            .getOrNull(styleIndex)
+                            .getOrNull(index)
                             ?.let { FaceRecordParser.decodeImage(previewEntry, it) }
-                    },
+                    }
+                },
                 widgetsByGlobalIndex = FaceRecordParser.widgetGuides(originalStyle)
                     .associateBy { it.globalIndex },
             )
@@ -1545,20 +1674,33 @@ class WatchFaceRepositoryImpl @Inject constructor(
         fun snapshot(requestedStyle: String? = null): EditorSnapshot {
             val styles = styleEntries()
             if (styles.isEmpty()) throw IllegalArgumentException("No editable style entries found")
+            // Resolving the *requested/shown* entry has to reach `aod.bin` too, unlike
+            // every other use of `styles` below — style counts, background targets, the
+            // preview-frame index — which stay scoped to numbered styles on purpose.
+            val variants = variantEntries()
             val selected = requestedStyle?.let { name ->
-                styles.singleOrNull { it.basename == name }
+                variants.singleOrNull { it.basename == name }
                     ?: throw IllegalArgumentException("Unknown style: $name")
-            } ?: selectedStyle?.let { name ->
+            } ?: selectedVariantName?.let { name ->
+                variants.singleOrNull { it.basename == name }
+            } ?: activeStyleName?.let { name ->
                 styles.singleOrNull { it.basename == name }
             } ?: styles.first()
-            selectedStyle = selected.basename
+            selectedVariantName = selected.basename
+            // Looking at AOD must never change which style installs — this is the one
+            // conditional the whole isolation model rests on.
+            if (selected.basename != AOD_ENTRY_NAME) activeStyleName = selected.basename
+            val isAod = selected.basename == AOD_ENTRY_NAME
             val images = FaceRecordParser.scanImages(selected)
             val originalStyle = originalContainer.entryByBasename(selected.basename)
             // The canvas is the panel the watch renders, which is not the same thing
             // as "the style's first raster": faces 00022 and 00108 open with a small
             // icon, and a style with no full-panel raster simply draws onto black.
             val currentBackground = panelFrame(selected)
-            val original = originalStateFor(selected.basename, styles.indexOf(selected))
+            val original = originalStateFor(
+                selected.basename,
+                styles.indexOf(selected).takeIf { it >= 0 },
+            )
             val originalBackground = original.background
             val referencePreview = original.reference
             val originalWidgets = original.widgetsByGlobalIndex
@@ -1591,25 +1733,47 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     duplicateSourceGlobalIndex = duplicateSource,
                 )
             }
-            val widgetImageLayers = referencePreview?.let { reference ->
-                FaceRecordParser.widgetImageLayers(
-                    entry = selected,
-                    originalEntry = originalStyle,
-                    reference = reference,
+            // AOD renders straight from its own bytes — there is no `preview.bin` frame
+            // for it to diff against, so it never reaches the code above this line that
+            // reads `referencePreview`/`originalStyle` for that purpose. Computed here
+            // (cached on the entry's own bytes) whether or not AOD is what is selected,
+            // because the Styles page always shows its row a real thumbnail.
+            val aodComposition = aodPreview()
+            val widgetImageLayers = if (isAod) {
+                aodComposition?.widgetImageLayers.orEmpty()
+            } else {
+                referencePreview?.let { reference ->
+                    FaceRecordParser.widgetImageLayers(
+                        entry = selected,
+                        originalEntry = originalStyle,
+                        reference = reference,
+                    )
+                }.orEmpty()
+            }
+            val editPreview = if (isAod) {
+                EditPreview(
+                    composed = aodComposition?.composed ?: currentBackground,
+                    widgetOverlay = aodComposition?.widgetOverlay
+                        ?: PreviewFrame(
+                            currentBackground.width,
+                            currentBackground.height,
+                            IntArray(currentBackground.width * currentBackground.height),
+                        ),
                 )
-            }.orEmpty()
-            val editPreview = EditPreviewComposer.compose(
-                currentBackground = currentBackground,
-                originalBackground = originalBackground,
-                reference = referencePreview,
-                widgets = widgets,
-                imageLayers = widgetImageLayers,
-                // Only the variants the record was actually cut from; a removal
-                // applied to one style must not blank the widget on the others.
-                removedWidgets = removedWidgets.filter {
-                    selected.basename in it.recordsByStyle
-                },
-            )
+            } else {
+                EditPreviewComposer.compose(
+                    currentBackground = currentBackground,
+                    originalBackground = originalBackground,
+                    reference = referencePreview,
+                    widgets = widgets,
+                    imageLayers = widgetImageLayers,
+                    // Only the variants the record was actually cut from; a removal
+                    // applied to one style must not blank the widget on the others.
+                    removedWidgets = removedWidgets.filter {
+                        selected.basename in it.recordsByVariant
+                    },
+                )
+            }
             val report = if (currentContainer === originalContainer) {
                 originalReport
             } else {
@@ -1618,6 +1782,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val backgrounds = styles.filter {
                 FaceRecordParser.backgroundImage(it) != null
             }.map { it.basename }
+            val aodEntry = FaceResources.aodOrNull(currentContainer)
+            val variantModels = styles.mapIndexed { index, entry ->
+                EditorVariant(entry.basename, VariantKind.STYLE, index)
+            } + listOfNotNull(aodEntry?.let { EditorVariant(it.basename, VariantKind.AOD) })
             return EditorSnapshot(
                 projectId = projectId,
                 faceId = apk.faceId,
@@ -1625,7 +1793,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 sourceName = sourceName,
                 projectName = projectName,
                 styleNames = styles.map { it.basename },
-                selectedStyle = selected.basename,
+                variants = variantModels,
+                selectedVariant = variantModels.first { it.basename == selected.basename },
+                activeStyleName = activeStyleName ?: styles.first().basename,
+                editedVariantNames = editedVariantNames(variants),
+                aodThumbnail = aodComposition?.composed,
+                selectedVariantApproximate = isAod && aodComposition?.isApproximate == true,
                 preview = currentBackground,
                 referencePreview = referencePreview,
                 composedPreview = editPreview.composed,
@@ -1639,6 +1812,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         ?.let { entry.basename to it }
                 }.toMap(),
                 backgroundStyles = backgrounds,
+                aodHasBackground = aodEntry?.let {
+                    FaceRecordParser.backgroundImage(it) != null
+                } ?: false,
+                aodCanTakeBackground = aodEntry != null &&
+                    StructuralEditor.backgroundStylesThatFit(
+                        source = currentContainer,
+                        entryBasenames = listOf(AOD_ENTRY_NAME),
+                        preferred = AOD_ENTRY_NAME,
+                    ).isNotEmpty(),
                 // Only worth costing where there is nothing to replace: a face that has a
                 // background anywhere takes the same-size replacement, which grows nothing.
                 backgroundAddTargets = if (backgrounds.isEmpty()) {
@@ -1694,9 +1876,18 @@ private data class StoredSessionState(
     val removed: List<StoredRemovedWidget> = emptyList(),
 )
 
+/**
+ * One removed record on disk.
+ *
+ * Every field added after the first release carries a default, because `session.json` is
+ * read back from projects written by older builds and a missing key would otherwise throw
+ * — and `loadSession` failing is a project that will not open with its removals in it.
+ * [legacyLabel] is the one field that is only ever *read*: releases up to 0.1.1 stored the
+ * assembled `"Widget #12"` string instead of the number, so it is where an old session's
+ * index comes from and nothing new is written into it.
+ */
 @Serializable
 private data class StoredRemovedWidget(
-    val label: String,
     val widgetType: Int,
     val sequenceId: Int,
     val x: Int,
@@ -1704,33 +1895,52 @@ private data class StoredRemovedWidget(
     val width: Int,
     val height: Int,
     /** Base64 so the raw record bytes survive a JSON round trip untouched. */
-    val recordsByStyle: Map<String, String>,
+    val recordsByVariant: Map<String, String>,
+    val globalIndex: Int = UnknownGlobalIndex,
+    val sourceLabel: String? = null,
+    val followsReading: Boolean = false,
+    @SerialName("label") val legacyLabel: String? = null,
 ) {
     constructor(widget: RemovedWidget) : this(
-        label = widget.label,
         widgetType = widget.widgetType,
         sequenceId = widget.sequenceId,
         x = widget.x,
         y = widget.y,
         width = widget.width,
         height = widget.height,
-        recordsByStyle = widget.recordsByStyle.mapValues {
+        recordsByVariant = widget.recordsByVariant.mapValues {
             Base64.getEncoder().encodeToString(it.value)
         },
+        globalIndex = widget.globalIndex,
+        sourceLabel = widget.sourceLabel,
+        followsReading = widget.followsReading,
     )
 
     fun toModel(id: Long) = RemovedWidget(
         id = id,
-        label = label,
+        globalIndex = globalIndex.takeIf { it >= 0 } ?: legacyGlobalIndex(),
         widgetType = widgetType,
         sequenceId = sequenceId,
         x = x,
         y = y,
         width = width,
         height = height,
-        recordsByStyle = recordsByStyle.mapValues { Base64.getDecoder().decode(it.value) },
+        sourceLabel = sourceLabel,
+        followsReading = followsReading,
+        recordsByVariant = recordsByVariant.mapValues { Base64.getDecoder().decode(it.value) },
     )
+
+    /**
+     * The index out of an older session's stored label, which this app wrote itself and
+     * so can read back exactly. Anything else leaves the index unknown, which the row
+     * renders as "—" rather than as a number it would be inventing.
+     */
+    private fun legacyGlobalIndex(): Int =
+        legacyLabel?.removePrefix("Widget #")?.toIntOrNull() ?: UnknownGlobalIndex
 }
+
+/** [RemovedWidget.globalIndex] for a session that predates the field. */
+private const val UnknownGlobalIndex = -1
 
 private val StyleNamePattern = Regex("""style(\d+)\.bin""")
 
@@ -1767,6 +1977,20 @@ private fun ProjectEntity.toSummary(previewImagePath: String?) = ProjectSummary(
     // back to the import time keeps it out of the bottom of a "recently edited" sort.
     updatedAtEpochMillis = updatedAtEpochMillis.takeIf { it > 0 } ?: importedAtEpochMillis,
 )
+
+/**
+ * How an edit's audit line says what it reached — one phrase, five callers.
+ *
+ * The edit history this feeds is what a bug report is read from, and it is the only
+ * account of an edit that drew wrong without throwing. Five call sites each spelling out
+ * their own three-way `if` is five places for the next scope to be added to four of them:
+ * the same shape as a widget type added to one `when` and missed in another.
+ */
+private fun editScope(styleName: String, applyToAllStyles: Boolean): String = when {
+    styleName == AOD_ENTRY_NAME -> "on the always-on display"
+    applyToAllStyles -> "across all styles"
+    else -> "on selected style"
+}
 
 private fun StructuralEdit.audit(operation: String) = EditAuditSummary(
     changedPayloadBytes = changedPayloadBytes,

@@ -583,20 +583,115 @@ data class WidgetGuide(
 )
 
 /**
+ * Which of a container's editable face entries a variant is.
+ *
+ * A numbered style is installable and carries a sampler id; `aod.bin` is not — it is
+ * always-on-display artwork the watch shows on its own, never selected for install. See
+ * [EditorSnapshot.selectedVariant] and [EditorSnapshot.activeStyleName].
+ */
+enum class VariantKind { STYLE, AOD }
+
+/**
+ * The always-on display's entry name.
+ *
+ * Here rather than in `:core:format` — where it used to live — because it is a *name*, and
+ * the modules that have to recognise it reach further down than the format layer does:
+ * `:core:model` tells a removed record's scope apart from it and `:feature:editor` cannot
+ * see `:core:format` at all. Every module above this one can now spell it one way. The
+ * literal was written out 24 times across four modules once already; do not start a
+ * twenty-fifth.
+ */
+const val AOD_ENTRY_NAME = "aod.bin"
+
+/**
+ * One editable face entry: a numbered style or the single always-on-display entry.
+ *
+ * [styleIndex] is the entry's position among [EditorSnapshot.styleNames], null for AOD —
+ * AOD has no sampler id and no preview-frame index of its own.
+ */
+data class EditorVariant(
+    val basename: String,
+    val kind: VariantKind,
+    val styleIndex: Int? = null,
+) {
+    /** This entry's own style number, or null for one that is not a numbered style. */
+    val styleNumber: Int? get() = styleNumberOf(basename)
+
+    companion object {
+        /**
+         * The `N` in `styleN.bin`, counted from **zero** the way the container counts it.
+         *
+         * This is the format's number, not the reader's — `:core:ui`'s `styleLabel` is
+         * where the one-based offset and the wording are applied, once, for every screen
+         * that shows one.
+         *
+         * Read out of the basename rather than off [styleIndex], which is a *position*:
+         * it indexes `preview.bin`'s frames and the package's extracted PNGs, so it is
+         * the same number only while a face numbers its styles contiguously from zero.
+         * The catalogue's `FaceStyleOption.id` is this same number, which is what lets
+         * the library and the editor name one colourway identically.
+         *
+         * Null for anything that is not a numbered style — [AOD_ENTRY_NAME], and any
+         * entry name this app has not seen; the caller names those in words.
+         */
+        fun styleNumberOf(basename: String): Int? =
+            StyleEntryName.matchEntire(basename)?.groupValues?.get(1)?.toIntOrNull()
+
+        private val StyleEntryName = Regex("""style(\d+)\.bin""")
+    }
+}
+
+/**
  * A widget record that was removed from the container and can be appended back.
- * [recordsByStyle] holds the exact bytes that were cut out of each style entry.
+ * [recordsByVariant] holds the exact bytes that were cut out of each face entry.
+ *
+ * It carries the *facts* the Removed list shows and no assembled copy: this module is
+ * framework-free and cannot reach a resource table, so a label built here is a string no
+ * translator can see and no screen can reword. It used to hold `label = "Widget #12"` for
+ * exactly that reason, spelled differently from the `Widget #%1$d` two lines away in the
+ * editor's own resources.
  */
 data class RemovedWidget(
     val id: Long,
-    val label: String,
+    /**
+     * Where the record sat when it was cut, which is a historical marker rather than a
+     * live address: `removeWidget` renumbers everything after the record it cuts, so this
+     * names the widget the reader removed and must not be used to resolve it. Negative
+     * when it is not known, which is only a session written before this field existed.
+     */
+    val globalIndex: Int,
     val widgetType: Int,
     val sequenceId: Int,
     val x: Int,
     val y: Int,
     val width: Int,
     val height: Int,
-    val recordsByStyle: Map<String, ByteArray>,
+    /**
+     * The live reading it followed, named, or null where the format names none — the same
+     * two fields [WidgetGuide] carries, copied at removal because the guide is gone once
+     * the record is out of the container.
+     */
+    val sourceLabel: String? = null,
+    val followsReading: Boolean = false,
+    val recordsByVariant: Map<String, ByteArray>,
 ) {
+    /** What it draws, named — the same label the widget list shows for a live record. */
+    val category: WidgetCategory get() = WidgetCategory.forWidgetType(widgetType)
+
+    /**
+     * How many **numbered styles** the record was cut from.
+     *
+     * Counted rather than taken from `recordsByVariant.size`, which counts *entries*: an
+     * always-on removal writes one entry that is not a style, and reporting it as "1
+     * styles" is the same mistake `editor_audit_detail_aod` exists to avoid. AOD is never
+     * joined to a style edit, so in practice this is either the style count or zero.
+     */
+    val styleCount: Int
+        get() = recordsByVariant.keys.count { EditorVariant.styleNumberOf(it) != null }
+
+    /** Whether the record was cut from the always-on display. */
+    val touchedAod: Boolean get() = AOD_ENTRY_NAME in recordsByVariant
+
     override fun equals(other: Any?): Boolean = this === other ||
         (other is RemovedWidget && other.id == id)
 
@@ -637,7 +732,38 @@ data class EditorSnapshot(
      */
     val projectName: String = sourceName,
     val styleNames: List<String>,
-    val selectedStyle: String,
+    /**
+     * Every editable face entry, numbered styles first, `aod.bin` last when the
+     * container carries one — the Styles page's row order. See [VariantKind].
+     */
+    val variants: List<EditorVariant> = styleNames.mapIndexed { index, name ->
+        EditorVariant(name, VariantKind.STYLE, index)
+    },
+    /** What the canvas currently shows and edits — a numbered style or AOD. */
+    val selectedVariant: EditorVariant = variants.first(),
+    /**
+     * The style that installs and supplies the sampler id.
+     *
+     * Deliberately separate from [selectedVariant]: looking at the always-on display
+     * must never change which style is queued to install, so this is never `"aod.bin"`
+     * and only ever moves when a numbered style is selected. Install and the Validate
+     * page's "active style" wording must read this, never [selectedVariant].
+     */
+    val activeStyleName: String,
+    /** Face entries whose payload actually differs from the pristine container. */
+    val editedVariantNames: Set<String> = emptySet(),
+    /**
+     * The always-on display's own generated thumbnail, for its Styles-page row when it
+     * is not [selectedVariant] — there is no packaged AOD preview to show instead, the
+     * package never ships one. Null when the container carries no `aod.bin`.
+     */
+    val aodThumbnail: PreviewFrame? = null,
+    /**
+     * Whether [composedPreview] approximates part of [selectedVariant] rather than
+     * rendering it exactly — true only for AOD, and only while it carries a widget type
+     * (Pair or Composite) this editor draws as an outline rather than its real text.
+     */
+    val selectedVariantApproximate: Boolean = false,
     val preview: PreviewFrame,
     val referencePreview: PreviewFrame?,
     val composedPreview: PreviewFrame,
@@ -679,6 +805,18 @@ data class EditorSnapshot(
      * face means.
      */
     val backgroundAddTargets: List<String> = emptyList(),
+    /**
+     * The same two facts for the always-on display, which the style lists above say
+     * nothing about: 32 of the corpus's 99 carry a panel raster and the rest compose over
+     * black, independently of what their styles do.
+     *
+     * Separate fields rather than folded into [backgroundStyles] because a background
+     * edit on AOD writes that one entry and a background edit on the styles writes the
+     * group — see [canReplaceBackground], which is what the page reads.
+     */
+    val aodHasBackground: Boolean = false,
+    /** Whether AOD has room under the ceiling to be *given* a background. */
+    val aodCanTakeBackground: Boolean = false,
     /** Size of the container as it stands, measured against the watch's ceiling. */
     val containerBytes: Int = 0,
     val imageCount: Int,
@@ -698,11 +836,50 @@ data class EditorSnapshot(
      * in a broken layout.
      */
     val canRefreshThumbnail: Boolean
-        get() = isDirty && !thumbnailRefreshed && validationErrors.isEmpty()
+        get() = isDirty && !thumbnailRefreshed && validationErrors.isEmpty() &&
+            selectedVariant.kind == VariantKind.STYLE
 
-    /** Whether any style of this face can take a replacement background at all. */
+    /**
+     * Whether this container carries an always-on display at all.
+     *
+     * Read from [variants], which comes from the container's own entry table — never
+     * inferred from whether [aodThumbnail] rendered, or a face would lose its AOD row
+     * the moment a preview failed rather than because it has none.
+     */
+    val hasAod: Boolean
+        get() = variants.any { it.kind == VariantKind.AOD }
+
+    /** Whether the always-on display is what the canvas currently shows and edits. */
+    val isAodSelected: Boolean
+        get() = selectedVariant.kind == VariantKind.AOD
+
+    /** Whether [selectedVariant]'s own payload differs from the pristine container. */
+    val isSelectedVariantDirty: Boolean
+        get() = selectedVariant.basename in editedVariantNames
+
+    /**
+     * Whether the last committed edit reached the always-on display and nothing else.
+     *
+     * Decided here rather than by a screen comparing [EditAuditSummary.changedStyles] to
+     * an entry name it would have to know: "n of m styles" is the wrong sentence for an
+     * AOD-only edit, because AOD is neither counted among the styles nor one of them.
+     */
+    val auditTouchedOnlyAod: Boolean
+        get() = variants.firstOrNull { it.kind == VariantKind.AOD }?.let { aod ->
+            audit?.changedStyles == listOf(aod.basename)
+        } ?: false
+
+    /**
+     * Whether what is on the canvas can take a replacement background.
+     *
+     * Two questions in one, because a background edit has two scopes: with a style
+     * selected it writes every style that carries a panel raster, so the answer is about
+     * the group; with AOD selected it writes that one entry, so the answer is about it
+     * alone. Answering the style question while AOD is on the canvas is what would offer
+     * a replacement the repository then has to refuse.
+     */
     val canReplaceBackground: Boolean
-        get() = backgroundStyles.isNotEmpty()
+        get() = if (isAodSelected) aodHasBackground else backgroundStyles.isNotEmpty()
 
     /**
      * Whether this face can be *given* its first background: no style has one, so there
@@ -714,7 +891,11 @@ data class EditorSnapshot(
      * background. See [WatchFaceRepository.addBackground].
      */
     val canAddBackground: Boolean
-        get() = backgroundStyles.isEmpty() && backgroundAddTargets.isNotEmpty()
+        get() = if (isAodSelected) {
+            !aodHasBackground && aodCanTakeBackground
+        } else {
+            backgroundStyles.isEmpty() && backgroundAddTargets.isNotEmpty()
+        }
 
     /**
      * A backgroundless face with no room left for one. Distinct from
@@ -722,26 +903,37 @@ data class EditorSnapshot(
      * container is simply too close to the watch's size ceiling already.
      */
     val backgroundWouldNotFit: Boolean
-        get() = backgroundStyles.isEmpty() && styleNames.isNotEmpty() &&
-            backgroundAddTargets.isEmpty()
+        get() = if (isAodSelected) {
+            !aodHasBackground && !aodCanTakeBackground
+        } else {
+            backgroundStyles.isEmpty() && styleNames.isNotEmpty() &&
+                backgroundAddTargets.isEmpty()
+        }
 
-    /** Styles an added background would have to skip to stay under the ceiling. */
+    /**
+     * Styles an added background would have to skip to stay under the ceiling.
+     *
+     * Empty with AOD selected: it was the only candidate, so the styles beside it were
+     * never skipped for want of room and saying they were would be a different claim.
+     */
     val backgroundAddSkipped: List<String>
-        get() = if (backgroundAddTargets.isEmpty()) {
+        get() = if (isAodSelected || backgroundAddTargets.isEmpty()) {
             emptyList()
         } else {
             styleNames - backgroundAddTargets.toSet()
         }
 
     /**
-     * Whether the style on the canvas is one of [backgroundStyles].
+     * Whether the variant on the canvas carries a panel raster of its own.
      *
-     * False means a replacement still applies — to the siblings that do carry a
-     * background — but nothing about *this* canvas would change, so the page says so
-     * instead of looking broken.
+     * For a style, false means a replacement still applies — to the siblings that do
+     * carry a background — but nothing about *this* canvas would change, so the page says
+     * so instead of looking broken. For AOD there are no siblings: false means the edit
+     * has nothing to replace at all, which is why [canReplaceBackground] asks this
+     * instead of the style group.
      */
-    val selectedStyleHasBackground: Boolean
-        get() = selectedStyle in backgroundStyles
+    val selectedVariantHasBackground: Boolean
+        get() = if (isAodSelected) aodHasBackground else selectedVariant.basename in backgroundStyles
 
     /** Widgets the canvas can draw and the user can drag. */
     val canvasWidgets: List<WidgetGuide>

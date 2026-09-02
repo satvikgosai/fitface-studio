@@ -70,8 +70,10 @@ data class ContainerEntry(
      * This — not the first raster in the style — is the editor's coordinate space.
      * A style does not have to carry a full-panel background raster at all: face
      * `00022` opens with a 37×28 icon as its first raster and `00108` style0 with a
-     * 204×204 one, and every `aod.bin` in the corpus starts with a digit sprite.
-     * Sizing the canvas from raster 0 shrinks those faces to the icon and then
+     * 204×204 one. `aod.bin` is no different — 32 of the corpus's 99 carry a panel
+     * raster and the other 67 compose over black, independently of whether the face
+     * is digital or analog. Sizing the canvas from raster 0 shrinks those faces to the
+     * icon and then
      * classifies every widget bigger than it as the background layer, which is how
      * they came to render with no selection border.
      */

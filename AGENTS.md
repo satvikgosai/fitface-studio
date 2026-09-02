@@ -137,8 +137,28 @@ The four that catch people fastest:
   because `0x0` is the first image's own relative offset, so relocating the word while
   leaving `+0x20` stale silently dangles it. Faces `00010` and `00061` each lost a
   Static to this the moment an in-place sprite resize shifted the records under it.
+* **A Hand's `+0x20` is a pivot *inside its raster*, so the rotation centre is
+  `drawLeft + pivot`, not `drawLeft`.** `docs/bin-format.md` §7 proves the reading
+  14/14 — the pivot added to the record's own `x,y` is `(128, 201)`, the exact panel
+  centre, in every corpus Hand — and the AOD renderer still got it wrong the first time
+  it *used* it, rotating each hand about its artwork's top-left and sliding it off the
+  dial by the pivot's own offset: 8×76 px for face `00046`'s hour hand, 8×120 px for a
+  second hand. `AodHandGeometryTest` pins the fixed point, the direction and the absence
+  of gaps on three pixels. Two more fields go with it: the sweep is `+0x24`/`+0x26`
+  (`0x0168` = 360° in all 14 corpus records, so map the reading across it rather than
+  hardcoding an angle), and sources 1/9/13 are hour/minute/second while the same
+  primitive also sweeps steps, battery, heart rate and calories — those have no sampled
+  value and are left out, never pointed somewhere plausible.
 * **Alpha is not cosmetic.** Do not mask an `0x0082` sprite's backdrop; the watch
   paints its whole rectangle and the preview must say so.
+* **`aod.bin` is a face entry the editor can open, and the one rule is that it is edited
+  alone.** Same header, same records, same rasters, same pointer rules, so the format
+  layer needs no special case — everything that matters is above it, in
+  [`docs/editing.md`](docs/editing.md#editing-the-always-on-display). Read that before
+  touching variant targeting: AOD is never joined to a style edit and no style edit
+  reaches it, `selectedVariant` (what the canvas shows) is not `activeStyleName` (what
+  installs), and both halves are enforced in the repository rather than by the UI hiding
+  a switch.
 
 ## Traps that already bit this codebase
 
@@ -436,6 +456,30 @@ The four that catch people fastest:
 * **Install is gated on `previewReviewed`, and every commit clears it.** Editing
   on the Validate page therefore has to re-mark it, or "Continue to install"
   becomes inert.
+* **A preview may leave a widget out. It may not invent one.** The AOD renderer's first
+  pass painted a translucent coloured box over every Value and Composite rectangle,
+  because those draw live text from firmware fonts this app does not have. That box is
+  pixels the watch will never draw, in the one picture the Validate page presents as what
+  is about to be installed — and it went into `widgetOverlay` too, so dragging such a
+  widget dragged a grey rectangle around. Nothing stands in for them now: the canvas
+  outlines them, and `AodPreview.isApproximate` says in words what was left out. **And a
+  flag is a disclosure only once something reads it** — that one was computed and read by
+  nothing at all for a while, which is the same as not having it.
+* **The face-picker thumbnail is rendered from whatever the canvas is composing, into the
+  *active style's* `preview.bin` frame.** So with AOD on the canvas, refreshing it painted
+  the always-on face into a numbered style's picker entry — a style that looks nothing
+  like it. `preview.bin` holds exactly one frame per numbered style and none for AOD, so
+  there is no frame that edit could correctly write. `canRefreshThumbnail` hides the
+  button and `refreshThumbnail` refuses; the refusal is the half that matters, and
+  `AodIsolationTest` pins it. A UI that forgets is not what keeps two variants apart.
+* **AOD and a style are one string apart, so the string is a constant and the decision
+  lives in one function.** `moveWidget` used to append `"aod.bin"` to its own
+  apply-to-all target list, which is how a style-wide move silently moved the matching
+  AOD widget; the fix is `Session.editTargets`, the only place that turns "what is
+  selected" into "what to write". The literal itself was spelled out 24 times across four
+  modules on the first pass — now `AOD_ENTRY_NAME` in `:core:format`, `VariantKind` in
+  `:core:model`, and a UI that passes `EditorVariant` values it was handed rather than
+  entry names it could misspell (`:feature:editor` cannot see `:core:format` at all).
 * **`preview.bin` is the vendor's render of the *unedited* face, and nothing
   rewrites it.** The composer's `reference` must be read from `originalContainer`,
   not `currentContainer`, or each edit diffs against the previous composite and
@@ -697,6 +741,40 @@ The four that catch people fastest:
   `rememberUpdatedState` — `latestSnapshot`, `latestSelectedGlobalIndex`, `latestEnabled`.
   Adding `snapshot` to the keys is **not** the fix: that restarts the detector mid-gesture
   and cancels the drag in progress.
+* **A style is called "Style 1" on every screen, and the offset lives in exactly one
+  function.** The container names its entries `style0.bin` upward and the catalogue numbers
+  the same colourway the same way, so both are zero-based and neither is what a reader
+  should be shown. Assembled per screen, the two had already drifted: the editor printed the
+  raw `style0` — in the header subtitle, the Styles rows, the remove dialog, both background
+  notices, the thumbnail copy, the install summary and two `contentDescription`s — while the
+  library printed a zero-padded `style 01`, so one project read as two different styles
+  depending on which screen you were on. `:core:ui`'s **`styleLabel(styleNumber)`** is the
+  only place the `+ 1` and the wording happen, and it takes the *container's* number so no
+  caller decides what to add to it; `EditorVariant.styleNumberOf` parses it out of the
+  basename rather than reading `styleIndex`, which is a **position** — it indexes
+  `preview.bin`'s frames and the extracted PNGs, and equals the style's own number only
+  while a face numbers contiguously from zero. `AOD_ENTRY_NAME` moved down to `:core:model`
+  for the same reason: `:feature:editor` cannot see `:core:format`, and it had a local copy
+  of the literal within a day of needing one. Two corollaries. The Install page's payload
+  block says **`sampler`**, not `style` — it is the raw protocol byte, counted from zero, so
+  labelling it a style put "style 2" on screen beside "Style 3" for one face. And a screen
+  that shows a variant name at all goes through `variantLabel`, including the
+  `contentDescription`s: the canvas announced `aod.bin` to a screen reader for as long as
+  nobody listened to it.
+* **A removed record's row says what the record is, not what the format calls it.** The
+  Removed list sits directly under the live one, so `type 1 · seq 0 · 40×40 · 4 styles` under
+  rows reading `Image · #3 · 20×62` is the same widget described twice in two vocabularies.
+  `RemovedWidget` carries the *facts* now — `globalIndex`, `sourceLabel`, `followsReading`,
+  and `category` off the type — because `:core:model` is framework-free and a label built
+  there is a string no resource table can reword; it used to hold `label = "Widget #12"`,
+  spelled differently from the `Widget #%1$d` in the editor's own resources. **And the last
+  clause was counting the wrong thing**: `recordsByVariant.size` counts *entries*, so an
+  always-on removal — which writes one entry that is not a style — reported "1 styles",
+  a count of something it did not touch. `styleCount` counts only `styleN.bin` keys and
+  `touchedAod` names the other case, the same split `editor_audit_detail_aod` exists for.
+  New fields in `StoredRemovedWidget` all carry defaults, because `session.json` is read
+  back from projects written by older builds and a missing key throws — which is a project
+  that will not open with its removals in it.
 * **Both library pages lay their controls out with one composable and one set of insets.**
   Assembled twice, they had already drifted: the catalogue inset its grid by 16dp and the
   projects list by 20dp, with 2dp between their top paddings, so the search field and every
@@ -834,6 +912,23 @@ is the only path to the watch.** Nothing may route around it.
 
 ## Still open
 
+* **No AOD edit has been on a wrist.** The isolation model is pinned by
+  `AodIsolationTest` on the bytes and the render by `AodCanvasSweepTest` over all 99
+  corpus entries, but `aod.bin` is a *firmware-rendered* entry and nothing here proves the
+  watch accepts an edited one: the container-level rules it shares with a style are proven,
+  the always-on path itself is the design assumption. A background *added* to AOD is the
+  least proven of all — `addBackgrounds` is device-confirmed for styles only.
+* Three things the always-on canvas does not show, all deliberate and all said in words
+  rather than papered over. A Value or Composite is outlined but never drawn, so its
+  position can be edited and the drag shows only the rectangle moving. A Hand on a
+  non-clock reading — steps, battery, heart rate, calories — is left out entirely. And a
+  weekday sprite draws its *first* frame rather than the sampled Saturday, because the
+  frame order is not established: one corpus face opens on Monday, which is not evidence
+  about the rest, and a confidently wrong day is worse than an obvious first frame.
+* Reopening a project lands on the active style, never on AOD, because the selection is
+  in-memory `Session` state. Persisting it would mean a schema 6 and buys little — but
+  note the reason it is *safe* to skip: `activeStyleName` is what the row stores, and it
+  is never AOD.
 * Physical-watch delivery cannot be exercised here — the emulator has no Fit3 — so
   automated coverage stops at the bytes. Delivery, background add/replace, widget moves,
   sprite resizes and the 4 MiB container ceiling are all confirmed on a real SM-R390;

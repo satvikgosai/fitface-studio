@@ -89,6 +89,7 @@ import dev.fitface.studio.core.ui.fitText
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
+import dev.fitface.studio.core.ui.styleLabel
 import java.io.File
 
 @Composable
@@ -750,7 +751,7 @@ private fun FaceDetailsSheet(
                     contentDescription = stringResource(
                         R.string.library_sheet_preview_a11y,
                         face.name,
-                        selected.id + 1,
+                        styleLabel(selected.id),
                     ),
                     modifier = Modifier
                         .width(176.dp)
@@ -923,7 +924,7 @@ private fun StyleThumbnail(
             R.string.library_style_thumb_a11y
         },
         faceName,
-        style.id + 1,
+        styleLabel(style.id),
     )
     Column(
         modifier = Modifier
@@ -1382,10 +1383,12 @@ private fun inertRowAlpha(enabled: Boolean, opening: Boolean): Float =
     if (enabled || opening) 1f else .45f
 
 /**
- * "face 00112 · style 01", or just the face when the style could not be recovered.
+ * "face 00112 · Style 1", or just the face when the style could not be recovered.
  *
- * The style is numbered the way the sheet's thumbnails are — `styleN.bin` is zero-based and
- * the labels beside the previews are not — so the two agree about which colourway is which.
+ * The label comes from `:core:ui`'s [styleLabel], which is the same function the editor's
+ * Styles page uses, so the two screens cannot word the same colourway differently. They had
+ * already drifted once — this line read a zero-padded "style 01" while the editor showed the
+ * container's own "style0" — which is two wrong answers to one question.
  */
 @Composable
 private fun projectFaceLine(project: ProjectSummary): String {
@@ -1393,14 +1396,7 @@ private fun projectFaceLine(project: ProjectSummary): String {
     return if (styleId == null) {
         stringResource(R.string.library_project_face_line_plain, project.faceId)
     } else {
-        stringResource(
-            R.string.library_project_face_line,
-            project.faceId,
-            stringResource(
-                R.string.library_project_style,
-                (styleId + 1).toString().padStart(2, '0'),
-            ),
-        )
+        stringResource(R.string.library_project_face_line, project.faceId, styleLabel(styleId))
     }
 }
 

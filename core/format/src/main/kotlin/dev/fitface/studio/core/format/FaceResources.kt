@@ -1,5 +1,6 @@
 package dev.fitface.studio.core.format
 
+import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import java.nio.charset.StandardCharsets
 
 /**
@@ -233,10 +234,17 @@ object FaceResources {
             .sortedBy { styleNumber(it.basename) }
 
     fun aodOrNull(container: Fit3Container): ContainerEntry? =
-        container.entries.singleOrNull { it.basename == "aod.bin" }
+        container.entries.singleOrNull { it.basename == AOD_ENTRY_NAME }
 
-    /** Every entry with a widget stream: the selectable styles and the always-on face. */
-    fun styleEntries(container: Fit3Container): List<ContainerEntry> =
+    /**
+     * Every entry with a widget stream: the selectable styles, then the always-on face.
+     *
+     * Named for what these are rather than "styles", because the difference between the
+     * two lists is the whole of the isolation model — AOD is editable and previewable
+     * like a style and is not one, so anything that counts styles, indexes `preview.bin`,
+     * or picks an install sampler wants [selectableStyles] instead.
+     */
+    fun variantEntries(container: Fit3Container): List<ContainerEntry> =
         selectableStyles(container) + listOfNotNull(aodOrNull(container))
 
     fun fontBindings(container: Fit3Container): List<ContainerEntry> =
@@ -353,7 +361,7 @@ internal fun crossResourceIssues(container: Fit3Container): List<ValidationIssue
         .mapNotNull { runCatching { LocaleDictionary.parse(it).items.size }.getOrNull() }
         .minOrNull()
 
-    FaceResources.styleEntries(container).forEach { entry ->
+    FaceResources.variantEntries(container).forEach { entry ->
         val header = runCatching { StyleHeader.parse(entry) }
             .onFailure { warn("style_header_unreadable", it.message ?: "unreadable", entry.index) }
             .getOrNull() ?: return@forEach

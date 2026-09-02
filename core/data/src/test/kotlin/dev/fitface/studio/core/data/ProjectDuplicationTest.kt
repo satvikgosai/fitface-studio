@@ -152,7 +152,7 @@ class ProjectDuplicationTest {
                 original.widgets.none { it.alignedToGlobalIndex == candidate.globalIndex }
         }
         val removed = repository.removeWidget(
-            styleName = original.selectedStyle,
+            styleName = original.selectedVariant.basename,
             globalIndex = widget.globalIndex,
             widgetType = widget.type,
             sequenceId = widget.sequenceId,
@@ -242,7 +242,7 @@ class ProjectDuplicationTest {
     private suspend fun nudge(snapshot: EditorSnapshot, by: Int): EditorSnapshot {
         val widget = snapshot.widgets.first { it.width > 0 && it.height > 0 }
         return repository.moveWidget(
-            styleName = snapshot.selectedStyle,
+            styleName = snapshot.selectedVariant.basename,
             globalIndex = widget.globalIndex,
             widgetType = widget.type,
             sequenceId = widget.sequenceId,

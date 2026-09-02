@@ -5,6 +5,14 @@
   module's would be silently overridden rather than reported.
 -->
 <resources>
+    <!--
+      What a numbered style is called, shared by the editor and the library so the two
+      cannot word the same colourway differently. `styleLabel` applies the one-based offset;
+      the argument here is already the number the reader sees. The always-on display is not
+      a numbered style and is named in words by the module that shows it.
+    -->
+    <string name="ui_style_label">Style %1$d</string>
+
     <!-- FitTopBar's back affordance is the "‹" glyph, so its label lives here. -->
     <string name="ui_back">Back</string>
 

@@ -155,15 +155,16 @@ class CorpusParityTest {
             }
             val withBackground = styles.filter { FaceRecordParser.backgroundImage(it) != null }
 
+            val styleBasenames = styles.map { it.basename }
             if (withBackground.isEmpty()) {
                 assertThrows(Fit3FormatException::class.java) {
-                    FaceEditor.tintBackgrounds(container, red = 0, green = 255, blue = 255)
+                    FaceEditor.tintBackgrounds(container, styleBasenames, red = 0, green = 255, blue = 255)
                 }
                 assertArrayEquals(original, container.toByteArray())
                 refused++
                 return@forEach
             }
-            val edit = FaceEditor.tintBackgrounds(container, red = 0, green = 255, blue = 255)
+            val edit = FaceEditor.tintBackgrounds(container, styleBasenames, red = 0, green = 255, blue = 255)
             assertEquals(original.size, edit.container.fileSize)
             assertTrue(fixture.relativePath, edit.container.validate().isValid)
             assertTrue(fixture.relativePath, edit.changedPayloadBytes > 0)

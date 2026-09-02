@@ -27,6 +27,9 @@
     <string name="editor_page_widget_number">Widget #%1$s</string>
     <string name="editor_page_background">Background</string>
     <string name="editor_page_styles">Styles</string>
+    <!-- The Styles page's row for the always-on display, and every place a variant name
+         is shown — never the raw "aod.bin" basename. -->
+    <string name="editor_aod_label">Always-on display</string>
     <string name="editor_page_validate">Validate</string>
     <string name="editor_page_install">Install</string>
     <string name="editor_page_project">Project</string>
@@ -47,6 +50,13 @@
     <string name="editor_delete_project_message">%1$s and every edit saved in it will be removed from this device. The watch face itself can be downloaded again.</string>
     <string name="editor_delete_project_confirm">Delete</string>
     <string name="editor_widget_index_unknown">—</string>
+    <!--
+      A removed record's title. Separate from `editor_selection_widget` because the index
+      may be unknown: a session written before the index was stored has only the label that
+      build assembled, and where that cannot be read this says so rather than inventing a
+      number. Both are worded identically on purpose.
+    -->
+    <string name="editor_selection_widget_or_unknown">Widget #%1$s</string>
 
     <!-- Page subtitles -->
     <string name="editor_subtitle_canvas">face %1$s · %2$s</string>
@@ -57,7 +67,14 @@
     <string name="editor_subtitle_background_no_room">%1$s · no room for one</string>
     <string name="editor_subtitle_background_none">no background raster on this face</string>
     <string name="editor_subtitle_background_idle">no pending image</string>
-    <string name="editor_subtitle_styles">%1$d variants in this container</string>
+    <plurals name="editor_subtitle_styles">
+        <item quantity="one">%1$d style in this container</item>
+        <item quantity="other">%1$d styles in this container</item>
+    </plurals>
+    <plurals name="editor_subtitle_styles_with_aod">
+        <item quantity="one">%1$d style · always-on display</item>
+        <item quantity="other">%1$d styles · always-on display</item>
+    </plurals>
     <string name="editor_subtitle_validate">reparse of the edited container</string>
     <string name="editor_subtitle_install">direct to paired Fit3</string>
     <string name="editor_badge_edited">EDITED</string>
@@ -73,6 +90,15 @@
     <string name="editor_canvas_hint_none">Each outlined region is a draggable widget. Tap one to select it.</string>
     <string name="editor_canvas_hint_all_styles">Drag to move, or hold a nudge button. Changes apply to every style that has this widget.</string>
     <string name="editor_canvas_hint_this_style">Drag to move, or hold a nudge button. Changes only apply here.</string>
+    <string name="editor_canvas_hint_aod">Drag to move, or hold a nudge button. Changes apply only to the always-on display.</string>
+    <!--
+      Shown in place of the ordinary canvas hint when part of the always-on display cannot
+      be drawn here. Nothing is invented in its place, so the reader is told rather than
+      shown a box where the watch will put glyphs. Same fact as editor_aod_approximate,
+      which says it on the Validate page, where the picture is presented as what installs.
+    -->
+    <string name="editor_canvas_hint_none_approximate">Each outlined region is a draggable widget. Outlines with nothing in them are live text the watch draws from its own fonts.</string>
+    <string name="editor_aod_approximate">Live text and gauge needles are outlined but not drawn: the watch renders them from fonts and readings this app does not have. Everything else here is the artwork in the container. Your edits are sent whole either way.</string>
     <string name="editor_canvas_pick_from_list">OR PICK FROM THE LIST ›</string>
     <string name="editor_canvas_a11y">Fit3 watch-face editor for %1$s. %2$d movable widgets.</string>
 
@@ -108,7 +134,18 @@
     -->
     <string name="editor_row_frames">%1$d frames</string>
     <string name="editor_row_position">%1$d, %2$d</string>
-    <string name="editor_row_removed">type %1$d · seq %2$d · %3$d×%4$d · %5$d styles</string>
+    <!--
+      The Removed list sits directly under the live one and has to read like it: what the
+      record draws, the reading it followed, its size, and what the removal reached. It used
+      to say "type 4 · seq 29 · 60×60 · 3 styles" — the format layer's own numbers, beside
+      rows saying "Sprite · steps". The last argument is a phrase, not a count, because an
+      always-on removal touches one entry that is not a style at all.
+    -->
+    <string name="editor_row_removed">%1$s · %2$s · %3$d×%4$d · %5$s</string>
+    <plurals name="editor_row_removed_styles">
+        <item quantity="one">%1$d style</item>
+        <item quantity="other">%1$d styles</item>
+    </plurals>
     <string name="editor_restore">Restore</string>
 
     <!-- Inspector -->
@@ -140,8 +177,12 @@
     <string name="editor_color_pink">Pink</string>
     <string name="editor_color_green">Green</string>
     <string name="editor_apply_all_title">Apply widget edits to every style</string>
-    <string name="editor_apply_all_on">Every one of the %1$d styles that carries this widget stays in sync, and so does the always-on display. Styles that do not have it are left alone.</string>
+    <plurals name="editor_apply_all_on">
+        <item quantity="one">The one style that carries this widget stays in sync. The always-on display is left alone.</item>
+        <item quantity="other">Every one of the %1$d styles that carries this widget stays in sync. Styles that do not have it, and the always-on display, are left alone.</item>
+    </plurals>
     <string name="editor_apply_all_off">Only %1$s changes.</string>
+    <string name="editor_apply_all_aod">Edits here affect only the always-on display, never a numbered style.</string>
     <string name="editor_destructive_heading">Destructive</string>
     <string name="editor_duplicate">Duplicate &amp; select clone</string>
     <string name="editor_remove_widget">Remove widget</string>
@@ -188,8 +229,13 @@
     <string name="editor_bg_none_detail">This face draws its widgets straight onto black. Widgets still work.</string>
     <string name="editor_bg_adds_label">ADDS A BACKGROUND</string>
     <string name="editor_bg_adds_title">This face never had one</string>
-    <string name="editor_bg_adds_all">The image is added to all %1$d styles and every widget keeps its position. Reset project edits undoes it.</string>
+    <plurals name="editor_bg_adds_all">
+        <item quantity="one">The image is added to the one style this face has, and every widget keeps its position. Reset project edits undoes it.</item>
+        <item quantity="other">The image is added to all %1$d styles and every widget keeps its position. Reset project edits undoes it.</item>
+    </plurals>
     <string name="editor_bg_adds_some">Only %1$s gets one: another would take the container over the %2$s the watch accepts. %3$s stays on black.</string>
+    <!-- The always-on display is one entry, so there is no style count and nothing skipped. -->
+    <string name="editor_bg_adds_aod">The image is added to the always-on display only, and every widget keeps its position. The numbered styles are left as they are; reset project edits undoes it.</string>
     <string name="editor_bg_partial_applies">Applies to %1$s. The other styles stay on black.</string>
     <string name="editor_bg_partial_elsewhere">%1$s is on black, so this canvas will not change — the image lands on %2$s.</string>
 
@@ -199,7 +245,10 @@
     <string name="editor_style_current">Current style</string>
     <string name="editor_style_tap_to_load">Tap to load this variant</string>
     <string name="editor_style_tap_to_load_no_image">Tap to load this variant · no image in the package</string>
-    <string name="editor_styles_footnote">Every style except the current one is the package\'s own picture of the unedited face. Switching style clears the current selection and reloads the preview; widget moves follow the apply-to-every-style setting.</string>
+    <string name="editor_aod_current_edited">Showing the always-on display · your edit</string>
+    <string name="editor_aod_current">Showing the always-on display</string>
+    <string name="editor_aod_tap_to_load">Tap to load the always-on display</string>
+    <string name="editor_styles_footnote">Every style except the current one is the package\'s own picture of the unedited face. The always-on display\'s picture is generated by this app instead — the package ships none. Switching style clears the current selection and reloads the preview; widget moves follow the apply-to-every-style setting, which never reaches the always-on display.</string>
 
     <!-- Validate page -->
     <string name="editor_validate_ok">Container reparsed successfully. Entry bounds, records and CRCs are valid.</string>
@@ -210,7 +259,11 @@
     <string name="editor_check_payload_length">Payload length</string>
     <string name="editor_check_face_id">Face ID byte range</string>
     <string name="editor_audit_heading">Audit</string>
-    <string name="editor_audit_detail">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nvariants touched %4$d of %5$d\ncontainer %6$s of %7$s</string>
+    <string name="editor_audit_detail">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nstyles touched %4$d of %5$d\ncontainer %6$s of %7$s</string>
+    <!-- Same as editor_audit_detail, for an edit that touched only the always-on display —
+         "%4$d of %5$d styles" would misreport it as one of the numbered styles, when it is
+         neither counted among nor touched by them. -->
+    <string name="editor_audit_detail_aod">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nvariant touched: always-on display\ncontainer %4$s of %5$s</string>
     <string name="editor_continue_to_install">Continue to install →</string>
     <string name="editor_reset_edits">Reset project edits</string>
 
@@ -221,6 +274,7 @@
     <string name="editor_thumbnail_unedited">Unedited, so the stock thumbnail already matches this face.</string>
     <string name="editor_thumbnail_blocked">Resolve the errors above first — a thumbnail rendered from a container that does not validate would bake in a broken layout.</string>
     <string name="editor_thumbnail_stale">The watch\'s face picker still shows the stock image. Update it once so the carousel matches what you install.</string>
+    <string name="editor_thumbnail_aod">The face-picker thumbnail is rendered from a numbered style, never the always-on display, so there is nothing to update here. Select %1$s to refresh it.</string>
     <string name="editor_thumbnail_update">Update thumbnail</string>
 
     <!-- Project page -->
@@ -295,7 +349,12 @@
     <!-- Payload readout -->
     <string name="editor_payload_heading">Payload</string>
     <string name="editor_payload_none">—</string>
-    <string name="editor_payload_detail">face %1$s  ·  style %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
+    <!--
+      Diagnostics, so these are the raw values that go on the wire. `sampler` is deliberately
+      not called "style": it is the protocol byte, counted from zero, so labelling it as a
+      style would have it disagree with every "Style N" the rest of the app shows.
+    -->
+    <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
     <string name="editor_destructive_note">Duplicate appends a selected clone you can drag immediately. Removal and duplication rebuild the widget table and every CRC.</string>
     <string name="editor_transfer_progress">%1$d/%2$d windows · %3$d/%4$d bytes</string>
 </resources>

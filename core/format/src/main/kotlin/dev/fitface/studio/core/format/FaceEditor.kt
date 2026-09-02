@@ -208,6 +208,7 @@ object FaceEditor {
 
     fun replaceBackgrounds(
         source: Fit3Container,
+        entryBasenames: List<String>,
         width: Int,
         height: Int,
         argb: IntArray,
@@ -221,7 +222,7 @@ object FaceEditor {
         val changedEntries = mutableListOf<ContainerEntry>()
         // Computed once so every style keeps a byte-identical background.
         val indexedPayload by lazy(LazyThreadSafetyMode.NONE) { IndexedImage.quantize(argb) }
-        backgroundRasters(source).forEach { (entry, image) ->
+        backgroundRasters(source, entryBasenames).forEach { (entry, image) ->
             if (image.width != width || image.height != height) {
                 throw Fit3FormatException(
                     "${entry.basename}: background is ${image.width}x${image.height}, " +
@@ -264,6 +265,7 @@ object FaceEditor {
 
     fun tintBackgrounds(
         source: Fit3Container,
+        entryBasenames: List<String>,
         red: Int,
         green: Int,
         blue: Int,
@@ -276,7 +278,7 @@ object FaceEditor {
         val output = source.toByteArray()
         var changedBytes = 0
         val changedEntries = mutableListOf<ContainerEntry>()
-        backgroundRasters(source).forEach { (entry, image) ->
+        backgroundRasters(source, entryBasenames).forEach { (entry, image) ->
             if (image.isIndexed) {
                 // Only the 256-entry palette needs recolouring; the index plane
                 // already describes the picture.
@@ -424,10 +426,6 @@ object FaceEditor {
         }
     }
 
-    private fun styleEntries(source: Fit3Container): List<ContainerEntry> =
-        source.entries.filter { it.basename.matches(Regex("""style\d+\.bin""")) }
-            .ifEmpty { throw Fit3FormatException("container contains no style entries") }
-
     /**
      * Every style that carries a full-panel background raster, paired with it.
      *
@@ -446,8 +444,9 @@ object FaceEditor {
      */
     private fun backgroundRasters(
         source: Fit3Container,
+        entryBasenames: List<String>,
     ): List<Pair<ContainerEntry, ImageRecord>> =
-        styleEntries(source).mapNotNull { entry ->
+        entryBasenames.map(source::entryByBasename).mapNotNull { entry ->
             FaceRecordParser.backgroundImage(entry)?.let { entry to it }
         }.ifEmpty {
             throw Fit3FormatException(

@@ -56,7 +56,7 @@ class WidgetCensusTest {
 
     private fun forEachStyle(action: (ContainerEntry, List<WidgetRecord>) -> Unit) {
         forEachContainer { _, container ->
-            FaceResources.styleEntries(container).forEach {
+            FaceResources.variantEntries(container).forEach {
                 action(it, FaceRecordParser.scanWidgets(it))
             }
         }
@@ -194,7 +194,7 @@ class WidgetCensusTest {
 
         var disagreements = 0
         forEachContainer { _, container ->
-            FaceResources.styleEntries(container).forEach { entry ->
+            FaceResources.variantEntries(container).forEach { entry ->
                 val panel = FaceRecordParser.panelSize(entry)
                 FaceRecordParser.widgetGuides(entry).forEach { guide ->
                     val oldLeft = signRule(guide.x, guide.width, panel.width) + guide.drawOffsetX

@@ -279,14 +279,14 @@ class EditPreviewComposerTest {
             removedWidgets = listOf(
                 RemovedWidget(
                     id = 1,
-                    label = "Widget #4",
+                    globalIndex = 4,
                     widgetType = 5,
                     sequenceId = 4,
                     x = 0,
                     y = 0,
                     width = 2,
                     height = 1,
-                    recordsByStyle = mapOf("style0.bin" to byteArrayOf()),
+                    recordsByVariant = mapOf("style0.bin" to byteArrayOf()),
                 ),
             ),
         )

@@ -305,7 +305,7 @@ class EditorViewModelTest {
         faceName = "Face 00001",
         sourceName = "Face 00001.apk",
         styleNames = listOf("style0.bin"),
-        selectedStyle = "style0.bin",
+        activeStyleName = "style0.bin",
         preview = frame(),
         referencePreview = null,
         composedPreview = frame(),

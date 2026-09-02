@@ -230,11 +230,12 @@ as the background layer and make it unselectable.
 ## Applying an edit to every style
 
 A container holds several `styleN.bin` variants plus an optional `aod.bin`, and
-the editor's default is to apply a widget edit to all of them. **Styles are
-independent colourways, not renderings of one shared layout**, so a widget in the
-style being edited need not exist in its siblings at all. Face `00001` `style0`
-carries Value widgets for data sources 17 and 18; `style1` has neither and draws
-a Static plus data source 48 instead.
+the editor's default is to apply a widget edit to every **numbered style**. It
+never reaches `aod.bin` — see [Editing the always-on display](#editing-the-always-on-display).
+**Styles are independent colourways, not renderings of one shared layout**, so a
+widget in the style being edited need not exist in its siblings at all. Face
+`00001` `style0` carries Value widgets for data sources 17 and 18; `style1` has
+neither and draws a Static plus data source 48 instead.
 
 So a cross-style edit resolves rather than asserts. `StyleWidgetMatch` pairs the
 same widget across variants — by global index first, since that is the identity
@@ -255,6 +256,54 @@ the face could not be edited at all: the canvas showed the drag and then snapped
 back. `EveryFaceRendersTest` now sweeps the all-variant path for the whole
 corpus.
 
+## Editing the always-on display
+
+`aod.bin` is a face entry like a style — same 24-byte header, same widget
+records, same rasters, same pointer rules — so the format layer edits it with the
+same calls, and every rule in this document applies to it unchanged. All 99
+corpus containers carry one: 442 widgets and 991 rasters between them, 66 digital
+(sprite sources 2/3/10/11) and 33 analog (hands on sources 1 and 9), with no face
+in both groups and none in neither.
+
+What is *not* like a style is everything above the format layer, and the whole of
+it reduces to two rules.
+
+**AOD is edited alone, and never by a style edit.** `Session.editTargets` is the
+single place that decides: with AOD selected the target list is `aod.bin` and
+nothing else, whatever the apply-to-every-style switch says, and a style edit's
+target list never contains it. This is enforced in the repository, not by the UI
+hiding the switch — `AodIsolationTest` asserts the untouched entries are
+byte-identical in the container written to disk, in both directions. It is a
+regression test as much as a guarantee: `moveWidget` used to append `aod.bin` to
+its own apply-to-all list, so a style-wide move silently moved the matching AOD
+widget too.
+
+**AOD is not an installable style.** It has no `preview.bin` frame, no packaged
+`assets/…png`, no style index and no sampler id — `preview.bin` holds exactly one
+frame per numbered style, which `CorpusParityTest` pins. So the editor keeps two
+selections: `selectedVariant` is what the canvas shows and edits, and
+`activeStyleName` is what installs. Selecting AOD moves only the first. Three
+things follow, and each one was a bug before it was a rule:
+
+* the sampler id and the persisted project style come from `activeStyleName`, so
+  looking at AOD cannot change what the watch is asked to activate;
+* the face-picker thumbnail is rendered *from the canvas* into the active style's
+  `preview.bin` frame, so refreshing it while AOD is selected would paint the
+  always-on face into a style's picker entry. `refreshThumbnail` refuses;
+* `EditorSnapshot.styleNames` counts styles only, so a four-style face reads
+  "4 styles · always-on display" and never "5 styles".
+
+The picture is this app's own render — `AodPreviewComposer` — because there is no
+vendor one to diff against the way `EditPreviewComposer` does for a style. It
+draws the panel and then every widget in record order, sampling the same time the
+vendor's style previews are rendered at so the Styles page's rows agree with each
+other. Two kinds of record it does **not** draw: a Value or Composite, whose
+glyphs come from firmware fonts the app does not have, and a Hand on a reading
+with no sampled value (steps, battery, heart rate, calories). Neither gets a
+stand-in — a filled rectangle where the watch will put text is a preview that
+lies, and the Validate page presents this picture as what is about to be
+installed. They are outlined by the canvas and `isApproximate` says so in words.
+
 ## Rules established across all 99 editable faces
 
 `EveryFaceRendersTest` sweeps every container in the corpus. What it settled:
@@ -263,8 +312,10 @@ corpus.
   declared geometry, parsed from the entry path
   (`./SM-R390_00046_256x402/style0.bin` → 256 × 402). A style is not obliged to
   carry a full-panel background raster at all: face `00022` opens every style
-  with a 37 × 28 icon, `00108` styles 0–3 with a 204 × 204 dial, and every
-  `aod.bin` except `00046`'s with a digit sprite. Sizing the canvas from raster 0
+  with a 37 × 28 icon and `00108` styles 0–3 with a 204 × 204 dial. `aod.bin` is
+  no different and no more uniform: 32 of the 99 carry a full-panel raster (26
+  RGB565, 6 RGB565+A) and the other 67 compose over black, independently of
+  whether the face is digital or analog. Sizing the canvas from raster 0
   shrank those faces to the icon, after which every larger widget matched the
   "covers the whole canvas" test, was reported as the background layer, and could
   not be selected or dragged. Use `FaceRecordParser.panelSize` and

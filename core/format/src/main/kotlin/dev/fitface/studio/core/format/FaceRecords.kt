@@ -455,9 +455,10 @@ object FaceRecordParser {
      * The full-panel background raster of [entry], or null when the style paints
      * straight onto the watch's black panel.
      *
-     * Every `aod.bin` in the corpus lacks one, as do all of face `00022`'s styles
-     * and `00108` styles 0–3. Where a style does carry one it is raster 0 in every
-     * observed container, so this keeps the previous behaviour for those faces.
+     * 32 of the corpus's 99 `aod.bin` entries carry one (26 RGB565, 6 RGB565 with
+     * alpha) and the other 67 compose over black, same as all of face `00022`'s
+     * styles and `00108` styles 0–3. Where an entry does carry one it is raster 0 in
+     * every observed container, so this keeps the previous behaviour for those faces.
      */
     fun backgroundImage(entry: ContainerEntry): ImageRecord? {
         val panel = panelSize(entry)

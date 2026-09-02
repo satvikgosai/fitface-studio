@@ -74,7 +74,7 @@ class IndexedImageTest {
         val container = containerWithIndexedBackground()
         val replacement = IntArray(width * height) { 0xFF1188CC.toInt() }
 
-        val edit = FaceEditor.replaceBackgrounds(container, width, height, replacement)
+        val edit = FaceEditor.replaceBackgrounds(container, listOf("style0.bin"), width, height, replacement)
 
         assertEquals(container.fileSize, edit.container.fileSize)
         assertTrue(edit.container.validate().isValid)
