@@ -94,15 +94,15 @@ anyone holding it can produce an APK a device will accept as an update.
   :app:lintDebug
 ```
 
-Current baseline: **395 unit tests, 0 failures, 0 lint errors, 16 lint warnings.**
+Current baseline: **456 unit tests, 0 failures, 0 lint errors, 16 lint warnings.**
 Every warning is a dependency- or SDK-version notice in a build file, none in this
 code, so the count tracks whatever the ecosystem has published since.
 
-97 of the 395 read the uncommitted corpus and skip without it, and
+127 of the 456 read the uncommitted corpus and skip without it, and
 `IdentityTransferProtocolTest` skips without the recorded protocol fixtures. A clean
-clone therefore runs 297 and still passes.
+clone therefore runs 328 and still passes.
 
-25 of them are `:core:ui`'s, which is the only module whose tests measure composables.
+27 of them are `:core:ui`'s, which is the only module whose tests measure composables.
 `FitTopBarLayoutTest` is the one that measures a real layout, so it runs Robolectric in
 `@GraphicsMode(NATIVE)`: the default stub font metrics collapse every string to a few
 pixels, which makes a text-labelled button look tiny and a title column look enormous.

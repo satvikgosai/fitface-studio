@@ -106,8 +106,12 @@ import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.ReplacementImage
+import dev.fitface.studio.core.model.WidgetCategory
+import dev.fitface.studio.core.model.WidgetResizeStepPercent
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetPlacement
+import dev.fitface.studio.core.model.nextWidgetSize
+import dev.fitface.studio.core.model.widgetSizePercent
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.mebibytes
@@ -1779,7 +1783,7 @@ private fun InspectorWorkspace(
                 )
             }
         }
-        SpriteSizeControls(widget, !state.isWorking, onResize)
+        WidgetSizeControls(widget, !state.isWorking, onResize)
         widget.colorArgb?.let { currentColor ->
             val colors = listOf(
                 stringResource(R.string.editor_color_white) to 0xFFFF_FFFF.toInt(),
@@ -1877,16 +1881,19 @@ private fun InspectorWorkspace(
 
 /**
  * Resize is always visible so the capability is discoverable, and says why it is
- * unavailable when the widget's frames do not match the schema that is proven safe
- * to rewrite (unique Sprite sequence, RGB565+A frames, uniform format, not the
- * background image).
+ * unavailable — which is now three different answers, because resize covers three
+ * different mechanisms. A widget whose artwork does not match the shape this app can
+ * resample is refused; a panel-sized layer belongs to the Background page; and a Value or
+ * a Composite has no size in its record at all, because the watch draws its glyphs from a
+ * firmware font. Saying "does not match the proven resize schema" to someone looking at a
+ * text widget would be describing a check it never reached.
  *
- * The sizes come from [spriteResizeLadder], so the readout can say which rung the widget
+ * The sizes come from [widgetResizeLadder], so the readout can say which rung the widget
  * is on and each button knows whether there is another one in its direction — a "Larger"
  * that is still lit at the top of the ladder is a button that does nothing.
  */
 @Composable
-private fun SpriteSizeControls(
+private fun WidgetSizeControls(
     widget: WidgetGuide,
     enabled: Boolean,
     onResize: (Boolean) -> Unit,
@@ -1909,21 +1916,21 @@ private fun SpriteSizeControls(
             },
         )
         if (widget.canResize) {
-            val percent = spriteSizePercent(widget)
+            val percent = widgetSizePercent(widget)
             val shipped = widget.width == widget.originalWidth &&
                 widget.height == widget.originalHeight
             Text(
                 when {
                     shipped -> stringResource(
                         R.string.editor_size_shipped,
-                        SpriteResizeStepPercent,
+                        WidgetResizeStepPercent,
                     )
                     percent != null -> stringResource(
                         R.string.editor_size_percent,
                         percent,
                         widget.originalWidth,
                         widget.originalHeight,
-                        SpriteResizeStepPercent,
+                        WidgetResizeStepPercent,
                     )
                     else -> stringResource(
                         R.string.editor_size_off_ladder,
@@ -1944,20 +1951,35 @@ private fun SpriteSizeControls(
                 stringResource(R.string.editor_size_smaller),
                 { onResize(false) },
                 Modifier.weight(1f),
-                enabled && widget.canResize && nextSpriteSize(widget, grow = false) != null,
+                enabled && widget.canResize && nextWidgetSize(widget, grow = false) != null,
                 style = FitButtonStyle.Secondary,
             )
             FitButton(
                 stringResource(R.string.editor_size_larger),
                 { onResize(true) },
                 Modifier.weight(1f),
-                enabled && widget.canResize && nextSpriteSize(widget, grow = true) != null,
+                enabled && widget.canResize && nextWidgetSize(widget, grow = true) != null,
                 style = FitButtonStyle.Secondary,
             )
         }
         if (!widget.canResize) {
             Text(
-                stringResource(R.string.editor_size_unavailable),
+                stringResource(
+                    when {
+                        widget.placement == WidgetPlacement.BACKGROUND ->
+                            R.string.editor_size_unavailable_background
+                        widget.category == WidgetCategory.VALUE ||
+                            widget.category == WidgetCategory.COMPOSITE ->
+                            R.string.editor_size_unavailable_text
+                        // A type that names no raster cannot be refused for its artwork,
+                        // and neither can one this app will not resize at all. Telling
+                        // someone looking at a Rule that its "shared raster set" is the
+                        // wrong format describes a check it never reached.
+                        widget.category in RecordsWithoutArtwork ->
+                            R.string.editor_size_unavailable_geometry
+                        else -> R.string.editor_size_unavailable_artwork
+                    },
+                ),
                 modifier = Modifier.padding(top = 10.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.fitText.secondary,
@@ -1965,6 +1987,16 @@ private fun SpriteSizeControls(
         }
     }
 }
+
+/** Categories whose records address no raster, so no artwork can be the reason. */
+private val RecordsWithoutArtwork = setOf(
+    WidgetCategory.RULE,
+    WidgetCategory.VECTOR_ARC,
+    WidgetCategory.ANIMATION,
+    WidgetCategory.GROUP,
+    WidgetCategory.RESERVED,
+    WidgetCategory.UNKNOWN,
+)
 
 @Composable
 private fun CoordinateControl(

@@ -44,11 +44,40 @@ val WidgetGuide.originalDrawTop: Int
     get() = originalOriginY + originalY + if (drawOffsetY == 0) 0 else -originalHeight
 
 /**
- * How large a Sprite may be *grown past what it shipped at*, per side.
+ * How a widget's size is stored, and therefore what bounds a resize of it.
  *
- * This is not a hard maximum — see [spriteResizeLimit]. A sprite may always be taken back
- * to the extent the face shipped, however large that is, because that is the one size
- * whose bytes are known to work: resampling to the original dimensions returns the frame
+ * The editor's ladder needs the bound and cannot see `:core:format`, so the format layer
+ * decides the kind from its schema table and the guide carries it. Only two answers
+ * matter to the bound, and the difference between them is whether the edit writes pixels:
+ * resampling a raster grows the container, and a widget that stores its own extent does
+ * not add a byte.
+ */
+enum class WidgetResizeKind {
+    /** This widget cannot be resized — see `WidgetGuide.supportMessage` for why. */
+    NONE,
+
+    /**
+     * The size is the artwork's, so a resize rewrites raster bytes: Static, Sprite, Hand,
+     * image Arc and LineBar. [RASTER_RESIZE_CEILING] bounds growth because those bytes
+     * count against [WATCH_CONTAINER_BYTE_CEILING].
+     */
+    RASTER,
+
+    /**
+     * The size is stored in the record and the widget names no raster, so the resize is a
+     * same-size patch: the vector arc's box and the Rule's second endpoint. The container
+     * does not change length by one byte, so the only bound is what can be a widget on a
+     * 256 × 402 panel — [WIDGET_EXTENT_CEILING].
+     */
+    FIELDS,
+}
+
+/**
+ * How large a raster-backed widget may be *grown past what it shipped at*, per side.
+ *
+ * This is not a hard maximum — see [widgetResizeLimit]. Such a widget may always be taken
+ * back to the extent the face shipped, however large that is, because that is the one size
+ * whose bytes are known to work: resampling to the original dimensions returns the raster
  * records to their original length, so the container comes back to the size the store
  * shipped, and the watch has now been shown to redraw a resized sprite.
  *
@@ -58,17 +87,33 @@ val WidgetGuide.originalDrawTop: Int
  * [WATCH_CONTAINER_BYTE_CEILING], so growing its frames beyond what it shipped crossed
  * that line instead. Growth past the shipped extent is what has to stay bounded, and the
  * container ceiling is what makes it safe.
+ *
+ * It is named for the mechanism rather than for the Sprite it was discovered on, because
+ * the same arithmetic now bounds a Static, a Hand, an image Arc and a LineBar.
  */
-const val SPRITE_RESIZE_CEILING = 128
+const val RASTER_RESIZE_CEILING = 128
 
 /**
- * The largest a Sprite frame may be resized to: [SPRITE_RESIZE_CEILING], or the extent it
- * shipped at when the face ships something larger.
+ * The largest extent this app will write for any widget, per side.
  *
- * One rule in one place, because the editor's ladder and `StructuralEditor.resizeSprite`
+ * The panel is 256 × 402, so nothing larger than this can be a widget on it — the
+ * catalogue's largest is a 400 × 400 vector arc box, deliberately overhanging the panel.
+ * It is both the sanity bound on every resize request and the growth ceiling for a
+ * [WidgetResizeKind.FIELDS] widget, which adds no bytes and so has nothing else to fear.
+ */
+const val WIDGET_EXTENT_CEILING = 512
+
+/**
+ * The largest a widget may be resized to, per side.
+ *
+ * One rule in one place, because the editor's ladder and `StructuralEditor.resizeWidget`
  * have to agree exactly — a rung the format layer would refuse is a button that fails.
  */
-fun spriteResizeLimit(shippedExtent: Int): Int = maxOf(SPRITE_RESIZE_CEILING, shippedExtent)
+fun widgetResizeLimit(shippedExtent: Int, kind: WidgetResizeKind): Int = when (kind) {
+    WidgetResizeKind.NONE -> 0
+    WidgetResizeKind.RASTER -> maxOf(RASTER_RESIZE_CEILING, shippedExtent)
+    WidgetResizeKind.FIELDS -> maxOf(WIDGET_EXTENT_CEILING, shippedExtent)
+}
 
 /**
  * The largest container the watch accepts: **4 MiB exactly, confirmed on an SM-R390.**
@@ -98,7 +143,7 @@ fun spriteResizeLimit(shippedExtent: Int): Int = maxOf(SPRITE_RESIZE_CEILING, sh
  *
  * It also explains the one hardware result that used to look like a separate firmware
  * rule: a sprite grown past the extent its face shipped, on a face already within 76,640
- * bytes of the ceiling. See [SPRITE_RESIZE_CEILING].
+ * bytes of the ceiling. See [RASTER_RESIZE_CEILING].
  */
 const val WATCH_CONTAINER_BYTE_CEILING: Int = 4 * 1024 * 1024
 
@@ -534,7 +579,15 @@ data class WidgetGuide(
     val recordSize: Int,
     val isFinal: Boolean,
     val canEditPosition: Boolean,
-    val canResize: Boolean = false,
+    /**
+     * How this widget resizes, or [WidgetResizeKind.NONE] when it cannot.
+     *
+     * Carried rather than derived from [type], because whether a *particular* record can
+     * be resized depends on the container around it — a Static that draws the panel
+     * background, a raster pool whose members disagree about their pixel format — and the
+     * format layer is the only thing that can see that.
+     */
+    val resizeKind: WidgetResizeKind = WidgetResizeKind.NONE,
     val placement: WidgetPlacement = WidgetPlacement.CANVAS,
     /**
      * The display position [x] is measured from — zero for a widget positioned against
@@ -580,7 +633,10 @@ data class WidgetGuide(
     val originalColorArgb: Int? = colorArgb,
     val duplicateSourceGlobalIndex: Int? = null,
     val supportMessage: String,
-)
+) {
+    /** Whether the editor may offer to resize this widget at all. */
+    val canResize: Boolean get() = resizeKind != WidgetResizeKind.NONE
+}
 
 /**
  * Which of a container's editable face entries a variant is.
@@ -1096,9 +1152,22 @@ interface WatchFaceRepository {
 
     suspend fun resizeBackground(width: Int, height: Int): EditorSnapshot
 
-    suspend fun resizeSprite(
+    /**
+     * Resizes one widget to [width] × [height] in the extent terms [WidgetGuide] reports,
+     * whatever its type stores that extent in.
+     *
+     * The selection is the same tuple every other widget edit takes, and for the same
+     * reason: a widget's global index is not an identity across a structural edit, and a
+     * **Static's data source is `0` in 678 of the catalogue's 681 records**, so neither
+     * alone can name the record to rewrite.
+     */
+    suspend fun resizeWidget(
         styleName: String,
+        globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
+        x: Int,
+        y: Int,
         width: Int,
         height: Int,
         applyToAllStyles: Boolean,

@@ -212,7 +212,7 @@ class WidgetOriginPairingTest {
         val styles = listOf("style0.bin", "style1.bin", "style2.bin", "aod.bin")
         val originalStyle = original.entryByBasename("style0.bin")
 
-        val resized = StructuralEditor.resizeSprite(
+        val resized = resizeBySource(
             source = original,
             entryBasenames = styles,
             sequenceId = 10,
@@ -275,7 +275,7 @@ class WidgetOriginPairingTest {
         assertEquals(119, layer.frame.height)
 
         // And it can still be resized after all of that.
-        val again = StructuralEditor.resizeSprite(
+        val again = resizeBySource(
             source = restored,
             entryBasenames = styles,
             sequenceId = 10,

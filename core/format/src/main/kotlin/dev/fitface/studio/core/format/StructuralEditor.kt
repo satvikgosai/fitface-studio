@@ -1,9 +1,12 @@
 package dev.fitface.studio.core.format
 
-import dev.fitface.studio.core.model.SPRITE_RESIZE_CEILING
+import dev.fitface.studio.core.model.RASTER_RESIZE_CEILING
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
-import dev.fitface.studio.core.model.spriteResizeLimit
+import dev.fitface.studio.core.model.WIDGET_EXTENT_CEILING
+import dev.fitface.studio.core.model.WidgetResizeKind
+import dev.fitface.studio.core.model.widgetResizeLimit
 import java.io.ByteArrayOutputStream
+import kotlin.math.abs
 
 data class StructuralEdit(
     val container: Fit3Container,
@@ -20,20 +23,18 @@ data class StructuralEdit(
 
 object StructuralEditor {
     private const val StaticWidgetType = 1
-    private const val SpriteWidgetType = 3
 
-    /**
-     * Outer bound on a resized Sprite frame, before the per-side
-     * [spriteResizeLimit] is applied. The panel is 256×402, so a frame larger than this
-     * cannot be a glyph however large the face shipped it.
-     */
-    private const val MAX_SPRITE_EXTENT = 512
+    /** Fallback thickness for a Rule that stores an implausible one — as `drawnExtents`. */
+    private const val RULE_FALLBACK_THICKNESS = 8
+
+    /** Below this, a Rule's stored thickness is not the number its extent came from. */
+    private const val RULE_MINIMUM_THICKNESS = 2
+
+    /** Pixel formats [resampleRaster] can read, so the ones a resize may touch. */
+    private val RESAMPLED_FORMATS = setOf(IMAGE_RGB565, IMAGE_RGB565_ALPHA, IMAGE_INDEXED8)
 
     /** 36 + one type-word, which is what all 348 corpus background Statics measure. */
     private const val BACKGROUND_STATIC_SIZE = 40
-
-    /** Every raster in the corpus ends with these four zero bytes. */
-    private const val OPAQUE_TRAILER_BYTES = 4
 
     fun resizeBackgrounds(
         source: Fit3Container,
@@ -76,7 +77,7 @@ object StructuralEditor {
      * so a face like `00022` that paints its widgets straight onto the watch's black panel
      * can carry a background image.
      *
-     * This adds an image record, which [resizeSprite] must never do — the watch ignores a
+     * This adds an image record, which [resizeWidget] must never do — the watch ignores a
      * container whose frame count changed. That rule came from appending private frames to
      * a resized Sprite, and it turns out not to cover this: **a background added this way
      * installs and renders on an SM-R390.** Adding *a panel background plus its Static* is
@@ -190,54 +191,74 @@ object StructuralEditor {
     }
 
     /**
-     * Resizes every frame a Sprite references.
+     * Resizes one widget to [width] × [height], in the extent terms `WidgetGuide` reports
+     * — which is the artwork's size for a Static, a Sprite or a Hand, and the stored box
+     * for an image Arc, a LineBar or a vector arc.
      *
-     * Frames are shared *records*, so the edit closes over every widget reaching into
-     * the same glyph pool and moves the whole pool together — see [sharedFrameClosure].
-     * Resizing only the frames the selected sprite names left its neighbour drawing
-     * three small glyphs and seven large ones. Records are rewritten in place: the
-     * frame count never changes, because a container with more image records than it
-     * shipped with is one the watch installs and then ignores.
+     * Which fields that rewrites comes from [WidgetSchema.ResizeModel], so this function
+     * and the capability gate in [FaceRecordParser.widgetGuides] cannot drift into
+     * disagreeing about what is resizable — a control the UI lights and the commit refuses
+     * is the failure this path is arranged to avoid.
      *
-     * [pristine] is the unedited container, and when it is supplied every frame is
+     * Rasters are shared *records*, so a raster-backed resize closes over every widget
+     * reaching into the same pool and moves all of it together — see
+     * [FaceRecordParser.rasterPool]. Records are rewritten in place: the image-record count
+     * never changes, because a container with more image records than it shipped with is
+     * one the watch installs and then ignores.
+     *
+     * [pristine] is the unedited container, and when it is supplied every raster is
      * resampled from *its* pixels rather than from [source]'s. Resizing is lossy —
      * shrinking throws pixels away — so chaining resample onto resample destroys the
-     * artwork: shrinking a 114×136 sprite to 56×69 and then pulling it back up
-     * returned a picture carrying only the detail that survived the smaller one.
+     * artwork: shrinking a 114×136 sprite to 56×69 and then pulling it back up returned a
+     * picture carrying only the detail that survived the smaller one.
      *
-     * It also sets the upper bound. A sprite may be taken back to the extent its face
-     * shipped — [spriteResizeLimit] — because resampling to the original dimensions
+     * It also sets the upper bound. A widget may be taken back to the extent its face
+     * shipped — [widgetResizeLimit] — because resampling to the original dimensions
      * restores the original record lengths and with them the container's shipped size.
-     * Growing *past* that is what [SPRITE_RESIZE_CEILING] bounds, and what
-     * [WATCH_CONTAINER_BYTE_CEILING] refuses when the frames get big enough to matter.
+     * Growing *past* that is what [RASTER_RESIZE_CEILING] bounds, and what
+     * [WATCH_CONTAINER_BYTE_CEILING] refuses when the rasters get big enough to matter.
      * Without [pristine] there is no shipped extent to read, so the current one stands in.
+     *
+     * The widget is named the way every other widget edit names one, and that is a fix
+     * rather than a tidy-up. Selecting by `(type, sequenceId)` worked only while Sprites
+     * were the only resizable type — a **Static's data source is `0` in 678 of the
+     * catalogue's 681 records** — and selecting *entries* rather than *records* meant a
+     * face whose styles carry different widgets failed the edit outright instead of
+     * editing the ones that have it, which is the rule every other edit here follows.
      */
-    fun resizeSprite(
+    fun resizeWidget(
         source: Fit3Container,
         entryBasenames: List<String>,
+        globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
+        x: Int,
+        y: Int,
         width: Int,
         height: Int,
         pristine: Fit3Container? = null,
     ): StructuralEdit {
         requireValidAndTight(source)
-        // The precise per-side bound needs the frames' shipped extent, which only
-        // `resizeSpriteEntry` can resolve; this is the sanity bound around it.
-        if (width !in 1..MAX_SPRITE_EXTENT || height !in 1..MAX_SPRITE_EXTENT) {
+        // The precise per-side bound needs the widget's shipped extent, which only
+        // `resizeWidgetEntry` can resolve; this is the sanity bound around it.
+        if (width !in 1..WIDGET_EXTENT_CEILING || height !in 1..WIDGET_EXTENT_CEILING) {
             throw Fit3FormatException(
-                "Sprite dimensions must each be between 1 and $MAX_SPRITE_EXTENT",
+                "widget dimensions must each be between 1 and $WIDGET_EXTENT_CEILING",
             )
         }
         val replacements = linkedMapOf<Int, ByteArray>()
-        selectedEntries(source, entryBasenames).forEach { entry ->
-            replacements[entry.index] = resizeSpriteEntry(
-                entry = entry,
-                pristineEntry = pristine?.entries?.singleOrNull { it.basename == entry.basename },
-                sequenceId = sequenceId,
-                width = width,
-                height = height,
-            )
-        }
+        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y)
+            .forEach { (entry, target) ->
+                replacements[entry.index] = resizeWidgetEntry(
+                    entry = entry,
+                    pristineEntry = pristine?.entries?.singleOrNull {
+                        it.basename == entry.basename
+                    },
+                    target = target,
+                    width = width,
+                    height = height,
+                )
+            }
         return rebuild(source, replacements)
     }
 
@@ -676,51 +697,226 @@ object StructuralEditor {
         }
     }
 
-    private fun resizeSpriteEntry(
+    private fun resizeWidgetEntry(
         entry: ContainerEntry,
         pristineEntry: ContainerEntry?,
-        sequenceId: Int,
+        target: WidgetRecord,
+        width: Int,
+        height: Int,
+    ): ByteArray {
+        val spec = WidgetSchema.spec(target.widgetType)
+        return when (val model = spec.resize) {
+            null -> throw Fit3FormatException(
+                "${entry.basename}: a ${spec.name} widget cannot be resized",
+            )
+            is WidgetSchema.ResizeModel.Box ->
+                resizeBoxEntry(entry, target, width, height)
+            is WidgetSchema.ResizeModel.Endpoint ->
+                resizeEndpointEntry(entry, pristineEntry, target, width, height)
+            else -> resizeRasterEntry(entry, pristineEntry, target, model, width, height)
+        }
+    }
+
+    /**
+     * Resizes a vector arc, whose `+0x1C`/`+0x1E` box *is* its size.
+     *
+     * This and [resizeEndpointEntry] are the two resizes that are **same-size patches**:
+     * nothing is resampled, the image section is not touched, no pointer is rewritten, and
+     * the container does not change length by a single byte. So neither can cross
+     * [WATCH_CONTAINER_BYTE_CEILING], neither can disturb the image-record count, and
+     * neither can leave a pointer stale — the three things that have actually gone wrong
+     * on hardware here. What they rest on instead is the constructor's own reading of
+     * these fields: a vector arc is drawn from a signed bounding box, an angle range and a
+     * thickness, and it names no raster at all.
+     *
+     * Thickness is deliberately left alone. It is its own field at `+0x40` and face `00108`
+     * ships one box at three different thicknesses across its styles, so a resize that
+     * scaled it would be inventing a second edit the user did not ask for.
+     */
+    private fun resizeBoxEntry(
+        entry: ContainerEntry,
+        target: WidgetRecord,
+        width: Int,
+        height: Int,
+    ): ByteArray {
+        if (target.storedWidth == width && target.storedHeight == height) {
+            throw Fit3FormatException("${entry.basename}: a resize requires a dimension change")
+        }
+        val replacement = entry.data.copyOf()
+        replacement.putU16(target.recordOffset + 0x1C, width and 0xFFFF)
+        replacement.putU16(target.recordOffset + 0x1E, height and 0xFFFF)
+        validateStructuralEntry(
+            entry,
+            replacement,
+            FaceRecordParser.scanWidgets(entry).size,
+        )
+        return replacement
+    }
+
+    /**
+     * Resizes a Rule by scaling its endpoint vector.
+     *
+     * The span is scaled rather than replaced, because `+0x1C`/`+0x1E` is the *second
+     * endpoint* and not an extent. Writing `x + width` into it would flip the 52 of the
+     * catalogue's 84 Rules whose stored endpoint is the far one across their own start
+     * point, and it would turn each of the 32 exactly-horizontal Rules into a diagonal the
+     * moment the ladder asked for a height. Scaling keeps the sign of each delta and keeps
+     * a zero span at zero, so a Rule stays the line it was and only its length changes.
+     *
+     * The reference is the pristine record where there is one, so a rung always lands on
+     * the same geometry however many times it has been stepped — the same reason a raster
+     * resize resamples the pristine pixels. `moveWidget` already translates both endpoints
+     * together, so a Rule that has only been dragged has the same span in both containers.
+     */
+    private fun resizeEndpointEntry(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry?,
+        target: WidgetRecord,
+        width: Int,
+        height: Int,
+    ): ByteArray {
+        val origin = pristineEntry?.let { pristineRecord(entry, it, target) } ?: target
+        val spanX = origin.raw1C.toShort().toInt() - origin.x
+        val spanY = origin.raw1E.toShort().toInt() - origin.y
+        // The extent a Rule reports is its span **or its thickness**, whichever is larger —
+        // the floor `drawnExtents` applies — so that is what the requested size is a
+        // fraction of, and the thickness has to scale with it.
+        //
+        // Leaving the thickness alone is what made the resize ladder throw at the user.
+        // 32 of the catalogue's 84 Rules are exactly horizontal, so one axis of their
+        // reported extent *is* the thickness and no endpoint write can move it; a further
+        // 24 have a short axis the thickness floors. The rung the editor offered was
+        // therefore never the extent the widget came back with, `nextWidgetSize` re-offered
+        // the rung already in force, and the no-change guard below refused it — on 56 of
+        // the 84 records, within two taps on face `00049`. Scaling the thickness by the
+        // same ratio makes the whole extent scale linearly, which is exactly what the
+        // ladder assumes: `max(|dx|, t)` and `max(|dy|, t)` both multiply by the ratio, so
+        // the extent the guide reports afterwards is the rung that was asked for.
+        val storedThickness = origin.ruleThickness
+        val thickness = storedThickness?.takeIf { it >= RULE_MINIMUM_THICKNESS }
+            ?: RULE_FALLBACK_THICKNESS
+        val reportedWidth = maxOf(abs(spanX), thickness)
+        val reportedHeight = maxOf(abs(spanY), thickness)
+        val endX = target.x + scaledSpan(spanX, width, reportedWidth)
+        val endY = target.y + scaledSpan(spanY, height, reportedHeight)
+        // Only when the record's own byte is the one the extent was measured from. A record
+        // storing something below the floor is not describing a thickness this layer
+        // understands, and scaling the substituted value would write a number the producer
+        // never had. No catalogue Rule does that — they run 4 to 59.
+        // Where an axis of the reported extent *is* the thickness, the requested value for
+        // that axis is what the thickness has to become — not a second rounding of the same
+        // number. The ladder scales the reported extent by a percentage and this scales it
+        // by a ratio of pixels, and on face `00049` the two disagreed by one: the rung asked
+        // for 92×10 and a ratio-scaled thickness came back 92×9, which is the same
+        // off-the-ladder state the throw used to be, one step later.
+        val scaledThickness = storedThickness
+            ?.takeIf { it >= RULE_MINIMUM_THICKNESS }
+            ?.let {
+                val scaled = if (reportedHeight == thickness) {
+                    height
+                } else {
+                    scaledExtent(it, width, reportedWidth)
+                }
+                scaled.coerceIn(RULE_MINIMUM_THICKNESS, 0xFF)
+            }
+        val unchanged = endX == target.raw1C.toShort().toInt() &&
+            endY == target.raw1E.toShort().toInt() &&
+            (scaledThickness == null || scaledThickness == target.ruleThickness)
+        if (unchanged) {
+            throw Fit3FormatException("${entry.basename}: a resize requires a dimension change")
+        }
+        if (endX !in Short.MIN_VALUE..Short.MAX_VALUE ||
+            endY !in Short.MIN_VALUE..Short.MAX_VALUE
+        ) {
+            throw Fit3FormatException(
+                "${entry.basename}: resized Rule endpoints must fit signed 16-bit integers",
+            )
+        }
+        val replacement = entry.data.copyOf()
+        replacement.putU16(target.recordOffset + 0x1C, endX and 0xFFFF)
+        replacement.putU16(target.recordOffset + 0x1E, endY and 0xFFFF)
+        scaledThickness?.let { replacement[target.recordOffset + 0x30] = it.toByte() }
+        validateStructuralEntry(
+            entry,
+            replacement,
+            FaceRecordParser.scanWidgets(entry).size,
+        )
+        return replacement
+    }
+
+    /** [extent] scaled by `requested / from`, never below one pixel. */
+    private fun scaledExtent(extent: Int, requested: Int, from: Int): Int =
+        if (from <= 0) {
+            extent
+        } else {
+            ((extent.toLong() * requested + from / 2) / from).toInt().coerceAtLeast(1)
+        }
+
+    /** [span] scaled by `requested / from`, keeping its sign and keeping zero at zero. */
+    private fun scaledSpan(span: Int, requested: Int, from: Int): Int {
+        if (span == 0 || from <= 0) return span
+        val scaled = ((abs(span).toLong() * requested + from / 2) / from).toInt()
+        return if (span < 0) -scaled else scaled
+    }
+
+    /**
+     * Resizes a widget whose size is its artwork's: Static, Sprite, Hand, image Arc and
+     * LineBar.
+     *
+     * Every raster in the widget's pool is rewritten **in place** at the new size, and the
+     * record count is asserted afterwards, because a container with more image records
+     * than it shipped with is one the watch installs and then goes on ignoring.
+     *
+     * [model] decides what else moves with the pixels, and each of the three answers is a
+     * field that would otherwise be left describing the old artwork:
+     *
+     * * [WidgetSchema.ResizeModel.Raster] — nothing. A Static and a Sprite carry no size.
+     * * [WidgetSchema.ResizeModel.RasterWithPivot] — a Hand's rotation pivot scales with
+     *   the artwork and `x`/`y` absorbs the difference, so the point the watch rotates
+     *   about does not move.
+     * * [WidgetSchema.ResizeModel.RasterWithBox] — the stored box scales with it, and the
+     *   *box* is what the caller's [width] × [height] means: an image Arc draws its raster
+     *   at native size centred in a box that is a different size again (face `00108` ships
+     *   a 204×204 ring in a 256×256 box), so the raster is scaled by the box's ratio rather
+     *   than set to the requested numbers.
+     */
+    private fun resizeRasterEntry(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry?,
+        target: WidgetRecord,
+        model: WidgetSchema.ResizeModel,
         width: Int,
         height: Int,
     ): ByteArray {
         val images = FaceRecordParser.scanImages(entry)
         val widgets = FaceRecordParser.scanWidgets(entry)
-        val target = widgets.filter {
-            it.widgetType == SpriteWidgetType && it.sequenceId == sequenceId
-        }.singleOrNull() ?: throw Fit3FormatException(
-            "${entry.basename}: expected exactly one Sprite widget with sequence $sequenceId",
-        )
         val sectionStart = images.firstOrNull()?.recordOffset
             ?: throw Fit3FormatException("${entry.basename}: style contains no images")
         val relativeImages = images.associateBy { (it.recordOffset - sectionStart).toLong() }
-        if (target.words.isEmpty() || target.words.any { it !in relativeImages }) {
-            throw Fit3FormatException("${entry.basename}: Sprite contains a non-image word")
-        }
-        // Every frame the edit has to touch, not just the ones this sprite names.
+        // Throws when a pointer this type is defined to carry does not resolve, which is
+        // the schema check every structural edit wants before it moves anything.
+        FaceRecordParser.imagePointerFields(target, relativeImages)
+        // Every raster the edit has to touch, not just the ones this record names.
         //
         // A face keeps one glyph pool and points several widgets into it — on 00022 the
         // hour's tens digit addresses frames 2–4 and its units digit 2–11 — so resizing
         // only the named frames left the neighbour drawing three small glyphs and seven
-        // large ones, its box still reporting the largest. The frames are shared
-        // records; there is no resizing one widget's copy, because there is only one
-        // copy. So the set is closed over every widget that reaches into it and the
-        // whole pool moves together.
-        val targetIndices = sharedFrameClosure(target, widgets, relativeImages)
+        // large ones, its box still reporting the largest. The frames are shared records;
+        // there is no resizing one widget's copy, because there is only one copy.
+        val pool = FaceRecordParser.rasterPool(target, widgets, relativeImages)
+        val targetIndices = pool.images
         val backgroundIndex = FaceRecordParser.backgroundImage(entry)?.index
         if (backgroundIndex != null && backgroundIndex in targetIndices) {
-            throw Fit3FormatException("Sprite resize refuses the full-panel background raster")
-        }
-        // Closing over the pool can only pull in other Sprites in the whole corpus, and
-        // a Static or a Hand sharing a digit frame would mean the pool is not what this
-        // edit thinks it is.
-        widgets.filter { other ->
-            other.widgetType != SpriteWidgetType &&
-                FaceRecordParser.referencedImages(other, relativeImages)
-                    .any { it.index in targetIndices }
-        }.forEach {
             throw Fit3FormatException(
-                "${entry.basename}: widget ${it.ordinal} shares a frame with the Sprite " +
-                    "but is type ${it.widgetType}",
+                "${entry.basename}: a resize refuses the full-panel background raster",
+            )
+        }
+        // Only one type may reach into the pool: a Static or a Hand sharing a digit frame
+        // would mean the pool is not what this edit thinks it is.
+        pool.widgets.firstOrNull { it.widgetType != target.widgetType }?.let {
+            throw Fit3FormatException(
+                "${entry.basename}: widget ${it.ordinal} shares a raster with the " +
+                    "${WidgetSchema.spec(target.widgetType).name} but is type ${it.widgetType}",
             )
         }
         val selected = targetIndices.sorted().map(images::get)
@@ -728,19 +924,19 @@ object StructuralEditor {
             listOf(it.width, it.height, it.format, it.reserved, it.opaqueTrailerSize)
         }.toSet()
         if (signatures.size != 1) {
-            throw Fit3FormatException("${entry.basename}: Sprite frames do not share one format")
+            throw Fit3FormatException("${entry.basename}: pooled rasters do not share one format")
         }
         val signature = signatures.single()
-        if (signature[2] != IMAGE_RGB565_ALPHA || signature[3] != 0 || signature[4] != 4) {
+        if (signature[2] !in RESAMPLED_FORMATS ||
+            signature[3] != 0 ||
+            signature[4] != OPAQUE_TRAILER_BYTES
+        ) {
             throw Fit3FormatException(
-                "${entry.basename}: Sprite requires RGB565+A with the proven trailer schema",
+                "${entry.basename}: a resize requires the proven raster trailer schema",
             )
         }
-        if (signature[0] == width && signature[1] == height) {
-            throw Fit3FormatException("Sprite relocation requires a dimension change")
-        }
 
-        // The unedited record behind each frame, resolved through the widget that names
+        // The unedited record behind each raster, resolved through the widget that names
         // it rather than by image index.
         //
         // Index matching held only while nothing ever changed the record count, and
@@ -749,21 +945,83 @@ object StructuralEditor {
         // *previous* resize — Smaller, Larger, Smaller came back visibly softer — and
         // even with the count patched up, index i would name the raster before it.
         val pristineOrigins = pristineFrameOrigins(entry, pristineEntry, widgets, relativeImages)
+        val pristineRecords = pristineRecords(entry, pristineEntry, pool.widgets)
+        val pristineTarget = pristineRecords[target.globalIndex]
+        val pristineRaster = targetIndices.mapNotNull { pristineOrigins[it] }
 
-        // The frames' shipped extent, and with it the largest this resize may go: a sprite
-        // must be able to come back to what the face shipped — `00022`'s digits are 114×136
-        // — and growing past that is what SPRITE_RESIZE_CEILING bounds. The whole pool
-        // shares one signature (asserted above), so this is a single pair of numbers.
-        val shippedWidth = targetIndices.mapNotNull { pristineOrigins[it]?.width }.maxOrNull()
-            ?: signature[0]
-        val shippedHeight = targetIndices.mapNotNull { pristineOrigins[it]?.height }.maxOrNull()
-            ?: signature[1]
-        if (width > spriteResizeLimit(shippedWidth) || height > spriteResizeLimit(shippedHeight)) {
+        // **One reference frame, never a mix of the two.** Everything below is measured
+        // either entirely against the unedited container or entirely against the current
+        // one, and which is decided once, here.
+        //
+        // Mixing them is a bug with no symptom at the time. A duplicated widget has no
+        // pristine counterpart of its own — that is what `duplicateSourceGlobalIndex` is
+        // for — while the raster it shares with its source pairs perfectly, so the pristine
+        // artwork size resolved and the pristine *record* did not. Scaling one against the
+        // other left a cloned image Arc's raster 102 px inside a 64 px box after two taps,
+        // and left a cloned Hand's pivot at its shipped value inside half-size artwork,
+        // which is the 8×76 px slide off the dial that AGENTS.md already has a name for.
+        val pristineFrame = targetIndices.isNotEmpty() &&
+            pristineRaster.size == targetIndices.size
+        val shippedRasterWidth =
+            if (pristineFrame) pristineRaster.maxOf(ImageRecord::width) else signature[0]
+        val shippedRasterHeight =
+            if (pristineFrame) pristineRaster.maxOf(ImageRecord::height) else signature[1]
+
+        // What the caller's numbers mean, and what the rasters therefore become. They are
+        // the same thing for every type whose extent *is* its artwork, and they are not
+        // for the two that draw their artwork inside a box of another size.
+        val boxed = model as? WidgetSchema.ResizeModel.RasterWithBox
+        val boxFrame = pristineFrame && pristineTarget != null
+        val shippedWidth: Int
+        val shippedHeight: Int
+        val rasterWidth: Int
+        val rasterHeight: Int
+        if (boxed == null) {
+            shippedWidth = shippedRasterWidth
+            shippedHeight = shippedRasterHeight
+            rasterWidth = width
+            rasterHeight = height
+        } else {
+            val box = (if (boxFrame) pristineTarget else target)
+                ?: throw Fit3FormatException(
+                    "${entry.basename}: widget ${target.ordinal} has no record to resize",
+                )
+            shippedWidth = box.storedWidth?.takeIf { it > 0 }
+                ?: throw Fit3FormatException(
+                    "${entry.basename}: widget ${target.ordinal} stores no box to resize",
+                )
+            shippedHeight = box.storedHeight?.takeIf { it > 0 }
+                ?: throw Fit3FormatException(
+                    "${entry.basename}: widget ${target.ordinal} stores no box to resize",
+                )
+            // The raster and the box are scaled from the *same* frame, so their ratio is
+            // the one the face shipped however many rungs have been stepped since.
+            val rasterBaseWidth = if (boxFrame) shippedRasterWidth else signature[0]
+            val rasterBaseHeight = if (boxFrame) shippedRasterHeight else signature[1]
+            rasterWidth = scaledExtent(rasterBaseWidth, width, shippedWidth)
+            rasterHeight = scaledExtent(rasterBaseHeight, height, shippedHeight)
+        }
+        // A widget must be able to come back to what the face shipped — `00022`'s digits
+        // are 114×136 — and growing past that is what RASTER_RESIZE_CEILING bounds.
+        //
+        // The bound is on the *extent*, which for a boxed type is its box rather than its
+        // raster, so an image Arc whose artwork overhangs its box carries that overhang
+        // past the limit with it: face `00028`'s 90 px ring in an 84 px box reaches 137 px
+        // of raster at the 128 px rung. Clamping the raster instead would break the ratio
+        // the whole model rests on, the widest overhang in the catalogue is 7%, and
+        // `rebuild` still holds the container to 4 MiB — which is what the limit is for.
+        val widthLimit = widgetResizeLimit(shippedWidth, WidgetResizeKind.RASTER)
+        val heightLimit = widgetResizeLimit(shippedHeight, WidgetResizeKind.RASTER)
+        if (width > widthLimit || height > heightLimit) {
             throw Fit3FormatException(
-                "${entry.basename}: a Sprite that shipped at ${shippedWidth}x$shippedHeight " +
-                    "may be resized up to ${spriteResizeLimit(shippedWidth)}x" +
-                    "${spriteResizeLimit(shippedHeight)}, not ${width}x$height",
+                "${entry.basename}: a widget that shipped at ${shippedWidth}x$shippedHeight " +
+                    "may be resized up to ${widthLimit}x$heightLimit, not ${width}x$height",
             )
+        }
+        val boxUnchanged = boxed == null ||
+            (target.storedWidth == width && target.storedHeight == height)
+        if (signature[0] == rasterWidth && signature[1] == rasterHeight && boxUnchanged) {
+            throw Fit3FormatException("${entry.basename}: a resize requires a dimension change")
         }
 
         val newSection = ByteArrayOutputStream()
@@ -785,8 +1043,8 @@ object StructuralEditor {
                             it.opaqueTrailerSize == image.opaqueTrailerSize
                     },
                     originEntry = pristineEntry,
-                    width = width,
-                    height = height,
+                    width = rasterWidth,
+                    height = rasterHeight,
                 )
             }
         }
@@ -800,6 +1058,30 @@ object StructuralEditor {
             relativeImages = relativeImages,
             movedOffsets = moved,
         ) { _, before -> mappedOffsets.getValue(before) }
+        // Whatever else the model says has to describe the new artwork rather than the old
+        // — for **every** widget in the pool, not just the one that was selected. They
+        // share the raster records, so they all now draw artwork of a different size.
+        pool.widgets.forEach { pooled ->
+            rewriteResizedFields(
+                entry = entry,
+                pristineEntry = pristineEntry,
+                prefix = prefix,
+                record = pooled,
+                pristineRecord = pristineRecords[pooled.globalIndex]?.takeIf { pristineFrame },
+                isTarget = pooled.globalIndex == target.globalIndex,
+                model = model,
+                width = width,
+                height = height,
+                rasterWidth = rasterWidth,
+                rasterHeight = rasterHeight,
+                shippedRasterWidth = shippedRasterWidth,
+                shippedRasterHeight = shippedRasterHeight,
+                currentRasterWidth = signature[0],
+                currentRasterHeight = signature[1],
+                shippedWidth = shippedWidth,
+                shippedHeight = shippedHeight,
+            )
+        }
         val section = newSection.toByteArray()
         val replacement = prefix + section
         replacement.putU32(0x0C, section.size)
@@ -808,70 +1090,254 @@ object StructuralEditor {
         // The record count is exactly what the watch refuses to see change, so it is
         // asserted rather than assumed.
         if (parsedImages.size != images.size) {
-            throw Fit3FormatException("Sprite resize changed the frame count")
+            throw Fit3FormatException("a resize changed the image-record count")
         }
         targetIndices.forEach { index ->
-            if (parsedImages[index].width != width || parsedImages[index].height != height) {
-                throw Fit3FormatException("resized Sprite dimensions did not persist")
+            if (parsedImages[index].width != rasterWidth ||
+                parsedImages[index].height != rasterHeight
+            ) {
+                throw Fit3FormatException("resized dimensions did not persist")
             }
         }
-        // Every frame outside the pool keeps the size it had.
+        // Every raster outside the pool keeps the size it had.
         images.filterNot { it.index in targetIndices }.forEach { before ->
             val after = parsedImages[before.index]
             if (after.width != before.width || after.height != before.height) {
-                throw Fit3FormatException("Sprite resize disturbed a frame outside the pool")
+                throw Fit3FormatException("a resize disturbed a raster outside the pool")
             }
         }
-        val resizedTarget = FaceRecordParser.scanWidgets(parsed).single {
-            it.widgetType == SpriteWidgetType && it.sequenceId == sequenceId
+        // The pointers still name the same rasters, in the same order. A Sprite whose
+        // frame table repeats a raster — face 00046's weather set reuses three — has to go
+        // on repeating exactly the same one, or the relocation has quietly repointed a frame.
+        val resizedTarget = FaceRecordParser.scanWidgets(parsed)
+            .single { it.globalIndex == target.globalIndex }
+        val parsedRelative = parsedImages.associateBy {
+            (it.recordOffset - parsedImages.first().recordOffset).toLong()
         }
-        val oldIds = target.words.map { relativeImages.getValue(it).index }
-        val newByOffset = parsedImages.associate {
-            (it.recordOffset - parsedImages.first().recordOffset).toLong() to it.index
-        }
-        val newIds = resizedTarget.words.map(newByOffset::getValue)
+        val oldIds = FaceRecordParser.imagePointerFields(target, relativeImages)
+            .map { it.image.index }
+        val newIds = FaceRecordParser.imagePointerFields(resizedTarget, parsedRelative)
+            .map { it.image.index }
         if (oldIds != newIds) {
-            throw Fit3FormatException("Sprite duplicate-frame mapping changed")
+            throw Fit3FormatException("a resize changed the raster mapping")
         }
         return replacement
     }
 
     /**
-     * Every frame the resize has to rewrite: the sprite's own, plus every frame reached
-     * by a widget that shares one of them, closed over until nothing new appears.
+     * Rewrites the fields that describe the artwork's size, for the models that have any.
      *
-     * The frames are shared *records*, so there is no such thing as resizing one
-     * widget's copy — a face keeps a single glyph pool and points the hour and minute
-     * digits into it. Rewriting only the frames the selected sprite happens to name
-     * left its neighbour drawing two sizes at once.
+     * Called for **every widget in the pool**, because a pool is shared *records*: 12 of
+     * the catalogue's 16 LineBars share one raster three ways and 18 of its 469 Hands share
+     * theirs, so resizing the artwork under one of them leaves the others' own fields
+     * describing a size that no longer exists. That fails no validation — the container
+     * parses, the CRCs match, the install is accepted — and the widget simply draws wrong,
+     * which is the same shape as the bug that left a neighbour sprite drawing three small
+     * glyphs and seven large ones.
+     *
+     * Each field is scaled from the **pristine** record where there is one, so stepping the
+     * ladder down and back up returns the exact bytes it started from rather than drifting
+     * a pixel a time — the same reason the pixels are resampled from the pristine container.
      */
-    private fun sharedFrameClosure(
-        target: WidgetRecord,
-        widgets: List<WidgetRecord>,
-        relativeImages: Map<Long, ImageRecord>,
-    ): Set<Int> {
-        val framesOf = widgets.associateWith { widget ->
-            FaceRecordParser.referencedImages(widget, relativeImages).map(ImageRecord::index)
-        }
-        val closure = framesOf.getValue(target).toMutableSet()
-        while (true) {
-            val grown = framesOf.entries
-                .filter { (_, frames) -> frames.any { it in closure } }
-                .flatMap { (_, frames) -> frames }
-            if (!closure.addAll(grown)) return closure
+    private fun rewriteResizedFields(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry?,
+        prefix: ByteArray,
+        record: WidgetRecord,
+        pristineRecord: WidgetRecord?,
+        isTarget: Boolean,
+        model: WidgetSchema.ResizeModel,
+        width: Int,
+        height: Int,
+        rasterWidth: Int,
+        rasterHeight: Int,
+        shippedRasterWidth: Int,
+        shippedRasterHeight: Int,
+        currentRasterWidth: Int,
+        currentRasterHeight: Int,
+        shippedWidth: Int,
+        shippedHeight: Int,
+    ) {
+        val base = record.recordOffset
+        when (model) {
+            is WidgetSchema.ResizeModel.RasterWithPivot -> {
+                // The pivot is a point *inside* the artwork, so it scales with it — and
+                // then `x`/`y` has to absorb the difference, because the watch rotates the
+                // hand about `x + pivot` and that point must not move. Getting this half
+                // wrong is how the AOD renderer first slid a hand off the dial by the
+                // pivot's own offset: 8×76 px on face `00046`.
+                val reference = pristineRecord ?: record
+                // ...and read out of the container that record came from. Reading the
+                // pristine record's *offset* out of the current entry's bytes is a bug that
+                // looks like it works: the offsets coincide while only rasters have changed
+                // size, so it silently re-scales the pivot from the value the last resize
+                // left, and a Hand stepped down and back up came back with a pivot two
+                // thirds of the size of the artwork it belongs to.
+                val pristineFrame = pristineRecord != null && pristineEntry != null
+                val referenceData = if (pristineFrame) requireNotNull(pristineEntry).data
+                else entry.data
+                // The denominator has to be the artwork the reference pivot sits *inside*.
+                // Using the post-resize size here scaled the pivot by 1 and wrote back the
+                // value that was already there, which resamples a Hand's artwork and leaves
+                // its rotation pivot describing the size it used to be — silently, on a type
+                // the canvas draws no rectangle for.
+                val referenceWidth = if (pristineFrame) shippedRasterWidth else currentRasterWidth
+                val referenceHeight =
+                    if (pristineFrame) shippedRasterHeight else currentRasterHeight
+                val pivot = model.pivotOffset
+                val referencePivotX = referenceData.u16(reference.recordOffset + pivot)
+                    .toShort().toInt()
+                val referencePivotY = referenceData.u16(reference.recordOffset + pivot + 2)
+                    .toShort().toInt()
+                val currentPivotX = entry.data.u16(base + pivot).toShort().toInt()
+                val currentPivotY = entry.data.u16(base + pivot + 2).toShort().toInt()
+                val pivotX = scaledSpan(referencePivotX, rasterWidth, referenceWidth)
+                val pivotY = scaledSpan(referencePivotY, rasterHeight, referenceHeight)
+                val x = record.x + (currentPivotX - pivotX)
+                val y = record.y + (currentPivotY - pivotY)
+                if (listOf(pivotX, pivotY, x, y).any { it !in Short.MIN_VALUE..Short.MAX_VALUE }) {
+                    throw Fit3FormatException(
+                        "${entry.basename}: a resized Hand's pivot and position must fit " +
+                            "signed 16-bit integers",
+                    )
+                }
+                prefix.putU16(base + 0x18, x and 0xFFFF)
+                prefix.putU16(base + 0x1A, y and 0xFFFF)
+                prefix.putU16(base + pivot, pivotX and 0xFFFF)
+                prefix.putU16(base + pivot + 2, pivotY and 0xFFFF)
+            }
+
+            is WidgetSchema.ResizeModel.RasterWithBox -> {
+                // The selected widget gets exactly the box that was asked for. A widget
+                // sharing its raster gets its *own* box scaled by the same ratio, which is
+                // not always the same number: face `00028` puts an 84×84 box and an 88×88
+                // box on the same face, so setting them all to one figure would resize a
+                // neighbour to a size nobody chose.
+                // A sibling refuses on an unreadable box exactly as the target does. It
+                // used to `return` instead, which abandoned the whole function for that
+                // record — including the two `putU16`s below — after the shared rasters had
+                // already been rewritten: the silent stale-field outcome this function
+                // exists to prevent, in the one branch meant to prevent it.
+                val boxSource = (if (pristineRecord != null) pristineRecord else record)
+                val boxWidth = if (isTarget) {
+                    width
+                } else {
+                    scaledExtent(
+                        boxSource.storedWidth?.takeIf { it > 0 } ?: throw Fit3FormatException(
+                            "${entry.basename}: widget ${record.ordinal} shares this raster " +
+                                "and stores no box to scale with it",
+                        ),
+                        width,
+                        shippedWidth,
+                    )
+                }
+                val boxHeight = if (isTarget) {
+                    height
+                } else {
+                    scaledExtent(
+                        boxSource.storedHeight?.takeIf { it > 0 } ?: throw Fit3FormatException(
+                            "${entry.basename}: widget ${record.ordinal} shares this raster " +
+                                "and stores no box to scale with it",
+                        ),
+                        height,
+                        shippedHeight,
+                    )
+                }
+                if (boxWidth !in 1..WIDGET_EXTENT_CEILING ||
+                    boxHeight !in 1..WIDGET_EXTENT_CEILING
+                ) {
+                    throw Fit3FormatException(
+                        "${entry.basename}: widget ${record.ordinal} would take a " +
+                            "${boxWidth}x$boxHeight box, outside 1..$WIDGET_EXTENT_CEILING",
+                    )
+                }
+                prefix.putU16(base + 0x1C, boxWidth and 0xFFFF)
+                prefix.putU16(base + 0x1E, boxHeight and 0xFFFF)
+                // A LineBar's thickness equals its stored height in all 16 catalogue
+                // records, and it is the field the watch derives the bar's corner radius
+                // from, so it has to keep equalling it.
+                model.thicknessOffset?.let {
+                    prefix[base + it] = boxHeight.coerceIn(1, 0xFF).toByte()
+                }
+            }
+
+            // A Static and a Sprite carry no size field, so there is nothing to follow the
+            // artwork. Spelled out rather than left to an `else`, because this is the file
+            // whose rule is that a type added to one `when` and missed in another is how a
+            // valid container becomes a blank widget: a sixth model would fail to compile
+            // here instead of resizing the pixels and writing none of its own fields.
+            is WidgetSchema.ResizeModel.Raster -> Unit
+
+            is WidgetSchema.ResizeModel.Box,
+            is WidgetSchema.ResizeModel.Endpoint,
+            -> throw Fit3FormatException(
+                "${entry.basename}: ${WidgetSchema.spec(record.widgetType).name} stores its " +
+                    "own extent and must not reach the raster path",
+            )
         }
     }
 
+    /**
+     * Each of [records] paired with the record it came from in the unedited container.
+     *
+     * One [FaceRecordParser.originalWidgetSources] pass for the whole pool rather than one
+     * per widget: it walks both tables several times over, and a resize can reach eight
+     * widgets at once.
+     */
+    private fun pristineRecords(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry?,
+        records: List<WidgetRecord>,
+    ): Map<Int, WidgetRecord> {
+        if (pristineEntry == null) return emptyMap()
+        val sources = FaceRecordParser.originalWidgetSources(entry, pristineEntry)
+        val pristine = FaceRecordParser.scanWidgets(pristineEntry)
+            .associateBy(WidgetRecord::globalIndex)
+        return records.mapNotNull { record ->
+            sources[record.globalIndex]
+                ?.let(pristine::get)
+                ?.let { record.globalIndex to it }
+        }.toMap()
+    }
+
+    /**
+     * The record [target] came from in the unedited container, or null when nothing
+     * recoverable says which one that is.
+     *
+     * [FaceRecordParser.originalWidgetSources] rather than `(type, sequenceId)`, for the
+     * reason [pristineFrameOrigins] gives: a global index is not an identity across a
+     * structural edit and a Static's data source is `0` in 678 of 681 records, so neither
+     * on its own names a record.
+     */
+    private fun pristineRecord(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry,
+        target: WidgetRecord,
+    ): WidgetRecord? {
+        val index = FaceRecordParser.originalWidgetSources(entry, pristineEntry)[
+            target.globalIndex,
+        ] ?: return null
+        return FaceRecordParser.scanWidgets(pristineEntry)
+            .firstOrNull { it.globalIndex == index }
+    }
 
     /**
      * Current image index → the record it came from in the unedited container.
      *
      * Resolved through widget identity, because that is the only thing a structural edit
-     * preserves: for each pointer-bearing widget, the pristine container's widget with
-     * the same type and sequence id is found, and their pointer lists are paired by
-     * position. Face `00022`'s hour digits name frames 2–4 and 2–11 in both containers
-     * whatever the records were renumbered to, so this survives an inserted background,
-     * a removal, and a duplicate.
+     * preserves: each pointer-bearing widget is paired with its pristine counterpart and
+     * their pointer lists are matched by position. Face `00022`'s hour digits name frames
+     * 2–4 and 2–11 in both containers whatever the records were renumbered to, so this
+     * survives an inserted background, a removal, and a duplicate.
+     *
+     * **The pairing has to be [FaceRecordParser.originalWidgetSources], not `(type,
+     * sequenceId)`.** That key was written when only Sprites could be resized, where it
+     * is unique in 1,486 of 1,518 records. It is not an identity in general: a **Static's
+     * source word is `0` in 678 of the catalogue's 681 records**, so on any style carrying
+     * two Statics the `singleOrNull` below found nothing, every origin was dropped, and
+     * the resize silently resampled the *previous* resize — the same chained-loss defect
+     * that made Smaller, Larger, Smaller come back visibly softer on a real watch, arriving
+     * by a different route the moment resize reached a second type.
      *
      * A frame two widgets disagree about is dropped rather than guessed, which falls back
      * to resampling the current pixels for that frame alone.
@@ -890,13 +1356,14 @@ object StructuralEditor {
             (it.recordOffset - pristineStart).toLong()
         }
         val pristineWidgets = FaceRecordParser.scanWidgets(pristineEntry)
+            .associateBy(WidgetRecord::globalIndex)
+        val pristineSources = FaceRecordParser.originalWidgetSources(entry, pristineEntry)
         val origins = mutableMapOf<Int, ImageRecord>()
         val ambiguous = mutableSetOf<Int>()
         widgets.filter { it.widgetType in FaceRecordParser.POINTER_BEARING_TYPES }
             .forEach { widget ->
-                val match = pristineWidgets.singleOrNull {
-                    it.widgetType == widget.widgetType && it.sequenceId == widget.sequenceId
-                } ?: return@forEach
+                val match = pristineSources[widget.globalIndex]?.let(pristineWidgets::get)
+                    ?: return@forEach
                 val current = runCatching {
                     FaceRecordParser.imagePointerFields(widget, relativeImages)
                 }.getOrNull() ?: return@forEach
@@ -928,8 +1395,14 @@ object StructuralEditor {
     ) {
         val from = if (origin != null && originEntry != null) origin else image
         val data = if (origin != null && originEntry != null) originEntry.data else entry.data
-        val resized = nearestRgb565Alpha(
-            data.copyOfRange(from.pixelOffset, from.pixelOffset + from.pixelDataSize),
+        // An indexed raster's payload is a 1,024-byte BGRA palette followed by one index
+        // per pixel. The palette is fixed-length and describes colours, not geometry, so
+        // it is copied through untouched and only the sample plane is resampled — which
+        // is also why nearest neighbour is the only resampling that can be used here.
+        val palette = data.copyOfRange(from.pixelOffset, from.samplesOffset)
+        val resized = resampleRaster(
+            data.copyOfRange(from.samplesOffset, from.pixelOffset + from.pixelDataSize),
+            from.bytesPerPixel,
             from.width,
             from.height,
             width,
@@ -944,8 +1417,9 @@ object StructuralEditor {
         header.putU16(2, height)
         header.putU16(4, image.format)
         header.putU16(6, image.reserved)
-        header.putU32(8, resized.size + trailer.size)
+        header.putU32(8, palette.size + resized.size + trailer.size)
         out.write(header)
+        out.write(palette)
         out.write(resized)
         out.write(trailer)
     }
@@ -1347,24 +1821,43 @@ object StructuralEditor {
         }
     }
 
-    private fun nearestRgb565Alpha(
+    /**
+     * Nearest-neighbour resample of one raster's pixel samples, in whatever format the
+     * raster stores them in.
+     *
+     * [bytesPerPixel] is the only thing that differs between the three formats, which is
+     * why this takes it rather than naming one: 2 for `IMAGE_RGB565`, 3 for
+     * `IMAGE_RGB565_ALPHA`, 1 for an `IMAGE_INDEXED8` raster's sample plane. Hardcoding 3
+     * is what limited resize to RGB565+A frames and left **620 of the catalogue's 1,518
+     * Sprites** — 41% of them — refused for a reason that had nothing to do with the
+     * edit's safety: their frames are plain RGB565, and nothing else about them fails a
+     * check.
+     *
+     * Nearest neighbour is not a quality choice here, it is the only resampling that is
+     * *closed* over these formats. RGB565 carries 5/6/5 bits a channel and an indexed
+     * raster's samples are palette **indices**, so averaging two neighbours would invent a
+     * colour the palette does not contain. Copying whole samples is exact in every format
+     * and leaves the palette untouched, which is what makes one function enough.
+     */
+    private fun resampleRaster(
         source: ByteArray,
+        bytesPerPixel: Int,
         oldWidth: Int,
         oldHeight: Int,
         newWidth: Int,
         newHeight: Int,
     ): ByteArray {
-        if (source.size != oldWidth * oldHeight * 3) {
-            throw Fit3FormatException("RGB565+A frame payload does not match dimensions")
+        if (source.size != oldWidth * oldHeight * bytesPerPixel) {
+            throw Fit3FormatException("raster payload does not match its dimensions")
         }
-        val output = ByteArray(newWidth * newHeight * 3)
+        val output = ByteArray(newWidth * newHeight * bytesPerPixel)
         repeat(newHeight) { y ->
             val sourceY = minOf(oldHeight - 1, y * oldHeight / newHeight)
             repeat(newWidth) { x ->
                 val sourceX = minOf(oldWidth - 1, x * oldWidth / newWidth)
-                val oldOffset = (sourceY * oldWidth + sourceX) * 3
-                val newOffset = (y * newWidth + x) * 3
-                source.copyInto(output, newOffset, oldOffset, oldOffset + 3)
+                val oldOffset = (sourceY * oldWidth + sourceX) * bytesPerPixel
+                val newOffset = (y * newWidth + x) * bytesPerPixel
+                source.copyInto(output, newOffset, oldOffset, oldOffset + bytesPerPixel)
             }
         }
         return output

@@ -187,7 +187,7 @@
     <string name="editor_duplicate">Duplicate &amp; select clone</string>
     <string name="editor_remove_widget">Remove widget</string>
 
-    <!-- Sprite size -->
+    <!-- Widget size -->
     <string name="editor_size_heading">Size · aspect ratio locked</string>
     <string name="editor_size_value">%1$d × %2$d px</string>
     <string name="editor_size_shipped">the size this face shipped · steps of %1$d%%</string>
@@ -195,7 +195,10 @@
     <string name="editor_size_off_ladder">off the ladder · the next tap snaps onto a step of the original %1$d × %2$d</string>
     <string name="editor_size_smaller">Smaller</string>
     <string name="editor_size_larger">Larger</string>
-    <string name="editor_size_unavailable">Resizing rewrites every sprite frame this widget points at and moves the records after it. That is only safe on a widget with its own sprite sequence and one uniform RGB565+A frame format — this one does not match, so the controls stay off.</string>
+    <string name="editor_size_unavailable_artwork">Resizing rewrites every raster this widget points at and moves the records after it. That is only safe when the whole shared set is one uniform format this app can resample — this one is not, so the controls stay off.</string>
+    <string name="editor_size_unavailable_background">This layer covers the whole face. Replace it from the Background page, where an image can be fitted to the panel.</string>
+    <string name="editor_size_unavailable_geometry">This record does not store a size the editor can change, so there is nothing to scale here. Its position is still yours to move.</string>
+    <string name="editor_size_unavailable_text">The watch draws this widget\'s text with one of its own fonts, and the record stores only the box around it. Changing that box moves nothing on screen, so there is no size to offer here.</string>
 
     <!-- Shared -->
     <string name="editor_signed_pixels">%1$d px</string>

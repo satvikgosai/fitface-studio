@@ -4,6 +4,8 @@ import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.format.StructuralEditor
+import dev.fitface.studio.core.format.WIDGET_SPRITE
+import dev.fitface.studio.core.format.WIDGET_STATIC
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.drawLeft
@@ -13,6 +15,7 @@ import dev.fitface.studio.core.model.originalDrawTop
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.streams.asSequence
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -22,14 +25,23 @@ import org.junit.Test
  * A resize must take the widget's old pixels off the canvas with it.
  *
  * `preview.bin` is the vendor's render of the *unedited* face and no edit rewrites it,
- * so the reference still shows every resizable Sprite at the size it shipped at. The
+ * so the reference still shows every resizable widget at the size it shipped at. The
  * composer therefore has to clear the rectangle the widget *was* drawn in, not the one
  * it is drawn in now — clearing with the new, smaller rectangle leaves the outer ring
  * of the old sprite sitting on the canvas, which is what face `00022` showed.
  *
- * This drives the real thing: real containers, a real [StructuralEditor.resizeSprite],
+ * This drives the real thing: real containers, a real [StructuralEditor.resizeWidget],
  * and the guides assembled the way [WatchFaceRepositoryImpl] assembles them. Whatever
  * corpus is present is swept; with none it skips.
+ *
+ * **Only a Static and a Sprite are checked**, and the restriction is what makes the
+ * assertion mean anything rather than a preference: this counts overlay pixels left
+ * *inside the widget's old rectangle*, so it can only judge a type the vendor drew
+ * inside that rectangle. A Hand's render is rotated about its pivot and an image Arc's
+ * artwork is drawn at native size centred in its box, so for those the old rectangle is
+ * not where the pixels are and a clean result would prove nothing. It used to take
+ * whichever widget a face listed first, which while Sprites were the only resizable
+ * type was always a Sprite and is now a Hand on the analog faces.
  */
 class ResizedWidgetLeavesNoGhostTest {
     private val root: Path = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot")))
@@ -48,9 +60,9 @@ class ResizedWidgetLeavesNoGhostTest {
     }
 
     @Test
-    fun shrinkingASpriteClearsEveryPixelItsOldRectangleCovered() {
+    fun shrinkingAWidgetClearsEveryPixelItsOldRectangleCovered() {
         val failures = mutableListOf<String>()
-        var resizesChecked = 0
+        val checked = mutableMapOf<Int, Int>()
 
         containers.forEach { path ->
             val face = path.fileName.toString()
@@ -60,57 +72,84 @@ class ResizedWidgetLeavesNoGhostTest {
                 .firstOrNull { it.basename.matches(Regex("""style\d+\.bin""")) }
                 ?: return@forEach
             val reference = referenceFor(original, style.basename) ?: return@forEach
-            val target = FaceRecordParser.widgetGuides(style)
-                .firstOrNull { it.canResize && it.width > 1 && it.height > 1 }
-                ?: return@forEach
-
-            // Halve it. The bug is a shrink: the new rectangle no longer covers the
-            // pixels the vendor rendered, so anything left uncleared is a ghost.
-            val shrunk = runCatching {
-                StructuralEditor.resizeSprite(
-                    source = original,
-                    entryBasenames = listOf(style.basename),
-                    sequenceId = target.sequenceId,
-                    width = (target.width / 2).coerceAtLeast(1),
-                    height = (target.height / 2).coerceAtLeast(1),
-                ).container
-            }.getOrNull() ?: return@forEach
-
-            val editedStyle = shrunk.entryByBasename(style.basename)
-            val widgets = guidesWithOriginalGeometry(editedStyle, style)
-            val resized = widgets.singleOrNull { it.globalIndex == target.globalIndex }
-                ?: return@forEach
-            if (resized.width >= resized.originalWidth &&
-                resized.height >= resized.originalHeight
-            ) {
-                failures += "$face: resize did not shrink the reported extent"
-                return@forEach
-            }
-            resizesChecked++
-
-            val result = EditPreviewComposer.compose(
-                currentBackground = panelFrame(editedStyle),
-                originalBackground = panelFrame(style),
-                reference = reference,
-                widgets = widgets,
-                imageLayers = FaceRecordParser.widgetImageLayers(
-                    entry = editedStyle,
-                    originalEntry = style,
-                    reference = reference,
-                ),
-            )
-
-            val ghosts = ghostPixels(result.widgetOverlay, resized, widgets)
-            if (ghosts > 0) {
-                failures += "$face/${style.basename}: widget #${resized.globalIndex} " +
-                    "left $ghosts pixel(s) of its old " +
-                    "${resized.originalWidth}×${resized.originalHeight} rectangle behind " +
-                    "after shrinking to ${resized.width}×${resized.height}"
+            val guides = FaceRecordParser.widgetGuides(style)
+            // One of each checkable type per face rather than "the first resizable
+            // widget", which since resize stopped being a Sprite-only edit has picked
+            // whatever a face happens to list first — on an analog face, a Hand.
+            CHECKABLE_TYPES.forEach { type ->
+                val target = guides.firstOrNull {
+                    it.type == type && it.canResize && it.width > 1 && it.height > 1
+                } ?: return@forEach
+                checked.merge(type, 1, Int::plus)
+                failures += shrinkAndFindGhosts(original, style, reference, target, face)
             }
         }
 
-        assumeTrue("corpus holds no resizable sprite", resizesChecked > 0)
+        assertEquals(
+            "both checkable types have to be swept, or this test is not checking them",
+            CHECKABLE_TYPES.toSet(),
+            checked.keys,
+        )
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    /**
+     * Halves [target] and reports every pixel of its old rectangle left on the canvas.
+     *
+     * The bug is a shrink: the new rectangle no longer covers the pixels the vendor
+     * rendered, so anything left uncleared is a ghost.
+     */
+    private fun shrinkAndFindGhosts(
+        original: Fit3Container,
+        style: ContainerEntry,
+        reference: PreviewFrame,
+        target: WidgetGuide,
+        face: String,
+    ): List<String> {
+        val shrunk = runCatching {
+            StructuralEditor.resizeWidget(
+                source = original,
+                entryBasenames = listOf(style.basename),
+                globalIndex = target.globalIndex,
+                widgetType = target.type,
+                sequenceId = target.sequenceId,
+                x = target.x,
+                y = target.y,
+                width = (target.width / 2).coerceAtLeast(1),
+                height = (target.height / 2).coerceAtLeast(1),
+            ).container
+        }.getOrNull() ?: return emptyList()
+
+        val editedStyle = shrunk.entryByBasename(style.basename)
+        val widgets = guidesWithOriginalGeometry(editedStyle, style)
+        val resized = widgets.singleOrNull { it.globalIndex == target.globalIndex }
+            ?: return emptyList()
+        if (resized.width >= resized.originalWidth &&
+            resized.height >= resized.originalHeight
+        ) {
+            return listOf("$face: resize did not shrink the reported extent")
+        }
+
+        val result = EditPreviewComposer.compose(
+            currentBackground = panelFrame(editedStyle),
+            originalBackground = panelFrame(style),
+            reference = reference,
+            widgets = widgets,
+            imageLayers = FaceRecordParser.widgetImageLayers(
+                entry = editedStyle,
+                originalEntry = style,
+                reference = reference,
+            ),
+        )
+
+        val ghosts = ghostPixels(result.widgetOverlay, resized, widgets)
+        if (ghosts == 0) return emptyList()
+        return listOf(
+            "$face/${style.basename}: widget #${resized.globalIndex} (type ${resized.type}) " +
+                "left $ghosts pixel(s) of its old " +
+                "${resized.originalWidth}×${resized.originalHeight} rectangle behind " +
+                "after shrinking to ${resized.width}×${resized.height}",
+        )
     }
 
     /**
@@ -192,5 +231,10 @@ class ResizedWidgetLeavesNoGhostTest {
             height = panel.height,
             argb = IntArray(panel.width * panel.height) { 0xFF00_0000.toInt() },
         )
+    }
+
+    private companion object {
+        /** Static and Sprite — see the class comment for why the other five are not here. */
+        val CHECKABLE_TYPES = listOf(WIDGET_STATIC, WIDGET_SPRITE)
     }
 }

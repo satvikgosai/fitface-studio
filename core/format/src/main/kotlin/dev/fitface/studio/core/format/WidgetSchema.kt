@@ -59,6 +59,67 @@ object WidgetSchema {
         data class Table(val countOffset: Int, val firstOffset: Int) : PointerLayout
     }
 
+    /**
+     * How a widget of this type changes size — the shape of the edit, not whether any
+     * particular record may take it.
+     *
+     * This is in the schema table for the reason the pointer layout is: resize used to be
+     * one hardcoded path for one type, checked in `canResize` and then checked again in
+     * `StructuralEditor`, and "a type added to one `when` and missed in another is how a
+     * valid container becomes a blank widget". Five types resize by five slightly
+     * different rewrites, and the differences are exactly which *other* field has to move
+     * with the artwork.
+     *
+     * A null [Spec.resize] is a type this app will not resize, and each null has a reason
+     * beside it — a missing sample, or a size that does not live in the record at all.
+     */
+    sealed interface ResizeModel {
+        /**
+         * The record carries no size: its extent is its raster's, so resampling the
+         * artwork in place is the whole edit. Static and Sprite.
+         */
+        data object Raster : ResizeModel
+
+        /**
+         * A raster plus a rotation pivot *inside* it, at [pivotOffset] as `x,y` halfwords.
+         *
+         * The pivot scales with the artwork and `x`/`y` absorbs the difference, so the
+         * point the watch rotates about does not move. `pivot_x` is the artwork's
+         * horizontal middle in 448 of the catalogue's 469 Hand records, so this is what
+         * the producer does too.
+         */
+        data class RasterWithPivot(val pivotOffset: Int) : ResizeModel
+
+        /**
+         * A raster plus the stored box at `+0x1C`/`+0x1E`, which the watch draws the
+         * artwork *centred in* at native size rather than scaling it into.
+         *
+         * Face `00108` settles that from the vendor's own render: styles 0–3 store a
+         * 256×256 box around a 204×204 raster and the ring lands at 204 px, and styles 4–5
+         * reach the identical picture with a 256×256 raster whose ring is inset 26 px. So
+         * the box has to grow by the same delta about the same centre, or the container
+         * states two sizes for one widget.
+         *
+         * [thicknessOffset] is a `u8` that equals the stored height in all 16 LineBar
+         * records and has to keep doing so; an image Arc's thickness is independent.
+         */
+        data class RasterWithBox(val thicknessOffset: Int? = null) : ResizeModel
+
+        /**
+         * No raster at all: `+0x1C`/`+0x1E` is the extent the watch draws into, so the
+         * resize is two halfwords and the container does not change size by a single byte.
+         */
+        data object Box : ResizeModel
+
+        /**
+         * No raster: `+0x1C`/`+0x1E` is the *second endpoint*, so resizing means scaling
+         * the endpoint vector. An axis whose span is zero stays zero — 32 of the 84 Rules
+         * are exactly horizontal — and the stored endpoint is the far one in the other 52,
+         * which is why the sign of each delta is preserved rather than recomputed.
+         */
+        data object Endpoint : ResizeModel
+    }
+
     data class Spec(
         val type: Int,
         val name: String,
@@ -92,6 +153,8 @@ object WidgetSchema {
          * object, no live update. Preserved verbatim, never presented as editable.
          */
         val inert: Boolean = false,
+        /** How this type changes size, or null for one this app will not resize. */
+        val resize: ResizeModel? = null,
     ) {
         /** The exact size a record of this type must have, given its own bytes. */
         fun expectedSize(record: ByteArray, base: Int): Int? = when (val layout = pointers) {
@@ -119,6 +182,10 @@ object WidgetSchema {
         // Static afterwards. 678 of the 681 in the catalogue store zero.
         sources = null,
         followsCommonSource = false,
+        // 40 bytes of position, alignment, one pointer and an interaction flag: not one
+        // of them holds a size, so resampling the artwork is the entire edit. 388 of the
+        // 681 draw the panel background and are refused by the pool check, not by this.
+        resize = ResizeModel.Raster,
     )
 
     private val HAND = Spec(
@@ -133,6 +200,7 @@ object WidgetSchema {
         // A hand is not only a clock hand: the same primitive sweeps a gauge needle over
         // steps, battery, heart rate or calories.
         sources = setOf(1, 9, 13, 17, 21, 29, 37, 41, 48, 70, 71),
+        resize = ResizeModel.RasterWithPivot(pivotOffset = 0x20),
     )
 
     private val SPRITE = Spec(
@@ -149,6 +217,7 @@ object WidgetSchema {
             25, 26, 27, 28, 29, 37, 41, 48, 69, 70, 71,
             106, 107, 109, 110, 115, 117, 118, 119, 125,
         ),
+        resize = ResizeModel.Raster,
     )
 
     private val ANIMATION = Spec(
@@ -162,6 +231,11 @@ object WidgetSchema {
         pointers = PointerLayout.Table(countOffset = 0x24, firstOffset = 0x28),
         sources = null,
         followsCommonSource = false,
+        // Its frame table has the same shape as a Sprite's, so [ResizeModel.Raster] would
+        // fit — but no catalogue face carries one, [FaceRecordParser.referencedImages] has
+        // no case for it, so it has no drawn extent to resize *from*, and a resize offered
+        // on a type with no sample is a control nothing here can test. Fail closed.
+        resize = null,
     )
 
     private val PAIR = Spec(
@@ -188,6 +262,9 @@ object WidgetSchema {
         // show up as "Other" on nine faces: it is a gauge, not an unknown record.
         pointers = PointerLayout.None,
         sources = setOf(29, 37, 41, 48, 70, 71, 104, 115),
+        // Names no raster, so the box is the whole size and nothing is resampled: the
+        // cheapest resize in the format, and the only one that adds no bytes at all.
+        resize = ResizeModel.Box,
     )
 
     private val BADGE = Spec(
@@ -202,6 +279,7 @@ object WidgetSchema {
         hasStoredExtent = false,
         pointers = PointerLayout.None,
         sources = setOf(29, 37, 41, 48, 70, 71, 115),
+        resize = ResizeModel.Endpoint,
     )
 
     private val SOURCE_GROUP = Spec(
@@ -243,6 +321,9 @@ object WidgetSchema {
         hasStoredExtent = true,
         pointers = PointerLayout.Single(0x34),
         sources = setOf(29, 37, 41, 48, 70, 71, 104, 115),
+        // Thickness at +0x24 is independent of the box: face 00108 ships the same
+        // 256x256 box at thicknesses 70, 60 and 50 across its styles.
+        resize = ResizeModel.RasterWithBox(),
     )
 
     private val LINE_BAR = Spec(
@@ -255,6 +336,7 @@ object WidgetSchema {
         hasStoredExtent = true,
         pointers = PointerLayout.Single(0x2C),
         sources = setOf(29, 37, 41, 48, 70, 71, 115),
+        resize = ResizeModel.RasterWithBox(thicknessOffset = 0x30),
     )
 
     private fun reserved(type: Int) = Spec(

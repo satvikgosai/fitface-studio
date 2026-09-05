@@ -6,6 +6,7 @@ import dev.fitface.studio.core.model.WidgetCategory
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetImageLayer
 import dev.fitface.studio.core.model.WidgetPlacement
+import dev.fitface.studio.core.model.WidgetResizeKind
 import kotlin.math.abs
 
 const val STYLE_MAGIC = 0x12345678L
@@ -27,6 +28,15 @@ const val INDEXED_PALETTE_ENTRIES = 256
 const val INDEXED_PALETTE_BYTES = INDEXED_PALETTE_ENTRIES * 4
 const val IMAGE_HEADER_SIZE = 12
 const val STYLE_HEADER_SIZE = 24
+
+/**
+ * The four bytes every raster record ends with, after its pixels.
+ *
+ * Zero in all 6,315 rasters of the catalogue. A resize copies them through verbatim and
+ * refuses a raster that carries a different number of them, because a trailer of another
+ * length is a record shape this app has never seen.
+ */
+const val OPAQUE_TRAILER_BYTES = 4
 
 /**
  * Where [WidgetRecord.words] starts, which is `0x24`.
@@ -515,40 +525,149 @@ object FaceRecordParser {
      * and seven large ones, with its box still reporting the largest.
      */
     /**
-     * What a resize will actually do, which is not always "resize this widget". The
-     * frames are shared records, so the whole glyph pool moves together and the message
-     * has to say how many widgets that is before the user taps.
+     * Every raster a resize of one widget has to rewrite, and every widget that shares
+     * them.
+     *
+     * Rasters are shared *records*: a face keeps one glyph pool and points several widgets
+     * into it — face `00022` gives the hour's tens digit frames 2–4 and its units digit
+     * frames 2–11 — so there is no resizing one widget's copy. Rewriting only the frames
+     * the selected sprite named left the neighbour drawing three small glyphs and seven
+     * large ones, with its box still reporting the largest. 740 of the corpus's resizable
+     * sprites overlap like this, most often four deep.
+     *
+     * **The closure is over [imagePointerFields], not [referencedImages].** The narrow map
+     * is the one that decides a *drawn extent*, and it deliberately omits an image Arc's
+     * and a LineBar's rasters because those are not the rectangle the watch draws. Closing
+     * over it therefore returned an empty pool for exactly the two types whose rasters the
+     * relocation does move — the mirror image of the bug that left those pointers stale.
+     * A record whose pointers do not resolve contributes nothing rather than throwing:
+     * this runs over every widget in the entry, including ones no resize will touch.
      */
-    private fun resizeMessage(
-        pool: Set<Int>,
+    internal data class RasterPool(
+        /** Image record indices the pool covers. */
+        val images: Set<Int>,
+        /** Every widget reaching into it, the target included. */
+        val widgets: List<WidgetRecord>,
+        /**
+         * Whether any pointer-bearing record in the entry could not be read.
+         *
+         * The distinction matters because a record whose pointers do not resolve is
+         * invisible to the closure — it contributes neither its rasters nor itself — so a
+         * pool that looks exclusive might not be. `relocatePointers` refuses such an entry
+         * outright, and this is what lets the capability gate refuse it too, instead of
+         * lighting a control whose commit is certain to fail.
+         */
+        val unreadable: Boolean,
+    )
+
+    internal fun rasterPool(
+        target: WidgetRecord,
         records: List<WidgetRecord>,
         imagesByRelativeOffset: Map<Long, ImageRecord>,
-        target: WidgetRecord,
-    ): String {
-        val sharing = records.count { other ->
-            other.ordinal != target.ordinal &&
-                referencedImages(other, imagesByRelativeOffset).any { it.index in pool }
+    ): RasterPool {
+        fun rastersOf(record: WidgetRecord): List<Int> =
+            runCatching { imagePointerFields(record, imagesByRelativeOffset) }
+                .getOrDefault(emptyList())
+                .map { it.image.index }
+        val reachedBy = records.associateWith(::rastersOf)
+        val unreadable = records.any {
+            it.widgetType in POINTER_BEARING_TYPES && reachedBy.getValue(it).isEmpty()
         }
-        return if (sharing == 0) {
-            "Drag to move; resize every referenced Sprite frame together"
-        } else {
-            "Drag to move. Resizing rewrites the ${pool.size} shared frames behind this " +
-                "widget, so the $sharing other widget${if (sharing == 1) "" else "s"} " +
-                "drawing from the same set resize with it."
+        val images = rastersOf(target).toMutableSet()
+        while (true) {
+            val reached = reachedBy.filterValues { rasters -> rasters.any { it in images } }
+                .flatMap { it.value }
+            if (!images.addAll(reached)) {
+                return RasterPool(
+                    images = images,
+                    widgets = records.filter { record ->
+                        reachedBy.getValue(record).any { it in images }
+                    },
+                    unreadable = unreadable,
+                )
+            }
         }
     }
 
-    internal fun sharedFrameClosure(
+    /** Pixel formats [StructuralEditor] can resample, so the ones a resize may touch. */
+    private val RESAMPLED_FORMATS = setOf(IMAGE_RGB565, IMAGE_RGB565_ALPHA, IMAGE_INDEXED8)
+
+    /**
+     * Whether every raster a resize of [target] would rewrite matches the proven shape.
+     *
+     * One list, read by the capability gate and asserted again by the edit itself. All of
+     * it is about the *pool*: the new dimensions are written to every raster in it, so
+     * rasters that disagree about their format or their trailer cannot all be rewritten
+     * from one pair of numbers.
+     *
+     * The format condition used to be `IMAGE_RGB565_ALPHA` alone, which was never about
+     * safety — it was the one format the resampler could read. 620 Sprites, 41% of the
+     * catalogue's, were refused for it.
+     */
+    private fun poolIsResizable(
+        pool: RasterPool,
+        images: List<ImageRecord>,
+        background: ImageRecord?,
         target: WidgetRecord,
-        records: List<WidgetRecord>,
-        imagesByRelativeOffset: Map<Long, ImageRecord>,
-    ): Set<Int> {
-        val framesOf = records.map { referencedImages(it, imagesByRelativeOffset).map(ImageRecord::index) }
-        val closure = referencedImages(target, imagesByRelativeOffset)
-            .mapTo(mutableSetOf(), ImageRecord::index)
-        while (true) {
-            val reached = framesOf.filter { frames -> frames.any { it in closure } }.flatten()
-            if (!closure.addAll(reached)) return closure
+    ): Boolean {
+        if (pool.images.isEmpty()) return false
+        // `relocatePointers` refuses the whole entry when any pointer it is defined to
+        // relocate does not resolve, so the gate has to refuse it too. No catalogue face
+        // has one — all 6,315 rasters and every pointer to them resolve — but a gate that
+        // says yes where the commit says no is the one outcome this pairing exists to
+        // prevent.
+        if (pool.unreadable) return false
+        val poolImages = pool.images.sorted().mapNotNull(images::getOrNull)
+        if (poolImages.size != pool.images.size) return false
+        // A panel-sized layer belongs to the Background page, and it is reached here
+        // through the *wide* pointer map rather than through the drawn extent, so an Arc
+        // sharing the background raster would be caught even though its extent is its box.
+        if (background != null && background.index in pool.images) return false
+        // Only one type may reach into the pool. No pool in the catalogue spans two, and
+        // one that did would mean the pool is not the thing this edit takes it for — a
+        // Static sharing a digit frame with a Sprite, say.
+        if (pool.widgets.any { it.widgetType != target.widgetType }) return false
+        val signatures = poolImages.map {
+            listOf(it.width, it.height, it.format, it.reserved, it.opaqueTrailerSize)
+        }.toSet()
+        if (signatures.size != 1) return false
+        val sample = poolImages.first()
+        return sample.width > 0 &&
+            sample.height > 0 &&
+            sample.format in RESAMPLED_FORMATS &&
+            sample.reserved == 0 &&
+            sample.opaqueTrailerSize == OPAQUE_TRAILER_BYTES
+    }
+
+    /**
+     * The sentence a shared pool earns, or nothing when the widget owns its artwork.
+     *
+     * Separate from [resizeMessage] because a Hand needs it appended to a message of its
+     * own: it is `HIDDEN`, so its arm of the `when` used to swallow the pool warning
+     * entirely — for the one type whose result the canvas cannot show, and 18 of the
+     * catalogue's 469 share their artwork with another hand.
+     */
+    private fun sharedPoolSuffix(pool: RasterPool?, target: WidgetRecord): String {
+        val sharing = pool?.widgets?.count { it.ordinal != target.ordinal } ?: 0
+        if (sharing == 0) return ""
+        return " Resizing it rewrites the artwork behind $sharing other " +
+            "widget${if (sharing == 1) "" else "s"} drawing from the same set, so " +
+            "${if (sharing == 1) "it resizes" else "they resize"} with it."
+    }
+
+    /**
+     * What a resize will actually do, which is not always "resize this widget": the whole
+     * pool moves together, so the message has to say how many widgets that is before the
+     * user taps.
+     */
+    private fun resizeMessage(pool: RasterPool, target: WidgetRecord): String {
+        val sharing = pool.widgets.count { it.ordinal != target.ordinal }
+        return if (sharing == 0) {
+            "Drag to move; resize rewrites the artwork behind it"
+        } else {
+            "Drag to move. Resizing rewrites the ${pool.images.size} shared rasters behind " +
+                "this widget, so the $sharing other widget${if (sharing == 1) "" else "s"} " +
+                "drawing from the same set resize with it."
         }
     }
 
@@ -748,51 +867,6 @@ object FaceRecordParser {
             val referencedImages = referencedImages(it, imagesByRelativeOffset)
             val paintsBackground = background != null &&
                 referencedImages.any { image -> image.recordOffset == background.recordOffset }
-            // The whole glyph pool this Sprite reaches, because that is what the edit
-            // rewrites — every condition below has to hold for the pool, not just for
-            // the frames this record happens to name, or the UI enables a control whose
-            // commit is guaranteed to fail.
-            val resizePool = if (it.widgetType == WIDGET_SPRITE) {
-                sharedFrameClosure(it, records, imagesByRelativeOffset)
-            } else {
-                emptySet()
-            }
-            val poolImages = resizePool.sorted().mapNotNull(images::getOrNull)
-            val poolSignatures = poolImages.map { image ->
-                listOf(
-                    image.width,
-                    image.height,
-                    image.format,
-                    image.reserved,
-                    image.opaqueTrailerSize,
-                )
-            }.toSet()
-            val canResizeSprite = it.widgetType == WIDGET_SPRITE &&
-                records.count { candidate ->
-                    candidate.widgetType == WIDGET_SPRITE &&
-                        candidate.sequenceId == it.sequenceId
-                } == 1 &&
-                referencedImages.isNotEmpty() &&
-                !paintsBackground &&
-                // StructuralEditor.resizeSprite relocates the whole frame table and
-                // refuses a record holding any word that is not an image pointer, so
-                // only offer resize when every word is one.
-                referencedImages.size == it.words.size &&
-                poolImages.size == resizePool.size &&
-                background?.index !in resizePool &&
-                // Only Sprites may reach into the pool: a Static or a Hand sharing a
-                // digit frame would mean the pool is not what this edit assumes.
-                records.none { other ->
-                    other.widgetType != WIDGET_SPRITE &&
-                        referencedImages(other, imagesByRelativeOffset)
-                            .any { image -> image.index in resizePool }
-                } &&
-                poolSignatures.size == 1 &&
-                poolImages.first().let { image ->
-                    image.format == IMAGE_RGB565_ALPHA &&
-                        image.reserved == 0 &&
-                        image.opaqueTrailerSize == 4
-                }
             val extent = extents.getValue(it.ordinal)
             val place = placements.getValue(it.ordinal)
             val visualWidth = extent.width
@@ -806,7 +880,15 @@ object FaceRecordParser {
                 // useful; outlining a rectangle there would be a lie.
                 it.widgetType == WIDGET_HAND -> WidgetPlacement.HIDDEN
                 visualWidth <= 0 || visualHeight <= 0 -> WidgetPlacement.HIDDEN
-                panel.width > 0 && visualWidth >= panel.width &&
+                // Panel-sized *artwork* is a background layer — faces 00076 and 00089 each
+                // stack two, one Static apiece, which is why this size test exists beside
+                // `paintsBackground` at all. A widget that draws no raster is not one
+                // however large its stored box is, and requiring the raster closes a
+                // one-way door: the resize ladder tops out at 512 px a side, so growing a
+                // 400x400 vector arc used to relabel it as the background, after which it
+                // could be neither selected nor resized back.
+                referencedImages.isNotEmpty() && panel.width > 0 &&
+                    visualWidth >= panel.width &&
                     visualHeight >= panel.height -> WidgetPlacement.BACKGROUND
                 else -> WidgetPlacement.CANVAS
             }
@@ -814,6 +896,44 @@ object FaceRecordParser {
             // rectangle including whatever sits behind the glyphs.
             val opaqueBackdrop = referencedImages.isNotEmpty() &&
                 referencedImages.none(ImageRecord::hasAlphaChannel)
+            // What resizing this record would rewrite, and whether every part of it
+            // matches a shape this app has proven safe to rewrite.
+            //
+            // The type's own answer comes from [WidgetSchema.ResizeModel] rather than
+            // from a `when` here, because this gate and `StructuralEditor.resizeWidget`
+            // have to agree exactly: a control the UI lights and the commit refuses is
+            // the failure mode this whole path is arranged to avoid, and it used to be
+            // guarded by the two places testing for `WIDGET_SPRITE` independently.
+            //
+            // Every condition below holds for the whole raster *pool*, not for the
+            // record's own artwork: several widgets point into one glyph pool and they
+            // are the same records, so the edit moves all of them or none.
+            val resizeModel = WidgetSchema.spec(it.widgetType).resize
+            val resizePool = when (resizeModel) {
+                null, is WidgetSchema.ResizeModel.Box, is WidgetSchema.ResizeModel.Endpoint ->
+                    null
+                else -> rasterPool(it, records, imagesByRelativeOffset)
+            }
+            val resizeKind = when {
+                // A panel-sized layer is replaced from the Background page, which is
+                // where an image of the right shape can be chosen for it.
+                placement == WidgetPlacement.BACKGROUND -> WidgetResizeKind.NONE
+                // Nothing to scale, and nothing to scale it from.
+                visualWidth <= 0 || visualHeight <= 0 -> WidgetResizeKind.NONE
+                resizeModel == null -> WidgetResizeKind.NONE
+                resizeModel is WidgetSchema.ResizeModel.Box -> WidgetResizeKind.FIELDS
+                resizeModel is WidgetSchema.ResizeModel.Endpoint ->
+                    // A Rule is a line: scaling its endpoint vector needs a span to
+                    // scale, and a record whose two endpoints coincide has none.
+                    if (it.raw1C.toShort().toInt() != it.x || it.raw1E.toShort().toInt() != it.y) {
+                        WidgetResizeKind.FIELDS
+                    } else {
+                        WidgetResizeKind.NONE
+                    }
+                resizePool != null && poolIsResizable(resizePool, images, background, it) ->
+                    WidgetResizeKind.RASTER
+                else -> WidgetResizeKind.NONE
+            }
             WidgetGuide(
                 ordinal = it.ordinal,
                 globalIndex = it.globalIndex,
@@ -829,7 +949,7 @@ object FaceRecordParser {
                 // say what a stored coordinate means, so it does not offer to change it.
                 // No catalogue face contains one.
                 canEditPosition = place.isMovable,
-                canResize = canResizeSprite,
+                resizeKind = resizeKind,
                 placement = placement,
                 originX = place.originX,
                 originY = place.originY,
@@ -853,14 +973,30 @@ object FaceRecordParser {
                     it.widgetType == WIDGET_HAND ->
                         "A clock hand: the watch rotates its ${visualWidth}×$visualHeight " +
                             "artwork about a pivot, so there is no fixed rectangle to outline. " +
-                            "Nudging still rewrites its stored coordinates."
+                            "Nudging still rewrites its stored coordinates." +
+                            // A Hand is HIDDEN, so this arm used to swallow the pool
+                            // warning for the one type that cannot show the result: 18 of
+                            // the catalogue's 469 Hands share their artwork with another
+                            // hand, which resizes with them. The note follows the *offer*,
+                            // not the pool: every corpus Hand is resizable today, but one
+                            // whose pool failed `poolIsResizable` would get no size
+                            // controls and a sentence about what resizing it does.
+                            sharedPoolSuffix(
+                                resizePool.takeIf { resizeKind == WidgetResizeKind.RASTER },
+                                it,
+                            )
                     placement == WidgetPlacement.HIDDEN ->
                         "This record has no drawn rectangle, so the editor cannot preview it. " +
                             "Nudging still rewrites its stored coordinates."
                     canEditPair -> "Drag to move; choose an opaque Value color below"
-                    canResizeSprite -> resizeMessage(resizePool, records, imagesByRelativeOffset, it)
-                    it.widgetType == WIDGET_SPRITE ->
-                        "Drag to move; this Sprite does not match the proven resize schema"
+                    resizeKind == WidgetResizeKind.RASTER && resizePool != null ->
+                        resizeMessage(resizePool, it)
+                    resizeKind == WidgetResizeKind.FIELDS ->
+                        "Drag to move; resize rewrites the size stored in the record, so " +
+                            "the watch redraws it and the container does not change size"
+                    resizeModel != null ->
+                        "Drag to move; this widget's artwork does not match the proven " +
+                            "resize schema"
                     it.widgetType == WIDGET_PAIR -> "Drag to move; Value color schema is opaque"
                     else -> "Drag to move; ${WidgetCategory.forWidgetType(it.widgetType).label
                         .lowercase()} internals are preserved verbatim"

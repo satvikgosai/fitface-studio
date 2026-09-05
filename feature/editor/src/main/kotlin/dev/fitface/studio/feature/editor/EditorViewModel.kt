@@ -19,7 +19,9 @@ import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WidgetGuide
-import dev.fitface.studio.core.model.spriteResizeLimit
+import dev.fitface.studio.core.model.WidgetResizeStepPercent
+import dev.fitface.studio.core.model.nextWidgetSize
+import dev.fitface.studio.core.model.widgetSizePercent
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
@@ -584,7 +586,7 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
-     * Steps the selected widget one rung along its resize ladder — see [spriteResizeLadder]
+     * Steps the selected widget one rung along its resize ladder — see [widgetResizeLadder]
      * for why the sizes come from a ladder rather than from scaling what is on screen.
      */
     fun resizeSelectedWidget(grow: Boolean) {
@@ -593,12 +595,16 @@ class EditorViewModel @Inject constructor(
             it.globalIndex == mutableState.value.selectedWidgetIndex
         } ?: return
         if (!selected.canResize) return
-        val next = nextSpriteSize(selected, grow) ?: return
+        val next = nextWidgetSize(selected, grow) ?: return
         if (next.width == selected.width && next.height == selected.height) return
         operate {
-            repository.resizeSprite(
+            repository.resizeWidget(
                 styleName = snapshot.selectedVariant.basename,
+                globalIndex = selected.globalIndex,
+                widgetType = selected.type,
                 sequenceId = selected.sequenceId,
+                x = selected.x,
+                y = selected.y,
                 width = next.width,
                 height = next.height,
                 applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
@@ -888,84 +894,6 @@ class EditorViewModel @Inject constructor(
 }
 
 /** One rung of a widget's resize ladder. */
-internal data class SpriteSize(val percentOfOriginal: Int, val width: Int, val height: Int) {
-    val area: Long get() = width.toLong() * height
-}
-
-/** How much of the original extent one Smaller or Larger tap is worth. */
-internal const val SpriteResizeStepPercent = 5
-
-/**
- * Percentages of the *original* extent a resize is allowed to land on, 20% to 200%.
- *
- * Scaling the current extent by a factor instead is what made resizing unpredictable:
- * ×0.875 then ×1.125 does not come back, so 60×60 went to 52×52, back up to 58×58, down
- * to 50×50 — every round trip a little smaller, and no size reachable twice. Each rung
- * here is a fixed fraction of the extent the face shipped with, and
- * [dev.fitface.studio.core.model.WatchFaceRepository.resizeSprite] resamples the pristine
- * frames every time, so the same rung always produces the same pixels and Smaller then
- * Larger is exactly the size it started from.
- */
-private val SpriteResizePercents: List<Int> =
-    (20..200 step SpriteResizeStepPercent).toList()
-
-/**
- * Every size the selected widget can be resized to, smallest first.
- *
- * The top is [spriteResizeLimit] per side: a sprite can always be taken back to the extent
- * its face shipped — `00022`'s digits are 114×136 — and 128 px is how far past that it may
- * grow. Rungs over that are **dropped, not clamped**, because clamping one side of an
- * aspect-locked pair squashes the sprite: growing 57×68 repeatedly used to end at 128×128.
- * So a face with oversized frames tops out at exactly 100%.
- */
-internal fun spriteResizeLadder(originalWidth: Int, originalHeight: Int): List<SpriteSize> {
-    if (originalWidth <= 0 || originalHeight <= 0) return emptyList()
-    val widthLimit = spriteResizeLimit(originalWidth)
-    val heightLimit = spriteResizeLimit(originalHeight)
-    return SpriteResizePercents
-        .map { percent ->
-            SpriteSize(
-                percentOfOriginal = percent,
-                width = scaledExtent(originalWidth, percent),
-                height = scaledExtent(originalHeight, percent),
-            )
-        }
-        .filter { it.width <= widthLimit && it.height <= heightLimit }
-        // A small sprite's rungs round to the same pixel size — at 5% steps a 4×4 sprite is
-        // 4×4 anywhere from 90% to 110%. Keep one rung per size so a tap always changes
-        // something, and label it with the percentage nearest 100 so the extent the face
-        // shipped with is always the one that reads "100%".
-        .groupBy { it.width to it.height }
-        .map { (_, rungs) -> rungs.minBy { abs(it.percentOfOriginal - 100) } }
-        .sortedBy { it.area }
-}
-
-private fun scaledExtent(extent: Int, percent: Int): Int =
-    ((extent * percent + 50) / 100).coerceAtLeast(1)
-
-/**
- * The rung a Smaller or Larger tap moves to, or null at the end of the ladder.
- *
- * Chosen by area rather than by index so an extent that is not on the ladder — a project
- * resized by an earlier build, whose sizes came from repeated multiplication — snaps onto
- * it in the direction of the tap instead of jumping.
- */
-internal fun nextSpriteSize(widget: WidgetGuide, grow: Boolean): SpriteSize? {
-    val ladder = spriteResizeLadder(widget.originalWidth, widget.originalHeight)
-    val area = widget.width.toLong() * widget.height
-    return if (grow) {
-        ladder.firstOrNull { it.area > area }
-    } else {
-        ladder.lastOrNull { it.area < area }
-    }
-}
-
-/** Where the widget currently sits on its ladder, as a percentage of the original. */
-internal fun spriteSizePercent(widget: WidgetGuide): Int? =
-    spriteResizeLadder(widget.originalWidth, widget.originalHeight)
-        .firstOrNull { it.width == widget.width && it.height == widget.height }
-        ?.percentOfOriginal
-
 /**
  * Zoom for the pending background image, stepped in whole percentage points.
  *

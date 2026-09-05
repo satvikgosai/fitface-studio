@@ -3,6 +3,12 @@ package dev.fitface.studio.feature.editor
 import androidx.compose.ui.geometry.Offset
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.WidgetGuide
+import dev.fitface.studio.core.model.WidgetResizeKind
+import dev.fitface.studio.core.model.WidgetResizeStepPercent
+import dev.fitface.studio.core.model.WidgetSize
+import dev.fitface.studio.core.model.nextWidgetSize
+import dev.fitface.studio.core.model.widgetResizeLadder
+import dev.fitface.studio.core.model.widgetSizePercent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -248,22 +254,22 @@ class WidgetHitTest {
     @Test
     fun resizeStepsAreFixedFractionsOfTheOriginalExtent() {
         val original = sprite(width = 60, height = 60)
-        assertEquals(SpriteSize(95, 57, 57), nextSpriteSize(original, grow = false))
+        assertEquals(WidgetSize(95, 57, 57), nextWidgetSize(original, grow = false))
 
         val shrunk = sprite(width = 54, height = 54, originalWidth = 60, originalHeight = 60)
-        assertEquals(SpriteSize(95, 57, 57), nextSpriteSize(shrunk, grow = true))
-        assertEquals(SpriteSize(85, 51, 51), nextSpriteSize(shrunk, grow = false))
-        assertEquals(90, spriteSizePercent(shrunk))
+        assertEquals(WidgetSize(95, 57, 57), nextWidgetSize(shrunk, grow = true))
+        assertEquals(WidgetSize(85, 51, 51), nextWidgetSize(shrunk, grow = false))
+        assertEquals(90, widgetSizePercent(shrunk))
     }
 
     /** Smaller, Larger, Smaller lands back where the first Smaller put it. */
     @Test
     fun aResizeRoundTripReturnsToTheSameSize() {
-        var size = SpriteSize(100, 60, 60)
+        var size = WidgetSize(100, 60, 60)
         val steps = listOf(false, true, false, true, false)
         val visited = steps.map { grow ->
             size = requireNotNull(
-                nextSpriteSize(
+                nextWidgetSize(
                     sprite(size.width, size.height, originalWidth = 60, originalHeight = 60),
                     grow,
                 ),
@@ -279,10 +285,10 @@ class WidgetHitTest {
     /** A step is 5% of the original, which on a 60 px sprite is 3 px rather than 6. */
     @Test
     fun oneStepIsFivePercentOfTheOriginal() {
-        assertEquals(5, SpriteResizeStepPercent)
-        val ladder = spriteResizeLadder(60, 60)
+        assertEquals(5, WidgetResizeStepPercent)
+        val ladder = widgetResizeLadder(60, 60)
         assertEquals((20..200 step 5).toList(), ladder.map { it.percentOfOriginal })
-        assertEquals(3, 60 - requireNotNull(nextSpriteSize(sprite(60, 60), grow = false)).width)
+        assertEquals(3, 60 - requireNotNull(nextWidgetSize(sprite(60, 60), grow = false)).width)
     }
 
     /**
@@ -293,7 +299,7 @@ class WidgetHitTest {
      */
     @Test
     fun everyRungKeepsTheOriginalAspectRatio() {
-        val ladder = spriteResizeLadder(57, 68)
+        val ladder = widgetResizeLadder(57, 68)
         assertTrue(ladder.isNotEmpty())
         ladder.forEach { rung ->
             assertEquals(scaled(57, rung.percentOfOriginal), rung.width)
@@ -315,22 +321,22 @@ class WidgetHitTest {
     @Test
     fun anOversizedWidgetCanBeTakenBackToWhatItShipped() {
         val shipped = sprite(width = 114, height = 136)
-        assertEquals(100, spriteSizePercent(shipped))
-        assertNull(nextSpriteSize(shipped, grow = true))
-        assertEquals(SpriteSize(100, 114, 136), spriteResizeLadder(114, 136).last())
+        assertEquals(100, widgetSizePercent(shipped))
+        assertNull(nextWidgetSize(shipped, grow = true))
+        assertEquals(WidgetSize(100, 114, 136), widgetResizeLadder(114, 136).last())
 
         val shrunk = sprite(width = 57, height = 68, originalWidth = 114, originalHeight = 136)
-        assertEquals(50, spriteSizePercent(shrunk))
-        assertEquals(SpriteSize(55, 63, 75), nextSpriteSize(shrunk, grow = true))
+        assertEquals(50, widgetSizePercent(shrunk))
+        assertEquals(WidgetSize(55, 63, 75), nextWidgetSize(shrunk, grow = true))
         // And the whole way back up, one rung at a time, ends on the shipped extent.
-        var size = SpriteSize(50, 57, 68)
+        var size = WidgetSize(50, 57, 68)
         while (true) {
-            size = nextSpriteSize(
+            size = nextWidgetSize(
                 sprite(size.width, size.height, originalWidth = 114, originalHeight = 136),
                 grow = true,
             ) ?: break
         }
-        assertEquals(SpriteSize(100, 114, 136), size)
+        assertEquals(WidgetSize(100, 114, 136), size)
     }
 
     /**
@@ -341,21 +347,21 @@ class WidgetHitTest {
     @Test
     fun anExtentOffTheLadderSnapsOnInTheDirectionOfTheTap() {
         val drifted = sprite(width = 53, height = 53, originalWidth = 60, originalHeight = 60)
-        assertEquals(SpriteSize(90, 54, 54), nextSpriteSize(drifted, grow = true))
-        assertEquals(SpriteSize(85, 51, 51), nextSpriteSize(drifted, grow = false))
-        assertNull(spriteSizePercent(drifted))
+        assertEquals(WidgetSize(90, 54, 54), nextWidgetSize(drifted, grow = true))
+        assertEquals(WidgetSize(85, 51, 51), nextWidgetSize(drifted, grow = false))
+        assertNull(widgetSizePercent(drifted))
     }
 
     /** A tiny sprite's low rungs round to the same pixels; each size is offered once. */
     @Test
     fun aTinySpriteHasOneRungPerDistinctSize() {
-        val ladder = spriteResizeLadder(4, 4)
+        val ladder = widgetResizeLadder(4, 4)
         assertEquals(ladder.map { it.width to it.height }.distinct().size, ladder.size)
         assertTrue(ladder.all { it.width >= 1 && it.height >= 1 })
         assertEquals(8 to 8, ladder.last().let { it.width to it.height })
         // The shipped extent is always the rung that reads 100%, even where three
         // percentages round to it.
-        assertEquals(SpriteSize(100, 4, 4), ladder.single { it.width == 4 })
+        assertEquals(WidgetSize(100, 4, 4), ladder.single { it.width == 4 })
     }
 
     /**
@@ -386,7 +392,7 @@ class WidgetHitTest {
     ) = guide(globalIndex = 0, x = 0, y = 0, width = width, height = height).copy(
         originalWidth = originalWidth,
         originalHeight = originalHeight,
-        canResize = true,
+        resizeKind = WidgetResizeKind.RASTER,
     )
 
     private fun guide(

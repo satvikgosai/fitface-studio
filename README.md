@@ -168,11 +168,12 @@ container at all and is labelled *Not editable* rather than failing at download.
 This is research-grade software for one watch family. A structurally valid file
 can still be rejected by different firmware, unavailable storage, battery state,
 or watch-side policy. Delivery, background replacement, adding a background,
-widget moves and sprite resizes have all been confirmed on an SM-R390; two
+widget moves and widget resizes have all been confirmed on an SM-R390; two
 firmware limits found that way are enforced in the app — a container may not pass
-4 MiB, and a sprite may not grow more than 128 px per side past what its face
-shipped. Neither is documented anywhere, so treat both as measured rather than
-specified. The photo above is one of those runs: a face sent from the app,
+4 MiB, and artwork may not grow more than 128 px per side past what its face
+shipped. Resize now reaches every widget whose size the container actually holds,
+which is seven of the seventeen record types. Neither limit is documented anywhere,
+so treat both as measured rather than specified. The photo above is one of those runs: a face sent from the app,
 rendering on the watch.
 
 ## Documentation

@@ -1,4 +1,5 @@
 .gradle/
+.agents
 **/build/
 .kotlin/
 local.properties

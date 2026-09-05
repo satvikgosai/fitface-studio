@@ -132,6 +132,18 @@ The four that catch people fastest:
   Reading it by index handed the composer the battery's rectangle to clear and the
   frame lookup an 11-frame table to index with 6 words, so the restored sprite dropped
   off the canvas leaving a bare outline — with no exception and no validation error.
+* **A data source is not an identity either, and a Static is where that bites.** Its
+  `+0x04` is `0` in **678 of the catalogue's 681 records**, so `(type, sequenceId)` names
+  nothing — it was a workable key only while Sprites were the one resizable type, where it
+  is unique in 1,486 of 1,518. Resize now takes the same tuple every other widget edit
+  takes and resolves it through `StyleWidgetMatch`, and `pristineFrameOrigins` pairs through
+  `originalWidgetSources` for the same reason: keyed on `(type, sequenceId)` its
+  `singleOrNull` found nothing on any style carrying two Statics, dropped every pristine
+  origin, and left each resize resampling the *previous* resize — the chained-loss defect
+  that made Smaller, Larger, Smaller come back visibly softer, arriving by a second route.
+  Selecting *entries* rather than *records* was the other half: a face whose styles carry
+  different widgets failed the whole edit instead of editing the ones that have it, which is
+  the rule every other edit here already followed.
 * **A Static's raster pointer is `+0x20`, and it has to be relocated with the
   section.** `words[0]` is `0x0` in every corpus Static and only looks like a pointer
   because `0x0` is the first image's own relative offset, so relocating the word while
@@ -281,17 +293,17 @@ The four that catch people fastest:
   one.** ×0.875 then ×1.125 does not come back: 60×60 → 52×52 → 58×58 → 50×50, so no size
   was reachable twice and Smaller/Larger drifted a widget smaller every round trip. And
   clamping each side at 128 separately broke the aspect ratio the panel promises — growing
-  57×68 repeatedly ended at 128×128. `spriteResizeLadder` offers fixed 5% fractions of
+  57×68 repeatedly ended at 128×128. `widgetResizeLadder` offers fixed 5% fractions of
   `originalWidth`/`originalHeight` and **drops** rungs over the limit rather than clamping
   them; the background image's zoom steps 2 percentage points for the same reason. Do not
   reintroduce a multiplying step, and do not coarsen the step back to 10% — 6 px a tap on a
   60 px glyph was the complaint that shrank it.
-* **A sprite resize is device-proven, and its bound is `spriteResizeLimit`, not a flat
+* **A raster resize is device-proven, and its bound is `widgetResizeLimit`, not a flat
   128.** The watch does redraw a resized sprite. 128 px per side is how far a sprite may
   grow *past what its face shipped*; the shipped extent itself is always reachable, because
   resampling to the original dimensions restores the original record lengths and hands the
   container back its shipped size. That is why `00022`'s 114×136 digits can be restored now
-  and could not before. `resizeSpriteEntry` resolves the shipped extent through
+  and could not before. The edit resolves the shipped extent through
   `pristineFrameOrigins` — without a `pristine` container it falls back to the current
   extent, which is all it can know.
 * **Arc `words[4]` and LineBar `words[2]` are raster pointers.** All 30 and 16 corpus
@@ -502,20 +514,70 @@ The four that catch people fastest:
   install command was accepted, and the face never updated. The independent Python
   analyzer verifies those containers — CRCs, zero byte residual, exact rebuild — so the
   bytes are sound and this is firmware policy, not a format bug. **Never add or remove
-  an image record.** `resizeSpriteEntry` asserts the count afterwards.
-* **Sprites share their frames, so a resize moves the whole pool.** A face keeps one
-  glyph pool and points several widgets at it: face `00022`'s hour tens digit addresses
-  frames 2–4 and its units digit frames 2–11. Rewriting only the frames the selected
-  sprite names left the neighbour drawing three small glyphs and seven large ones, its
-  box still reporting the largest — a raster-backed extent is the max over its frames.
-  **740 of the corpus's 859 resizable sprites share frames**, so refusing was not an
-  option either. `FaceRecordParser.sharedFrameClosure` closes over every widget reaching
-  into the pool and the records are rewritten **in place**; `canResize` validates the
-  whole closure, so the UI never offers an edit whose commit would fail.
+  an image record.** `resizeRasterEntry` asserts the count afterwards.
+* **Widgets share their rasters, so a resize moves the whole pool — and the pool rule
+  covers the *fields*, not just the pixels.** A face keeps one glyph pool and points
+  several widgets at it: face `00022`'s hour tens digit addresses frames 2–4 and its units
+  digit frames 2–11. Rewriting only the frames the selected sprite names left the neighbour
+  drawing three small glyphs and seven large ones, its box still reporting the largest — a
+  raster-backed extent is the max over its frames. **740 of the corpus's 859 resizable
+  sprites share frames**, so refusing was not an option either.
+  `FaceRecordParser.rasterPool` closes over every widget reaching into the pool and the
+  records are rewritten **in place**; `canResize` validates the whole closure, so the UI
+  never offers an edit whose commit would fail.
+  Once resize reached types that store their own geometry, the same sharing became a
+  second bug waiting: **12 of the 16 LineBars share one raster three ways and 18 of the 469
+  Hands share theirs**, so resizing the artwork under one of them left the others' own box,
+  thickness and pivot describing a size that no longer existed — valid bytes, accepted
+  install, wrong picture. `rewriteResizedFields` runs for every widget in the pool, each
+  scaled from its own pristine record, because face `00028` puts an 84×84 box and an 88×88
+  box on one face and setting them all to one figure would resize a neighbour to a size
+  nobody chose.
+* **A resize's reference bytes come from the pristine *entry*, not from the pristine
+  record's offset in the current one.** Those offsets coincide for as long as nothing
+  changes a record's length, so reading `entry.data` at the paired record's offset looks
+  like it works and silently re-scales from whatever the last resize left: a Hand stepped
+  down and back up came back with a pivot two thirds the size of the artwork it belongs to,
+  the rotation centre still correct, so nothing looked wrong until it was measured.
+  `WidgetResizeByTypeTest.aHandResizeRoundTripIsExact` is what caught it, and a byte-exact
+  round trip is the only assertion that would have.
+* **Resize is three mechanisms, and the type table decides which.** A Static and a Sprite
+  carry no size (resample and stop); a Hand adds a pivot that scales with the artwork while
+  `x`/`y` absorbs the difference, so `x + pivot` does not move; an image Arc and a LineBar
+  carry a box that scales with it, and for those the *box* is what a requested size means —
+  the watch draws their artwork at native size centred in it, which face `00108`'s own
+  vendor render settles. A vector arc and a Rule name no raster at all, so their resize is a
+  same-size patch that adds no bytes and is bounded by `WIDGET_EXTENT_CEILING` rather than
+  by the container ceiling. `WidgetSchema.ResizeModel` is the single table; `canResize` and
+  `StructuralEditor.resizeWidget` both read it, because the two of them testing for
+  `WIDGET_SPRITE` independently is exactly how a control gets lit that the commit refuses.
+* **A Rule's thickness is one axis of its own extent, so a resize has to scale it.** Its
+  extent is `max(|span|, thickness)` per axis, and 32 of the 84 Rules are exactly
+  horizontal — so on those one axis *is* the thickness and no endpoint write moves it. While
+  the thickness was left alone the widget came back at a size on no rung, `nextWidgetSize`
+  offered the rung already in force, and the format layer refused it with the button still
+  lit: **56 of the 84 reached that within a few taps**, face `00049` on the second. One step
+  of a corpus sweep cannot see it, which is why `ResizeLadderWalkTest` walks, and why the
+  ladder moved to `:core:model` — a test that drives the real ladder against real containers
+  is the only way "the editor's ladder and the format layer agree exactly" stops being an
+  assertion. Where an axis of the reported extent is the thickness, the new thickness is the
+  value **requested** for that axis, not a second rounding of the same ratio: those two
+  disagreed by one pixel on `00049` and put it back off the ladder. A vector arc's thickness
+  is the opposite case and is left alone — it is its own field and face `00108` ships one box
+  at three thicknesses.
+* **A Value's box is not its size, so text resize is a different feature.** Face `00005`
+  stores the same Composite at 180×40 in one style and 180×60 in three others, same font,
+  same position — and the vendor's render is pixel-identical in all four. The size is four
+  bytes in `font_N.bin` at `+0x58`, which is a **container-level** resource: 58 of the 180
+  referenced bindings serve several widgets in one style, and **32 serve `aod.bin` and
+  numbered styles at once**, which `Session.editTargets` cannot separate because the
+  resource sits outside every entry. Do not "add resize" to a Value by writing its box: it
+  moves nothing on the watch, and the composer would resample the vendor's text into the new
+  rectangle and show scaled glyphs that will never be drawn.
 * **Every resize resamples the pristine container, never the current one.** Resampling
   is lossy, so chaining it destroys the artwork: 114×136 → 56×69 → 109×128 came back
-  carrying only the detail that survived the small one. `resizeSprite` takes a
-  `pristine` container and matches frames **by word position on the same sequence id**,
+  carrying only the detail that survived the small one. `resizeWidget` takes a
+  `pristine` container and matches rasters **by word position on the paired record**,
   not by image index — copy-on-write renumbers the records, so index matching would
   lose the origin the first time a shared sprite was resized. Same reason the composer's
   `reference` comes from `originalContainer`.
@@ -912,6 +974,22 @@ is the only path to the watch.** Nothing may route around it.
 
 ## Still open
 
+* **A resize redraws on the watch, but not every type has been on a wrist separately.**
+  Confirmed on an SM-R390 once resize reached seven types. The four raster-backed ones share
+  the sprite's long-proven mechanism exactly — records rewritten in place, count unchanged,
+  container smaller or the same — so they carry the least risk. Two do not: a **Hand**
+  rewrites the pivot the firmware rotates about, and a **vector arc** and a **Rule** rest on
+  the constructor's own reading of fields no other proven edit writes. There is no
+  type-by-type hardware matrix, so those three are where to look first if a resize ever
+  misbehaves on a wrist. A Hand resize is also blind on the style canvas — a Hand is
+  `WidgetPlacement.HIDDEN`, so only the AOD canvas draws one.
+* **A field-only resize is previewed by stretching the vendor's render**, which is right
+  about the extent and wrong about the stroke: `EditPreviewComposer` resamples the pixels
+  `preview.bin` holds into the widget's new rectangle, so a vector arc grown 25% shows a
+  stroke 25% thicker than the watch will draw. It is an approximation of a widget that is
+  really there rather than an invented one — the line the AOD renderer draws — and the
+  extent it gets right is the thing being edited. Worth knowing before trusting the Validate
+  page on an arc to the pixel.
 * **No AOD edit has been on a wrist.** The isolation model is pinned by
   `AodIsolationTest` on the bytes and the render by `AodCanvasSweepTest` over all 99
   corpus entries, but `aod.bin` is a *firmware-rendered* entry and nothing here proves the

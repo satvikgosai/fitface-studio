@@ -694,9 +694,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
         }
 
-    override suspend fun resizeSprite(
+    override suspend fun resizeWidget(
         styleName: String,
+        globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
+        x: Int,
+        y: Int,
         width: Int,
         height: Int,
         applyToAllStyles: Boolean,
@@ -704,13 +708,17 @@ class WatchFaceRepositoryImpl @Inject constructor(
         mutex.withLock {
             val current = requireSession()
             val styleNames = current.editTargets(styleName, applyToAllStyles)
-            val edit = StructuralEditor.resizeSprite(
+            val edit = StructuralEditor.resizeWidget(
                 current.currentContainer,
                 styleNames,
+                globalIndex,
+                widgetType,
                 sequenceId,
+                x,
+                y,
                 width,
                 height,
-                // Resample the vendor's frames, never the last resize's output — the
+                // Resample the vendor's artwork, never the last resize's output — the
                 // same reason `reference` is read from the original container. Without
                 // it, Smaller-then-Larger hands back a blurred sprite.
                 pristine = current.originalContainer,
@@ -718,7 +726,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             commit(
                 current,
                 edit.container,
-                edit.audit("Sprite resized " + editScope(styleName, applyToAllStyles)),
+                edit.audit("Widget resized " + editScope(styleName, applyToAllStyles)),
                 styleName,
             )
         }

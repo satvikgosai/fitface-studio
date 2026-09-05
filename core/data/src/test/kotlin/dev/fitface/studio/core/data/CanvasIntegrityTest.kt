@@ -382,10 +382,14 @@ class CanvasIntegrityTest {
                 .firstOrNull { it.canResize && it.width >= 8 && it.height >= 8 }
                 ?.let { target ->
                     val resized = runCatching {
-                        StructuralEditor.resizeSprite(
+                        StructuralEditor.resizeWidget(
                             source = original,
                             entryBasenames = listOf(styleName),
+                            globalIndex = target.globalIndex,
+                            widgetType = target.type,
                             sequenceId = target.sequenceId,
+                            x = target.x,
+                            y = target.y,
                             width = target.width / 2,
                             height = target.height / 2,
                             pristine = original,
@@ -393,8 +397,11 @@ class CanvasIntegrityTest {
                     }.getOrNull() ?: return@let
                     check("after resize", resized)
 
+                    // By index: a resize rewrites rasters in place and renumbers nothing,
+                    // and `(type, source)` is not an identity — a Static's source is 0 in
+                    // 678 of the catalogue's 681 records.
                     val moved = FaceRecordParser.widgetGuides(resized.entryByBasename(styleName))
-                        .single { it.sequenceId == target.sequenceId && it.type == target.type }
+                        .single { it.globalIndex == target.globalIndex }
                     val removal = runCatching {
                         StructuralEditor.removeWidget(
                             source = resized,
@@ -416,11 +423,30 @@ class CanvasIntegrityTest {
                     }.getOrNull() ?: return@let
                     check("after resize+remove+restore", restored)
 
+                    // Re-resolved in `restored`, not reused from `target`: the removal
+                    // renumbered the table and the restore appended the record at the end,
+                    // so the widget the editor has to be *told* about is a different index
+                    // by now. This is the sequence that produced the bare-outline bug.
+                    // The removal renumbered the table and the restore appended the record
+                    // at the end, so this is the one lookup that needs the identity map
+                    // rather than an index or a data source.
+                    val restoredStyle = restored.entryByBasename(styleName)
+                    val restoredIndex = FaceRecordParser
+                        .originalWidgetSources(restoredStyle, original.entryByBasename(styleName))
+                        .entries
+                        .singleOrNull { it.value == target.globalIndex }
+                        ?.key ?: return@let
+                    val restoredTarget = FaceRecordParser.widgetGuides(restoredStyle)
+                        .single { it.globalIndex == restoredIndex }
                     runCatching {
-                        StructuralEditor.resizeSprite(
+                        StructuralEditor.resizeWidget(
                             source = restored,
                             entryBasenames = listOf(styleName),
-                            sequenceId = target.sequenceId,
+                            globalIndex = restoredTarget.globalIndex,
+                            widgetType = restoredTarget.type,
+                            sequenceId = restoredTarget.sequenceId,
+                            x = restoredTarget.x,
+                            y = restoredTarget.y,
                             width = (target.width / 3).coerceAtLeast(1),
                             height = (target.height / 3).coerceAtLeast(1),
                             pristine = original,

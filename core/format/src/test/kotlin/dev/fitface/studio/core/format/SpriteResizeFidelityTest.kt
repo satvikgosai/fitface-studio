@@ -1,6 +1,6 @@
 package dev.fitface.studio.core.format
 
-import dev.fitface.studio.core.model.SPRITE_RESIZE_CEILING
+import dev.fitface.studio.core.model.RASTER_RESIZE_CEILING
 import dev.fitface.studio.core.model.WidgetGuide
 import java.nio.file.Files
 import java.nio.file.Path
@@ -52,17 +52,17 @@ class SpriteResizeFidelityTest {
                 .firstOrNull { it.basename.matches(Regex("""style\d+\.bin""")) }
                 ?: return@forEach
             val target = FaceRecordParser.widgetGuides(style)
-                .firstOrNull { it.canResize && it.width >= 8 && it.height >= 8 }
+                .firstOrNull { it.type == WIDGET_SPRITE && it.canResize && it.width >= 8 && it.height >= 8 }
                 ?: return@forEach
 
             // Clamped to the ceiling: face 00022 ships 114×136 digits, and asking for
             // 135 would simply throw and drop the face out of the sweep unnoticed.
-            val large = (target.width - 1).coerceIn(1, SPRITE_RESIZE_CEILING) to
-                (target.height - 1).coerceIn(1, SPRITE_RESIZE_CEILING)
+            val large = (target.width - 1).coerceIn(1, RASTER_RESIZE_CEILING) to
+                (target.height - 1).coerceIn(1, RASTER_RESIZE_CEILING)
             val small = (large.first / 2).coerceAtLeast(1) to (large.second / 2).coerceAtLeast(1)
 
             val direct = runCatching {
-                StructuralEditor.resizeSprite(
+                resizeBySource(
                     source = original,
                     entryBasenames = listOf(style.basename),
                     sequenceId = target.sequenceId,
@@ -73,7 +73,7 @@ class SpriteResizeFidelityTest {
             }.getOrNull() ?: return@forEach
 
             val shrunk = runCatching {
-                StructuralEditor.resizeSprite(
+                resizeBySource(
                     source = original,
                     entryBasenames = listOf(style.basename),
                     sequenceId = target.sequenceId,
@@ -84,7 +84,7 @@ class SpriteResizeFidelityTest {
             }.getOrNull() ?: return@forEach
 
             val roundTrip = runCatching {
-                StructuralEditor.resizeSprite(
+                resizeBySource(
                     source = shrunk,
                     entryBasenames = listOf(style.basename),
                     sequenceId = target.sequenceId,
@@ -132,12 +132,12 @@ class SpriteResizeFidelityTest {
             container: Fit3Container,
             styleName: String,
             target: WidgetGuide,
-        ): ByteArray = StructuralEditor.resizeSprite(
+        ): ByteArray = resizeBySource(
             source = container,
             entryBasenames = listOf(styleName),
             sequenceId = target.sequenceId,
-            width = (target.width - 1).coerceIn(1, SPRITE_RESIZE_CEILING),
-            height = (target.height - 1).coerceIn(1, SPRITE_RESIZE_CEILING),
+            width = (target.width - 1).coerceIn(1, RASTER_RESIZE_CEILING),
+            height = (target.height - 1).coerceIn(1, RASTER_RESIZE_CEILING),
             pristine = container,
         ).container.toByteArray()
 
@@ -148,7 +148,7 @@ class SpriteResizeFidelityTest {
                 .filter { it.basename.matches(Regex("""style\d+\.bin""")) }
                 .firstNotNullOfOrNull { style ->
                     FaceRecordParser.widgetGuides(style)
-                        .filter { it.canResize && it.width >= 8 && it.height >= 8 }
+                        .filter { it.type == WIDGET_SPRITE && it.canResize && it.width >= 8 && it.height >= 8 }
                         .firstNotNullOfOrNull { guide ->
                             runCatching { resize(container, style.basename, guide) }
                                 .getOrNull()
@@ -192,7 +192,7 @@ class SpriteResizeFidelityTest {
                     .map { it.basename },
             ).firstOrNull() ?: return@firstNotNullOfOrNull null
             FaceRecordParser.widgetGuides(container.entryByBasename(style))
-                .firstOrNull { it.canResize && it.width >= 32 && it.height >= 32 }
+                .firstOrNull { it.type == WIDGET_SPRITE && it.canResize && it.width >= 32 && it.height >= 32 }
                 ?.let { Triple(container, style, it) }
         }
         assumeTrue("corpus holds no backgroundless resizable sprite", candidate != null)
@@ -206,10 +206,10 @@ class SpriteResizeFidelityTest {
             argb = IntArray(panel.width * panel.height) { 0xFF102030.toInt() },
         ).container
         val target = FaceRecordParser.widgetGuides(withBackground.entryByBasename(styleName))
-            .first { it.canResize && it.width >= 32 && it.height >= 32 }
+            .first { it.type == WIDGET_SPRITE && it.canResize && it.width >= 32 && it.height >= 32 }
 
         fun resize(source: Fit3Container, width: Int, height: Int) =
-            StructuralEditor.resizeSprite(
+            resizeBySource(
                 source = source,
                 entryBasenames = listOf(styleName),
                 sequenceId = target.sequenceId,
@@ -243,7 +243,7 @@ class SpriteResizeFidelityTest {
      * A shrunk sprite can be taken back to exactly the extent its face shipped, and the
      * container comes back to the size the store shipped with it.
      *
-     * This is the whole reason the bound is [dev.fitface.studio.core.model.spriteResizeLimit]
+     * This is the whole reason the bound is [dev.fitface.studio.core.model.widgetResizeLimit]
      * and not a flat 128: face `00022`'s hour digits are 114×136, and a digit shrunk from
      * there used to be stuck — Larger could not reach its own artwork again. Restoring is
      * safe precisely because it is the shipped geometry: resampling to the original
@@ -262,7 +262,8 @@ class SpriteResizeFidelityTest {
                     FaceRecordParser.widgetGuides(style)
                         .firstOrNull {
                             // Frames larger than the growth ceiling: the case that was stuck.
-                            it.canResize && it.height > SPRITE_RESIZE_CEILING
+                            it.type == WIDGET_SPRITE && it.canResize &&
+                                it.height > RASTER_RESIZE_CEILING
                         }
                         ?.let { Triple(container, style.basename, it) }
                 }
@@ -271,7 +272,7 @@ class SpriteResizeFidelityTest {
         val (pristine, styleName, target) = candidate!!
 
         fun resize(source: Fit3Container, width: Int, height: Int) =
-            StructuralEditor.resizeSprite(
+            resizeBySource(
                 source = source,
                 entryBasenames = listOf(styleName),
                 sequenceId = target.sequenceId,
