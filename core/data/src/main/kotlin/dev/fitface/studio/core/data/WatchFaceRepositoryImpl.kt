@@ -1,6 +1,9 @@
 package dev.fitface.studio.core.data
 
+import android.content.ContentResolver
 import android.content.Context
+import android.net.Uri
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
@@ -17,6 +20,9 @@ import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.format.Fit3FormatException
 import dev.fitface.studio.core.format.Fit3WidgetIsAnchorException
 import dev.fitface.studio.core.format.ImageRecord
+import dev.fitface.studio.core.format.ProjectArchive
+import dev.fitface.studio.core.format.ProjectArchiveException
+import dev.fitface.studio.core.format.ProjectManifest
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StructuralEdit
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
@@ -27,10 +33,12 @@ import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
+import dev.fitface.studio.core.model.ExportedProject
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.format.Fit3NoContainerException
 import dev.fitface.studio.core.model.FacePackage
+import dev.fitface.studio.core.model.ImportedProject
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.ProjectNaming
 import dev.fitface.studio.core.model.ProjectSummary
@@ -42,12 +50,16 @@ import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WatchFaceException
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FilterOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -63,11 +75,22 @@ import kotlinx.serialization.json.Json
 private val Context.editorPreferences by preferencesDataStore(name = "editor_preferences")
 private val ImageFitKey = stringPreferencesKey("image_fit")
 
+/**
+ * Whether the export and import controls are on screen.
+ *
+ * In the editor's own preference store rather than a new one: it is a single boolean, and a
+ * second `preferencesDataStore` is a second file, a second lock and a second thing to keep in
+ * step. The key is deliberately dull — a name that said what it gates would be the one string
+ * worth grepping the APK for, and the point of `DeveloperGate` is that nothing advertises it.
+ */
+private val DeveloperToolsKey = booleanPreferencesKey("advanced_tools")
+
 @Singleton
 class WatchFaceRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val projectDao: ProjectDao,
     private val imageSource: AndroidImageSource,
+    private val contentResolver: ContentResolver,
     private val diagnostics: DiagnosticsLog,
 ) : WatchFaceRepository {
     private val mutex = Mutex()
@@ -89,6 +112,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
     override suspend fun setImageFit(value: ImageFit) {
         context.editorPreferences.edit { it[ImageFitKey] = value.name }
+    }
+
+    override fun observeDeveloperTools(): Flow<Boolean> =
+        context.editorPreferences.data.map { it[DeveloperToolsKey] ?: false }
+
+    override suspend fun setDeveloperTools(enabled: Boolean) {
+        context.editorPreferences.edit { it[DeveloperToolsKey] = enabled }
     }
 
     /**
@@ -158,11 +188,18 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // `sourceKey` and reused it, so the next attempt healed it. It always starts a
             // new project now, so a half-written row would never be reused — it would sit
             // in the list unopenable while every retry added a numbered sibling beside it.
+            var stylePreviews: Map<Int, String> = emptyMap()
             try {
                 withContext(NonCancellable) {
                     val projectDirectory = projectDirectory(projectId).apply { mkdirs() }
                     val localApk = File(projectDirectory, "source.apk")
                     writeAtomically(localApk, apkBytes)
+                    // Before the row, always: `observeProjects` maps every DAO emission
+                    // through `projectPreviewImage`, so previews written after the last
+                    // write to the table are previews no emission has seen. See the note in
+                    // [importProject], where the same order left an imported row with no
+                    // thumbnail until it was opened.
+                    stylePreviews = writeStylePreviews(projectId, loaded.apk)
                     projectDao.insert(
                         project.copy(
                             id = projectId,
@@ -179,7 +216,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
             loaded.projectId = projectId
             loaded.projectName = project.projectName ?: loaded.sourceName
-            loaded.stylePreviewFiles = writeStylePreviews(projectId, loaded.apk)
+            loaded.stylePreviewFiles = stylePreviews
             loaded.also { session = it }.snapshot()
         }
     }
@@ -210,6 +247,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ?: File(projectDirectory(project.id), "source.apk").also {
                         writeAtomically(it, apkBytes)
                     }
+                // Before the row, for the reason [importProject] records: the emission
+                // this write produces is the one the projects list draws from, and it lists
+                // the previews directory as it stands at that moment.
+                val stylePreviews = writeStylePreviews(project.id, loaded.apk)
                 projectDao.insert(
                     project.copy(
                         faceName = loaded.apk.faceName,
@@ -218,7 +259,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ),
                 )
                 loaded.projectName = project.resolvedName
-                loaded.stylePreviewFiles = writeStylePreviews(project.id, loaded.apk)
+                loaded.stylePreviewFiles = stylePreviews
                 loaded.also { session = it }.snapshot()
             }
         }
@@ -342,6 +383,331 @@ class WatchFaceRepositoryImpl @Inject constructor(
             projectDao.deleteById(projectId)
             projectDirectory(projectId).deleteRecursively()
         }
+    }
+
+    /**
+     * Writes the project out as an archive the app can open again.
+     *
+     * Streamed from `source.apk` straight into the picked document, so the 32 MiB the
+     * package can run to is never held: [ProjectArchive.pack] copies one member at a time
+     * and the largest of those is the container. The edit and the session records are read
+     * whole because both are bounded by `WATCH_CONTAINER_BYTE_CEILING` and a few hundred
+     * records respectively.
+     *
+     * Takes [mutex] for the reason every other project operation does: a commit rewrites
+     * `edited.bin` and `session.json` in that order, and an export landing between the two
+     * would pair one project's container with another's removals.
+     */
+    override suspend fun exportProject(
+        projectId: Long,
+        destinationUri: String,
+    ): ExportedProject = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val project = projectDao.findById(projectId)
+                ?: throw WatchFaceException(
+                    "That project no longer exists.",
+                    "export: no row for project $projectId",
+                )
+            // Refused up front rather than half-written. The pristine container is what
+            // makes an archive openable at all — it is what `Fit3Apk.parse` reads and what
+            // every resize resamples from — so an archive without it is a file that looks
+            // like a project and cannot become one.
+            val sourceApk = project.localApkPath
+                ?.let(::File)
+                ?.takeIf(File::isFile)
+                ?: throw WatchFaceException(
+                    "This project's package is missing, so it cannot be exported. " +
+                        "Download the face again.",
+                    "export: missing local APK for project $projectId",
+                )
+            val directory = projectDirectory(projectId)
+            val edited = project.editedBinPath
+                ?.let(::File)
+                ?.takeIf(File::isFile)
+                ?.readBytes()
+            val manifest = ProjectManifest(
+                projectName = project.resolvedName,
+                faceId = project.faceId,
+                displayName = project.displayName,
+                faceName = project.faceName,
+                sourceUri = project.sourceUri,
+                productId = project.productId,
+                packageVersionCode = project.packageVersionCode,
+                styleId = project.styleId,
+                selectedStyle = project.selectedStyle,
+                exportedAtEpochMillis = System.currentTimeMillis(),
+                exportedByVersion = context.installedIdentity()?.label,
+            )
+            val counted = try {
+                // `wt` truncates, which matters when the picker was pointed at a file that
+                // already exists: without it a shorter archive would leave the tail of the
+                // longer one behind and the result would not be a readable zip. Not every
+                // provider implements the mode, so the plain call is the fallback rather
+                // than a reason the export fails.
+                val stream = runCatching { contentResolver.openOutputStream(Uri.parse(destinationUri), "wt") }
+                    .getOrNull()
+                    ?: contentResolver.openOutputStream(Uri.parse(destinationUri))
+                    ?: throw WatchFaceException(
+                        "That location could not be written to.",
+                        "export: no output stream for the chosen document",
+                    )
+                CountingOutputStream(stream).also { output ->
+                    sourceApk.inputStream().use { input ->
+                        ProjectArchive.pack(
+                            source = input,
+                            destination = output,
+                            manifest = manifest,
+                            editedContainer = edited,
+                            sessionState = File(directory, "session.json")
+                                .takeIf(File::isFile)
+                                ?.readBytes(),
+                        )
+                    }
+                }
+            } catch (error: WatchFaceException) {
+                throw error
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                throw WatchFaceException(
+                    "That project could not be exported.",
+                    "export: ${error.message}",
+                    error,
+                )
+            }
+            diagnostics.info(
+                TAG,
+                "Exported a project",
+                "project=$projectId face=${project.faceId} bytes=${counted.count} edited=${edited != null}",
+            )
+            ExportedProject(project.resolvedName, counted.count)
+        }
+    }
+
+    /**
+     * Reads an archive into a new project.
+     *
+     * The archive is stored **as the project's `source.apk`**, unaltered. That is the whole
+     * reason the format keeps the package's own member names: from here on this project is
+     * one `Fit3Apk.parse` away from a downloaded one, and nothing below — opening,
+     * duplicating, the pristine container a resize resamples from, the install payload —
+     * has a case for it.
+     *
+     * Everything is checked before a row is written, and the checks are the ones whose
+     * failure would otherwise surface as a wrong picture rather than as an error: the
+     * package half has to parse and the container has to validate, the edited container
+     * has to validate too, and the two have to describe the same face. A container the
+     * watch would refuse must not become a project someone spends an evening on.
+     */
+    override suspend fun importProject(sourceUri: String): ImportedProject =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                val bytes = readArchive(sourceUri)
+                val raw = try {
+                    ProjectArchive.read(bytes)
+                } catch (error: ProjectArchiveException) {
+                    throw WatchFaceException(
+                        "That file is not a FitFace Studio project: ${error.message}",
+                        "import: ${error.message}",
+                        error,
+                    )
+                }
+                // Every string in the manifest is attacker-shaped: it came out of a JSON file
+                // this app did not write, and four of them go straight into a database row and
+                // onto a screen. Bounded and shape-checked here, at the boundary, rather than
+                // trusted the length of the file.
+                val contents = raw.copy(manifest = raw.manifest.sanitised())
+                // The same funnel a download goes through, so an archive carrying a
+                // container this app cannot open is refused in the same words.
+                val loaded = loadSession(
+                    apkBytes = bytes,
+                    fallbackName = contents.manifest.displayName,
+                )
+                if (loaded.apk.faceId != contents.manifest.faceId) {
+                    throw WatchFaceException(
+                        "That project file describes one watch face and carries another.",
+                        "import: manifest=${contents.manifest.faceId} " +
+                            "container=${loaded.apk.faceId}",
+                    )
+                }
+                val edited = contents.editedContainer?.let { validateEdited(it, loaded) }
+                val now = System.currentTimeMillis()
+                val siblings = projectDao.findByFaceId(loaded.apk.faceId)
+                val project = ProjectEntity(
+                    id = 0,
+                    displayName = contents.manifest.displayName,
+                    // Provenance carried through verbatim so `isOutdated` and the face
+                    // sheet answer the same as they did for the project this came from.
+                    // The three parsed columns beside it are what anything actually reads.
+                    sourceUri = contents.manifest.sourceUri
+                        ?: "fit3-archive://${loaded.apk.faceId}",
+                    faceId = loaded.apk.faceId,
+                    faceName = loaded.apk.faceName ?: contents.manifest.faceName,
+                    importedAtEpochMillis = now,
+                    localApkPath = null,
+                    editedBinPath = null,
+                    selectedStyle = contents.manifest.selectedStyle,
+                    // Named against this library's projects, not the exporting one's: the
+                    // archive's own name may already be taken here, and two rows reading
+                    // alike on one face is exactly what `ProjectNaming` exists for.
+                    projectName = ProjectNaming.defaultName(
+                        base = contents.manifest.projectName.ifBlank {
+                            loaded.apk.faceName ?: contents.manifest.displayName
+                        },
+                        taken = siblings.map(ProjectEntity::resolvedName),
+                    ),
+                    productId = contents.manifest.productId,
+                    packageVersionCode = contents.manifest.packageVersionCode,
+                    styleId = contents.manifest.styleId,
+                    updatedAtEpochMillis = now,
+                )
+                val newId = projectDao.insert(project)
+                // The row first, then the files, under `NonCancellable` — `openPackage`'s
+                // shape and for its reason: the id is what names the directory, and a
+                // cancellation landing between the two writes leaves a row naming no
+                // package, which is a project that can only ever be refused.
+                val name = try {
+                    withContext(NonCancellable) {
+                        val localApk = File(projectDirectory(newId).apply { mkdirs() }, "source.apk")
+                        writeAtomically(localApk, bytes)
+                        val editedFile = edited?.let {
+                            File(projectDirectory(newId), "edited.bin").also { file ->
+                                writeAtomically(file, it)
+                            }
+                        }
+                        contents.sessionState?.takeIf { edited != null }?.let {
+                            writeAtomically(File(projectDirectory(newId), "session.json"), it)
+                        }
+                        // Written here rather than left to the first `openProject`, which is
+                        // where a downloaded project gets them — and written **before** the
+                        // row below, which is the half that actually matters.
+                        //
+                        // `observeProjects` maps every DAO emission through
+                        // `projectPreviewImage`, which lists this directory. The last write
+                        // to the table is what produces the last emission, so previews
+                        // written after it are previews no emission has seen: the row sits
+                        // in the list with no thumbnail until something else touches the
+                        // table, which in practice means opening the project. Room's
+                        // invalidation is asynchronous, so with the two the other way round
+                        // it is a race — the thumbnail appeared on a fast import and not on
+                        // a slow one, which is worse than never appearing at all.
+                        writeStylePreviews(newId, loaded.apk)
+                        projectDao.insert(
+                            project.copy(
+                                id = newId,
+                                localApkPath = localApk.absolutePath,
+                                editedBinPath = editedFile?.absolutePath,
+                            ),
+                        )
+                        project.resolvedName
+                    }
+                } catch (error: Throwable) {
+                    // The DAO directly, never `deleteProject`: that takes `mutex`, which
+                    // this block already holds and which is not reentrant.
+                    withContext(NonCancellable) { projectDao.deleteById(newId) }
+                    projectDirectory(newId).deleteRecursively()
+                    throw error
+                }
+                diagnostics.info(
+                    TAG,
+                    "Imported a project",
+                    "project=$newId face=${loaded.apk.faceId} bytes=${bytes.size} " +
+                        "edited=${edited != null} schema=${contents.manifest.schema}",
+                )
+                ImportedProject(newId, name)
+            }
+        }
+
+    /**
+     * The archive's bytes, refusing to read past [ProjectArchive.MaxArchiveBytes].
+     *
+     * A `content://` document is whatever the provider says it is, and nothing here chose
+     * the file — so the ceiling is checked while reading rather than taken from the
+     * provider's reported length, which it is under no obligation to get right.
+     */
+    private fun readArchive(sourceUri: String): ByteArray {
+        val stream = try {
+            contentResolver.openInputStream(Uri.parse(sourceUri))
+        } catch (error: Exception) {
+            throw WatchFaceException(
+                "That file could not be opened.",
+                "import: ${error.message}",
+                error,
+            )
+        } ?: throw WatchFaceException(
+            "That file could not be opened.",
+            "import: no input stream for the chosen document",
+        )
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var remaining = ProjectArchive.MaxArchiveBytes
+        stream.use { input ->
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                remaining -= count
+                if (remaining < 0) {
+                    throw WatchFaceException(
+                        "That file is too large to be an exported project.",
+                        "import: past the ${ProjectArchive.MaxArchiveBytes} byte ceiling",
+                    )
+                }
+                output.write(buffer, 0, count)
+            }
+        }
+        return output.toByteArray()
+    }
+
+    /**
+     * The archive's edited container, checked against the pristine one it will sit beside.
+     *
+     * Two checks, and each one catches a failure that would otherwise be silent. A container
+     * that does not validate is one `validatedBytes()` refuses to send, and finding that out
+     * on the Install page — after the edits have been reviewed — is finding it out too late.
+     * And the entry paths have to match the pristine container's, which is what an
+     * `edited.bin` from a different face fails: no edit in this app adds or removes a
+     * container entry, so the two lists are equal for every project the app itself wrote.
+     * An edit that ever does change them has to relax this, and would know to.
+     */
+    private fun validateEdited(bytes: ByteArray, loaded: Session): ByteArray {
+        // Refused here rather than left to `validatedBytes()`. A container past the ceiling
+        // transfers, is accepted and leaves the old face up — the failure looks exactly like
+        // success — and this app's own `rebuild` refuses to grow one past it, so a container
+        // over the line is one no export of ours produced. Finding that out on the Install
+        // page, after the edits have been reviewed, is finding it out too late.
+        if (bytes.size > WATCH_CONTAINER_BYTE_CEILING) {
+            throw WatchFaceException(
+                "That project's saved edit is larger than the watch will accept " +
+                    "(${mebibytes(WATCH_CONTAINER_BYTE_CEILING)}), so it was not imported.",
+                "import: edited container ${bytes.size} > $WATCH_CONTAINER_BYTE_CEILING",
+            )
+        }
+        val container = try {
+            Fit3Container.parse(bytes)
+        } catch (error: Fit3FormatException) {
+            throw WatchFaceException(
+                "That project's saved edit is not a readable watch-face container.",
+                "import: edited container ${error.message}",
+                error,
+            )
+        }
+        val report = container.validate()
+        if (!report.isValid) {
+            throw WatchFaceException(
+                "That project's saved edit would not be accepted by the watch, so it was " +
+                    "not imported.",
+                "import: edited container invalid: ${report.errors.joinToString { it.code }}",
+            )
+        }
+        val expected = loaded.originalContainer.entries.map(ContainerEntry::path)
+        val actual = container.entries.map(ContainerEntry::path)
+        if (expected != actual) {
+            throw WatchFaceException(
+                "That project's saved edit does not belong to the watch face beside it.",
+                "import: entry mismatch expected=${expected.size} actual=${actual.size}",
+            )
+        }
+        return bytes
     }
 
     override suspend fun currentSnapshot(styleName: String?): EditorSnapshot =
@@ -1262,6 +1628,32 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
+    /**
+     * Counts what went through, so an export can say how big it came out.
+     *
+     * The size cannot be read back off the document afterwards — a provider is not obliged
+     * to report one, and the picker may have written somewhere this app has no further
+     * access to — and it is the one fact about an export a reader cannot check from inside
+     * the app.
+     */
+    private class CountingOutputStream(private val sink: OutputStream) : FilterOutputStream(sink) {
+        var count: Long = 0
+            private set
+
+        override fun write(value: Int) {
+            sink.write(value)
+            count++
+        }
+
+        // `FilterOutputStream` implements this as a loop over the single-byte `write`, which
+        // would count correctly and write a zip one byte at a time through a content
+        // provider. Forwarding the whole array is the reason this override exists.
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            sink.write(bytes, offset, length)
+            count += length
+        }
+    }
+
     private fun writeAtomically(target: File, bytes: ByteArray) {
         target.parentFile?.mkdirs()
         val temporary = File(target.parentFile, "${target.name}.tmp")
@@ -1949,6 +2341,38 @@ private data class StoredRemovedWidget(
 
 /** [RemovedWidget.globalIndex] for a session that predates the field. */
 private const val UnknownGlobalIndex = -1
+
+/**
+ * A manifest read back from a file, cut down to what a project row can hold.
+ *
+ * Nothing here is a security boundary on its own — the container checks are — but every one
+ * of these fields is written to the database and most are drawn on a screen, and a manifest
+ * is JSON this app did not write. A megabyte-long `projectName` is a row that bloats every
+ * query and a title that no `maxLines` saves; a `selectedStyle` that is not a style name is a
+ * variant the session cannot resolve. Clamped and shape-checked rather than refused: none of
+ * it makes an archive unusable, and refusing a project over a long name would be a worse
+ * answer than shortening it.
+ *
+ * [ProjectManifest.faceId] is deliberately absent: it is not trimmed, it is *compared* to the
+ * container's own, which is a stronger check than any shape rule.
+ */
+private fun ProjectManifest.sanitised() = copy(
+    projectName = projectName.trim().take(MaxManifestTextLength),
+    displayName = displayName.trim().take(MaxManifestTextLength),
+    faceName = faceName?.trim()?.take(MaxManifestTextLength)?.takeIf(String::isNotEmpty),
+    sourceUri = sourceUri?.trim()?.take(MaxManifestTextLength)?.takeIf(String::isNotEmpty),
+    productId = productId?.trim()?.take(MaxManifestTextLength)?.takeIf(String::isNotEmpty),
+    // A style the container does not carry is one `loadSession` cannot select, so an
+    // unrecognisable name reads as "no style was recorded" and the first one is used.
+    selectedStyle = selectedStyle?.takeIf { StyleNamePattern.matches(it) },
+    styleId = styleId?.takeIf { it in 0..MaxStyleId },
+)
+
+/** Longer than any real name and short enough that a hostile one costs nothing. */
+private const val MaxManifestTextLength = 256
+
+/** The protocol carries a style as one byte, so nothing above this can name one. */
+private const val MaxStyleId = 255
 
 private val StyleNamePattern = Regex("""style(\d+)\.bin""")
 

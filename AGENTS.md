@@ -163,6 +163,40 @@ The four that catch people fastest:
   value and are left out, never pointed somewhere plausible.
 * **Alpha is not cosmetic.** Do not mask an `0x0082` sprite's backdrop; the watch
   paints its whole rectangle and the preview must say so.
+* **A project archive is a package, and the whole design is that nothing can tell.**
+  `Fit3Apk.parse` reads three member shapes out of a 571-member package — the container,
+  `assets/bandface_info.json`, and the `assets/`-anchored style previews — and an archive
+  holds exactly those under exactly those names, plus a `fitface/` sidecar no package has.
+  On import the archive **is** the project's `source.apk`, so opening, duplicating, style
+  previews, the pristine container a resize resamples from and the install payload all run
+  unmodified. `Fit3Apk.readsMember` is the single predicate both sides call: **a fourth
+  member added to `parse` must not be listed again in `ProjectArchive`**, or an export drops
+  it and the loss shows up as a face name or a style preview quietly missing on the far side
+  of an import, with the parse still succeeding. `ProjectArchiveTest` sweeps the corpus
+  comparing all four reported fields, because a bytes-only round trip would not.
+  [`docs/architecture.md`](docs/architecture.md#the-project-archive) has the layout.
+* **An import checks everything before it writes a row, and no entry name is ever a path.**
+  Three fixed names into a directory named by a fresh row id, previews named from an integer
+  a `\d{1,3}` capture produced — so there is nothing for `../` to traverse and no symlink to
+  follow, and `ProjectArchiveHostilityTest` pins that along with the bombs, the duplicate
+  members and the entry-count ceiling. Two of the content checks are worth not undoing. A
+  newer `schema` is **refused, not read hopefully** — `ignoreUnknownKeys` decodes it cleanly
+  while dropping whatever the new field carried. And an `edited.bin` is compared against the
+  pristine container's **entry paths**, which is the only thing that catches an edit swapped
+  in from another face: it validates on its own, so nothing else would. No edit here changes
+  a container's entry list; one that ever does has to relax that knowingly.
+* **The export tools are hidden, and nothing may gate on that flag for correctness.** It
+  decides what is on screen and nothing else — every path behind it is one the app could
+  already walk, and `Session.validatedBytes()` still stands between all of it and the watch.
+  Two consequences. Every action re-checks the flag in the ViewModel, because a composition
+  holding a callback from before the tools were hidden is what a UI-only guard misses. And
+  the hidden IMPORT takes REFRESH's slot on the page REFRESH is not on, so it costs the
+  header nothing: a control that appears on one page and not the other is exactly what put
+  the tab row 26px higher on Projects, and a flag only some installs have set would make that
+  two layouts of one screen with only one ever looked at. `LibraryHeaderLayoutTest` measures
+  both. `DeveloperGate` compares a **digest**, so the phrase is not in the APK — do not
+  replace it with a string comparison, and do not write the phrase into a comment, a resource
+  or a document.
 * **`aod.bin` is a face entry the editor can open, and the one rule is that it is edited
   alone.** Same header, same records, same rasters, same pointer rules, so the format
   layer needs no special case — everything that matters is above it, in

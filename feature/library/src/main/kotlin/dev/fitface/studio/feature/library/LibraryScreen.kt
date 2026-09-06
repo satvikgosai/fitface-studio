@@ -2,6 +2,8 @@ package dev.fitface.studio.feature.library
 
 import android.text.format.DateUtils
 import androidx.annotation.StringRes
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,6 +74,7 @@ import coil3.compose.AsyncImage
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.FaceStyleOption
+import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
@@ -119,6 +122,25 @@ fun LibraryRoute(
         }
     }
 
+    // The system document picker, on both sides. `CreateDocument` takes the suggested file
+    // name when it is *launched*, not when it is constructed, which is why exporting is two
+    // steps: the tap arms `state.exporting` and the effect below opens the picker with the
+    // name built from it. A cancelled picker returns null, and `finishExport(null)` is what
+    // disarms it — without that the request would sit armed and the next export of the same
+    // project would not reopen the picker.
+    val exportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ProjectArchiveNaming.MimeType),
+    ) { uri -> viewModel.finishExport(uri?.toString()) }
+    val importPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> viewModel.importProject(uri?.toString()) }
+
+    val export = state.exporting
+    val exportFileName = state.exportFileName
+    LaunchedEffect(export?.id) {
+        if (export != null && exportFileName != null) exportPicker.launch(exportFileName)
+    }
+
     // Same show-then-clear shape as the error above, and for the same reason: clearing
     // first changes this effect's key while `showSnackbar` is still suspended and cancels
     // it, so the message appears for one frame and vanishes.
@@ -132,6 +154,30 @@ fun LibraryRoute(
             snackbar.showSnackbar(duplicatedText)
         } finally {
             viewModel.clearDuplicated(duplicated.id)
+        }
+    }
+
+    val exported = state.exported
+    val exportedText = exported?.let {
+        stringResource(R.string.library_project_exported, it.name, formatBytes(it.byteCount))
+    }
+    LaunchedEffect(exported?.id) {
+        if (exported == null || exportedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(exportedText)
+        } finally {
+            viewModel.clearExported(exported.id)
+        }
+    }
+
+    val imported = state.imported
+    val importedText = imported?.let { stringResource(R.string.library_project_imported, it.name) }
+    LaunchedEffect(imported?.id) {
+        if (imported == null || importedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(importedText)
+        } finally {
+            viewModel.clearImported(imported.id)
         }
     }
 
@@ -173,7 +219,9 @@ fun LibraryRoute(
         onProjectClick = viewModel::openProject,
         onRenameProject = viewModel::startRename,
         onDuplicateProject = viewModel::duplicateProject,
+        onExportProject = viewModel::startExport,
         onDeleteProject = viewModel::startDelete,
+        onImportProject = { importPicker.launch(ProjectArchiveNaming.ImportMimeTypes) },
     )
 }
 
@@ -209,7 +257,9 @@ private fun LibraryScreen(
     onProjectClick: (ProjectSummary) -> Unit,
     onRenameProject: (ProjectSummary) -> Unit,
     onDuplicateProject: (ProjectSummary) -> Unit,
+    onExportProject: (ProjectSummary) -> Unit,
     onDeleteProject: (ProjectSummary) -> Unit,
+    onImportProject: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
     Scaffold(
@@ -228,6 +278,7 @@ private fun LibraryScreen(
                 loading = state.isLoadingCatalog,
                 onPage = { page = it },
                 onRefresh = onRefresh,
+                onImport = onImportProject,
                 onReportProblem = onReportProblem,
                 onAbout = onAbout,
                 onCheckForUpdate = onCheckForUpdate,
@@ -254,6 +305,7 @@ private fun LibraryScreen(
                     onOpen = onProjectClick,
                     onRename = onRenameProject,
                     onDuplicate = onDuplicateProject,
+                    onExport = onExportProject.takeIf { state.developerTools },
                     onRemove = onDeleteProject,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -296,6 +348,7 @@ internal fun LibraryHeader(
     loading: Boolean,
     onPage: (LibraryPage) -> Unit,
     onRefresh: () -> Unit,
+    onImport: () -> Unit,
     onReportProblem: () -> Unit,
     onAbout: () -> Unit,
     onCheckForUpdate: () -> Unit,
@@ -336,6 +389,13 @@ internal fun LibraryHeader(
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.headlineLarge,
             )
+            // One slot, one page each. REFRESH belongs to the catalogue and IMPORT to the
+            // projects, and neither page ever shows both — so the row's width budget is the
+            // same whichever is in it, and the touch-target floor above already made the two
+            // pages the same height whether or not anything was.
+            //
+            // IMPORT is absent rather than disabled when the tools are locked, which is the
+            // whole of `DeveloperGate`: a greyed-out control is a control to ask about.
             if (page == LibraryPage.WatchFaces) {
                 TextButton(onClick = onRefresh, enabled = !loading) {
                     Text(
@@ -346,6 +406,13 @@ internal fun LibraryHeader(
                                 R.string.library_action_refresh
                             },
                         ),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            } else if (state.developerTools) {
+                TextButton(onClick = onImport, enabled = !state.isWorking) {
+                    Text(
+                        stringResource(R.string.library_action_import),
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -976,6 +1043,8 @@ private fun ProjectsList(
     onOpen: (ProjectSummary) -> Unit,
     onRename: (ProjectSummary) -> Unit,
     onDuplicate: (ProjectSummary) -> Unit,
+    /** Null while the tools are locked, which is what keeps the entry off the menu. */
+    onExport: ((ProjectSummary) -> Unit)?,
     onRemove: (ProjectSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1061,6 +1130,7 @@ private fun ProjectsList(
                     onDismissMenu = { openMenuFor = null },
                     onRename = { onRename(project) },
                     onDuplicate = { onDuplicate(project) },
+                    onExport = onExport?.let { export -> { export(project) } },
                     onRemove = { onRemove(project) },
                 )
             }
@@ -1127,6 +1197,7 @@ private fun ProjectRow(
     onDismissMenu: () -> Unit,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
+    onExport: (() -> Unit)?,
     onRemove: () -> Unit,
 ) {
     Row(
@@ -1181,6 +1252,7 @@ private fun ProjectRow(
             onDismiss = onDismissMenu,
             onRename = onRename,
             onDuplicate = onDuplicate,
+            onExport = onExport,
             onRemove = onRemove,
         )
         // Unlike the sheet's row, this one builds no description of its own, so the label
@@ -1221,6 +1293,8 @@ private fun ProjectMenu(
     onDismiss: () -> Unit,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
+    /** Null while `DeveloperGate` is locked, and then there is no entry at all. */
+    onExport: (() -> Unit)?,
     onRemove: () -> Unit,
 ) {
     Box {
@@ -1241,6 +1315,15 @@ private fun ProjectMenu(
             FitMenuEntry(stringResource(R.string.library_project_duplicate)) {
                 onDismiss()
                 onDuplicate()
+            }
+            // Above Delete because it is not destructive, and below Duplicate because the
+            // two are the same idea one step apart — a copy that stays here, and a copy that
+            // leaves. Absent entirely while the tools are locked.
+            onExport?.let { export ->
+                FitMenuEntry(stringResource(R.string.library_project_export)) {
+                    onDismiss()
+                    export()
+                }
             }
             // Last, and the only one that is destructive. Nothing above it can lose work,
             // so the entry that can is the one furthest from where the menu opens.

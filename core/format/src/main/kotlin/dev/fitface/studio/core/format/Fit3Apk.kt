@@ -100,6 +100,9 @@ data class Fit3Apk(
         private val facePattern =
             Regex("""(?:^|/)SM-R390_(\d{5})_256x402\.bin$""")
 
+        /** The one member [parseFaceName] and [parseSamplerId] read. */
+        const val FACE_METADATA_MEMBER = "assets/bandface_info.json"
+
         /**
          * `assets/SM-R390_<face>_<group>_<style>.png` — the package's style previews.
          *
@@ -108,6 +111,31 @@ data class Fit3Apk(
          */
         private val stylePreviewPattern =
             Regex("""^assets/SM-R390_\d{5}_\d{1,3}_(\d{1,3})\.png$""")
+
+        /**
+         * Whether [parse] reads anything out of the member called [name].
+         *
+         * Three shapes out of a package's 571 members: the container, the face metadata,
+         * and the default style previews. Everything else — the manifest, the dex, the
+         * resources, the signature block, the localised copies of the previews — is
+         * inflated, retained and never looked at.
+         *
+         * It is a function here, beside the patterns, rather than a list written out
+         * again in [ProjectArchive]. That archive's whole premise is that it holds what
+         * this parser reads and nothing more, so a fourth member added to [parse] has to
+         * appear in both or an exported project silently loses it — and the loss would
+         * only show up as a face name or a style preview quietly going missing on the
+         * far side of an import. `ProjectArchiveParityTest` sweeps the corpus against
+         * this, but one predicate is what makes the sweep a check rather than the only
+         * thing standing between the two.
+         */
+        fun readsMember(name: String): Boolean =
+            isFaceBinary(name) ||
+                name == FACE_METADATA_MEMBER ||
+                stylePreviewPattern.matches(name)
+
+        /** Whether [name] is the container member — the one [parse] requires exactly one of. */
+        fun isFaceBinary(name: String): Boolean = facePattern.containsMatchIn(name)
 
         fun parse(apkBytes: ByteArray, retainMembers: Boolean = true): Fit3Apk {
             val members = mutableListOf<Member>()
@@ -227,7 +255,7 @@ data class Fit3Apk(
 
         private fun parseFaceName(members: List<Member>): String? = runCatching {
             val metadata = members.singleOrNull {
-                it.name == "assets/bandface_info.json"
+                it.name == FACE_METADATA_MEMBER
             } ?: return@runCatching null
             val names = Json.parseToJsonElement(metadata.data.decodeToString())
                 .jsonObject["info"]
@@ -249,7 +277,7 @@ data class Fit3Apk(
 
         private fun parseSamplerId(members: List<Member>): Int? = runCatching {
             val metadata = members.singleOrNull {
-                it.name == "assets/bandface_info.json"
+                it.name == FACE_METADATA_MEMBER
             } ?: return@runCatching null
             val thumbnail = Json.parseToJsonElement(metadata.data.decodeToString())
                 .jsonObject["info"]

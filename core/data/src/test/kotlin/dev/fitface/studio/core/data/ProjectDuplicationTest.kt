@@ -56,6 +56,7 @@ class ProjectDuplicationTest {
             context = context,
             projectDao = dao,
             imageSource = AndroidImageSource(context.contentResolver),
+            contentResolver = context.contentResolver,
             diagnostics = DiagnosticsLog(),
         )
     }

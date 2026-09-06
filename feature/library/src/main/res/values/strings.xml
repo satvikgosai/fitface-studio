@@ -140,6 +140,13 @@
     <string name="library_project_delete">Delete</string>
     <!-- The name the copy was given; the list may be sorted so it landed out of sight. -->
     <string name="library_project_duplicated">Duplicated as “%1$s”</string>
+    <!-- Export and import. One word each, like Rename/Duplicate/Delete beside them. -->
+    <string name="library_action_import">IMPORT</string>
+    <string name="library_project_export">Export</string>
+    <!-- project name, then the size of the file that was written -->
+    <string name="library_project_exported">Exported “%1$s” — %2$s</string>
+    <!-- project name -->
+    <string name="library_project_imported">Imported as “%1$s”</string>
     <string name="library_rename_title">Rename project</string>
     <string name="library_rename_label">Project name</string>
     <string name="library_rename_confirm">Rename</string>

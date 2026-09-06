@@ -1097,6 +1097,40 @@ interface WatchFaceRepository {
 
     suspend fun deleteProject(projectId: Long)
 
+    /**
+     * Writes [projectId] to [destinationUri] as a project archive, and says how big it came
+     * out.
+     *
+     * The archive is a package the app can open: the members `Fit3Apk` reads under the names
+     * the package gave them, plus the edit and the project's own details. So an import is an
+     * [openProject] away from being indistinguishable from a download, and this had to grow
+     * no second container writer to manage it.
+     *
+     * [destinationUri] is a document the reader chose in the system picker, and it is the one
+     * place this app writes outside its private storage — see invariant 5 in
+     * `docs/architecture.md`. Behind [DeveloperGate], because it is a debugging tool.
+     */
+    suspend fun exportProject(projectId: Long, destinationUri: String): ExportedProject
+
+    /**
+     * Reads an archive at [sourceUri] into a **new** project, named against the face's
+     * existing ones.
+     *
+     * Always new, never a merge into a project already on the face, for [openPackage]'s
+     * reason: two projects on one face are the normal case now, and quietly re-entering one
+     * is what that change existed to stop. So importing the same archive twice gives two
+     * projects, which is also what makes an archive usable as a checkpoint.
+     */
+    suspend fun importProject(sourceUri: String): ImportedProject
+
+    /**
+     * Whether the export and import controls are on screen. Off on a fresh install, and
+     * turned on only by the phrase [DeveloperGate] holds.
+     */
+    fun observeDeveloperTools(): Flow<Boolean>
+
+    suspend fun setDeveloperTools(enabled: Boolean)
+
     suspend fun currentSnapshot(styleName: String? = null): EditorSnapshot
 
     suspend fun prepareReplacementImage(imageUri: String): ReplacementImage

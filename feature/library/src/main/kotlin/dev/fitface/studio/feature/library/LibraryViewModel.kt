@@ -6,9 +6,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.CatalogSort
+import dev.fitface.studio.core.model.DeveloperGate
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.FaceCatalogRepository
+import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
@@ -98,6 +100,25 @@ data class LibraryUiState(
     /** The pasteable report, non-null while the dialog is open. */
     val diagnosticsReport: String? = null,
     /**
+     * Whether the export and import controls are on screen at all.
+     *
+     * Absent rather than disabled when this is false: a greyed-out IMPORT is a thing to
+     * ask about, and the whole point of [DeveloperGate] is that nothing hints at it.
+     */
+    val developerTools: Boolean = false,
+    /**
+     * The export waiting for the system picker to name a file.
+     *
+     * Carries a request id as well as the project because `CreateDocument` takes the
+     * suggested name at *launch* time, so the picker cannot be opened from the tap itself
+     * — the effect that launches it keys on this. Without the id, exporting the same
+     * project twice in a row would not change the key and the picker would not reopen.
+     */
+    val exporting: ExportRequest? = null,
+    /** A project just written out, or just read in. Both are snackbars. */
+    val exported: ExportNotice? = null,
+    val imported: ImportNotice? = null,
+    /**
      * The last run ended in a crash whose account has not been shown yet.
      *
      * Surfaced here because there is nowhere else it can be: the process was gone before
@@ -107,6 +128,15 @@ data class LibraryUiState(
 ) {
     val isOpeningProject: Boolean
         get() = openingProjectId != null
+
+    /**
+     * The name to suggest in the create-document picker, or null when nothing is waiting.
+     *
+     * Assembled here rather than in the composable so the picker and the tests agree by
+     * construction — the picker is the one part of this that cannot be asserted on.
+     */
+    val exportFileName: String?
+        get() = exporting?.let { ProjectArchiveNaming.fileName(it.faceId, it.name) }
 
     val isWorking: Boolean
         get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null
@@ -224,6 +254,20 @@ internal fun faceAction(
 /** A copy was made and named. The screen turns it into a sentence. */
 data class DuplicateNotice(val id: Long, val name: String)
 
+/**
+ * An export waiting for the system picker.
+ *
+ * The three facts the picker and the repository need between them: which project to write,
+ * and the face and name the suggested file is built from.
+ */
+data class ExportRequest(val id: Long, val projectId: Long, val faceId: String, val name: String)
+
+/** A project was written out, and how big the file came out. */
+data class ExportNotice(val id: Long, val name: String, val byteCount: Long)
+
+/** A project was read in and named. */
+data class ImportNotice(val id: Long, val name: String)
+
 sealed interface LibraryEvent {
     data class OpenEditor(val projectId: Long) : LibraryEvent
 }
@@ -246,6 +290,11 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             repository.observeProjects().collect { saved ->
                 mutableState.update { it.copy(projects = saved) }
+            }
+        }
+        viewModelScope.launch {
+            repository.observeDeveloperTools().collect { enabled ->
+                mutableState.update { it.copy(developerTools = enabled) }
             }
         }
         viewModelScope.launch {
@@ -323,7 +372,29 @@ class LibraryViewModel @Inject constructor(
         mutableState.update { it.copy(sortReversed = !it.sortReversed) }
     }
 
+    /**
+     * The projects search, and the one hidden thing in this app.
+     *
+     * Typing the phrase [DeveloperGate] holds toggles the export and import controls. The
+     * phrase is **consumed** — it never reaches [LibraryUiState.projectQuery] — for two
+     * reasons: the list would otherwise filter to "No matching projects" on the way, which
+     * is a flash of something wrong in answer to something that worked, and the phrase
+     * would be left sitting in the field for the next person to read off the screen.
+     *
+     * Nothing else is said. The controls appearing is the feedback, and it is the only
+     * feedback worth having; a toast counting down to it is what makes the platform's own
+     * version of this gesture the opposite of hidden.
+     */
     fun setProjectQuery(value: String) {
+        if (DeveloperGate.isUnlockPhrase(value)) {
+            val enabled = !mutableState.value.developerTools
+            mutableState.update { it.copy(projectQuery = "") }
+            // Written through the repository rather than held here: it has to survive the
+            // process, or every cold start would hide the tools again and read as the gate
+            // having failed. The collector in `init` is what puts it back into the state.
+            viewModelScope.launch { repository.setDeveloperTools(enabled) }
+            return
+        }
         mutableState.update { it.copy(projectQuery = value) }
     }
 
@@ -522,6 +593,81 @@ class LibraryViewModel @Inject constructor(
     }
 
     /**
+     * Asks the system picker for somewhere to write [project], then writes it there.
+     *
+     * Two steps because `CreateDocument` needs the suggested file name when it is launched,
+     * so the tap can only set this up and let the screen's effect open the picker.
+     * [finishExport] is the other half, including the half where the picker was cancelled.
+     */
+    fun startExport(project: ProjectSummary) {
+        if (!mutableState.value.developerTools) return
+        mutableState.update {
+            it.copy(
+                exporting = ExportRequest(
+                    id = messageIds.incrementAndGet(),
+                    projectId = project.id,
+                    faceId = project.faceId,
+                    name = project.name,
+                ),
+            )
+        }
+    }
+
+    /**
+     * The document the picker returned, or null if it was cancelled.
+     *
+     * The request is cleared either way and *before* the write, so a cancelled picker
+     * leaves nothing armed and a failure cannot relaunch it.
+     */
+    fun finishExport(destinationUri: String?) {
+        val request = mutableState.value.exporting ?: return
+        mutableState.update { it.copy(exporting = null) }
+        if (destinationUri == null) return
+        viewModelScope.launch {
+            runCatching { repository.exportProject(request.projectId, destinationUri) }
+                .onSuccess { exported ->
+                    mutableState.update {
+                        it.copy(
+                            exported = ExportNotice(
+                                messageIds.incrementAndGet(),
+                                exported.name,
+                                exported.byteCount,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
+     * Reads an archive the picker returned into a new project.
+     *
+     * Refused while something else is working, like [openProject] and unlike a catalogue
+     * refresh: this parses a container and writes a project directory, which is the same
+     * conflict opening one has.
+     */
+    fun importProject(sourceUri: String?) {
+        if (sourceUri == null || !mutableState.value.developerTools) return
+        if (mutableState.value.isWorking) return
+        viewModelScope.launch {
+            runCatching { repository.importProject(sourceUri) }
+                .onSuccess { imported ->
+                    mutableState.update {
+                        it.copy(imported = ImportNotice(messageIds.incrementAndGet(), imported.name))
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
      * Deleting asks first. It discards every edit in the project and cannot be undone, and
      * with more than one project on a face the rows beside it look very much alike.
      */
@@ -577,6 +723,18 @@ class LibraryViewModel @Inject constructor(
     fun clearDuplicated(id: Long) {
         mutableState.update { current ->
             if (current.duplicated?.id == id) current.copy(duplicated = null) else current
+        }
+    }
+
+    fun clearExported(id: Long) {
+        mutableState.update { current ->
+            if (current.exported?.id == id) current.copy(exported = null) else current
+        }
+    }
+
+    fun clearImported(id: Long) {
+        mutableState.update { current ->
+            if (current.imported?.id == id) current.copy(imported = null) else current
         }
     }
 
