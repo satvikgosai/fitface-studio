@@ -418,16 +418,13 @@ things follow, and each one was a bug before it was a rule:
 * `EditorSnapshot.styleNames` counts styles only, so a four-style face reads
   "4 styles · always-on display" and never "5 styles".
 
-The picture is this app's own render — `AodPreviewComposer` — because there is no
-vendor one to diff against the way `EditPreviewComposer` does for a style. It
-draws the panel and then every widget in record order, sampling the same time the
-vendor's style previews are rendered at so the Styles page's rows agree with each
-other. Two kinds of record it does **not** draw: a Value or Composite, whose
-glyphs come from firmware fonts the app does not have, and a Hand on a reading
-with no sampled value (steps, battery, heart rate, calories). Neither gets a
-stand-in — a filled rectangle where the watch will put text is a preview that
-lies, and the Validate page presents this picture as what is about to be
-installed. They are outlined by the canvas and `isApproximate` says so in words.
+The picture uses `WidgetPreviewComposer`, the same current-resource renderer as
+numbered styles. It draws every supported record in order, including sampled hands,
+gauges and text assembled from the container's dictionaries and font bindings.
+Firmware glyphs are not embedded in the package, so text uses a disclosed Android-font
+approximation at the binding's pixel size. Fixed preview readings are not watch data.
+Firmware-only resources and unavailable sources remain unrendered and are disclosed;
+there is no stock-preview crop fallback. See [the preview pipeline](architecture.md#the-preview-pipeline).
 
 ## Rules established across all 99 editable faces
 

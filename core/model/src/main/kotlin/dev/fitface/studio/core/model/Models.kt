@@ -569,10 +569,9 @@ data class WidgetGuide(
     /**
      * The extent before the current edit.
      *
-     * A Sprite resize rewrites every referenced frame, so [width]/[height] follow the
-     * new raster the moment it commits while the vendor's `preview.bin` still renders
-     * the old one. Both rectangles are needed: the new one says where to draw, the
-     * original one says which reference pixels the edit has to clear.
+     * A resize rewrites the record or its rasters, so [width]/[height] follow the current
+     * resources. The original extent anchors the resize ladder and pristine resampling;
+     * rendering no longer uses it to clear pixels from a vendor preview.
      */
     val originalWidth: Int = width,
     val originalHeight: Int = height,
@@ -765,6 +764,9 @@ data class WidgetImageLayer(
     val frame: PreviewFrame,
     /** The source raster has no alpha channel; the watch paints every pixel. */
     val isOpaque: Boolean = false,
+    /** Artwork origin relative to the guide, including rotation/stroke overhang. */
+    val offsetX: Int = 0,
+    val offsetY: Int = 0,
 )
 
 data class EditAuditSummary(
@@ -816,12 +818,11 @@ data class EditorSnapshot(
     val aodThumbnail: PreviewFrame? = null,
     /**
      * Whether [composedPreview] approximates part of [selectedVariant] rather than
-     * rendering it exactly — true only for AOD, and only while it carries a widget type
-     * (Pair or Composite) this editor draws as an outline rather than its real text.
+     * rendering it exactly: firmware fonts are approximated and firmware-only resources
+     * or unknown readings may be unavailable. All variants use the same resource renderer.
      */
     val selectedVariantApproximate: Boolean = false,
     val preview: PreviewFrame,
-    val referencePreview: PreviewFrame?,
     val composedPreview: PreviewFrame,
     val widgetOverlay: PreviewFrame,
     val widgetImageLayers: List<WidgetImageLayer>,

@@ -225,4 +225,20 @@ class WidgetResizeCensusTest {
             poolNotes > 0,
         )
     }
+
+    @Test
+    fun everyResizableHandExplainsItsPivotPreservingResize() {
+        var checked = 0
+        containers.forEach { path ->
+            val container = Fit3Container.parse(Files.readAllBytes(path))
+            container.entries.filter { StyleWidgetMatch.isVariantEntry(it.basename) }
+                .flatMap(FaceRecordParser::widgetGuides)
+                .filter { it.type == WIDGET_HAND && it.canResize }
+                .forEach { hand ->
+                    assertTrue(hand.supportMessage, "Resizing scales its artwork and pivot" in hand.supportMessage)
+                    checked++
+                }
+        }
+        assertTrue("the corpus must exercise a hand", checked > 0)
+    }
 }

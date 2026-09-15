@@ -526,23 +526,20 @@ The four that catch people fastest:
   modules on the first pass — now `AOD_ENTRY_NAME` in `:core:format`, `VariantKind` in
   `:core:model`, and a UI that passes `EditorVariant` values it was handed rather than
   entry names it could misspell (`:feature:editor` cannot see `:core:format` at all).
-* **`preview.bin` is the vendor's render of the *unedited* face, and nothing
-  rewrites it.** The composer's `reference` must be read from `originalContainer`,
-  not `currentContainer`, or each edit diffs against the previous composite and
-  drifts. And a removed widget's pixels are still in that raster, so
-  `EditPreviewComposer` has to clear them explicitly.
-* **Anything read out of that raster is measured with the *original* geometry.**
-  `WidgetGuide` carries `originalWidth`/`originalHeight` beside `originalX`/`originalY`
-  for exactly this: a Sprite resize rewrites every frame, so `width`/`height` follow
-  the new raster the moment it commits while the reference still shows the old one.
-  Clearing a shrunk widget with its new, smaller rectangle left the outer ring of the
-  old sprite on the canvas — 3,634 stale pixels on face `00022` widget 2 alone, and 9
-  corpus faces affected. `originalDrawLeft`/`originalDrawTop` and every ownership test
-  in the composer use the original extent; `ResizedWidgetLeavesNoGhostTest` sweeps it.
-* **The composer clears every relocated widget before it draws any of them.** Done one
-  widget at a time, a widget dragged onto the rectangle another one is vacating was
-  painted and then wiped out by that widget's own clear, so dragging several widgets
-  around each other made them vanish one at a time. Keep the two passes separate.
+* **The canvas draws current resources, never crops or diffs `preview.bin`.**
+  `WidgetPreviewComposer` emits one isolated layer per drawable record for styles and
+  AOD; `WidgetLayerComposer` composites them in record order, including stacked full-panel
+  backgrounds. Thumbnails use those same layers. A drag recomposes the records below and
+  above the selected layer; erasing its old pixels to the background loses overlapping
+  widgets, and drawing the drag last changes its z-order. Original geometry still anchors
+  resize ladders and pristine resampling, but is no longer used to clear a stock picture.
+  `CanvasIntegrityTest` and `ResizedWidgetLeavesNoGhostTest` guard the replacement path.
+* **A Composite joins prefix, dynamic value, suffix — not storage order.** Its two
+  fixed indices are read before either dynamic sentinel is checked, so a disabled source
+  can still contribute separators. A `0xFFFF` dynamic base disables numeric output too.
+  The firmware argument setup proves this; `docs/bin-format.md` records the addresses.
+  Glyphs are ROM resources, not part of a font binding: Android substitutions must remain
+  disclosed, and the binding's font size must not grow when a label's box is resized.
 * **The watch ignores a container whose image-record count changed.** Proven on
   hardware: a copy-on-write resize that appended private frames transferred fine, the
   install command was accepted, and the face never updated. The independent Python
@@ -615,9 +612,9 @@ The four that catch people fastest:
   not by image index — copy-on-write renumbers the records, so index matching would
   lose the origin the first time a shared sprite was resized. Same reason the composer's
   `reference` comes from `originalContainer`.
-* **The thumbnail is re-rendered on request, but only once per edit.** Its widget
-  pixels can only come from the vendor's smaller `preview.bin` render, so every
-  pass resamples them and softens the result. `EditorSnapshot.canRefreshThumbnail`
+* **The thumbnail is re-rendered on request, but only once per edit.** Its pixels
+  now come from the current resource composition, not the vendor's smaller
+  `preview.bin` render. `EditorSnapshot.canRefreshThumbnail`
   gates the button, and `Session.thumbnailContainer` holds a container identity
   rather than a flag so a later edit marks it stale on its own.
   `replacePreviewThumbnail` returns null — not an exception — when the stored
@@ -771,12 +768,18 @@ The four that catch people fastest:
 * **Press-and-hold cannot re-read the snapshot.** A repeat fires faster than a
   container commit, so `EditorViewModel.nudgeWidget` accumulates the target and a
   single worker commits the latest one. Do not "simplify" it back to reading
-  `snapshot.widgets` per tick — the widget stops moving.
+  `snapshot.widgets` per tick — the widget stops moving. Taking a target out of
+  the queue does not make it committed: retain the in-flight target too, or the
+  next repeat starts from the old snapshot and loses steps. A drag returning to
+  the saved position must also supersede an outstanding move, not be discarded
+  as a no-op. `EditorViewModelTest` parks a save to pin both cases.
 * **`screenShotResolution` mixes 256×402 samplers with 512×512 promo art.** Filter
   to the watch aspect; do not `takeWhile`, which silently drops real styles.
-* **Widget lists are not all drawable.** `WidgetPlacement` splits CANVAS /
-  BACKGROUND (a panel-sized raster) / HIDDEN (no extent — clock hands). Hidden
-  records are still editable; they just cannot be previewed.
+* **Widget placement describes selection, not whether a layer is rendered.**
+  `WidgetPlacement` splits CANVAS / BACKGROUND (a panel-sized raster) / HIDDEN
+  (no fixed selection rectangle, including rotating hands). Hands render from
+  their resources and remain editable from the list; do not label them "no preview"
+  or tell a selected hand to drag on a canvas that cannot hit-test it.
 * **A per-style picture comes from the package, never from a parse.** The Styles page
   and the projects list show `assets/SM-R390_<face>_<group>_<style>.png`, extracted to
   `projects/<id>/previews/style<N>.png` when a project is opened. Rendering them
@@ -1015,28 +1018,20 @@ is the only path to the watch.** Nothing may route around it.
   rewrites the pivot the firmware rotates about, and a **vector arc** and a **Rule** rest on
   the constructor's own reading of fields no other proven edit writes. There is no
   type-by-type hardware matrix, so those three are where to look first if a resize ever
-  misbehaves on a wrist. A Hand resize is also blind on the style canvas — a Hand is
-  `WidgetPlacement.HIDDEN`, so only the AOD canvas draws one.
-* **A field-only resize is previewed by stretching the vendor's render**, which is right
-  about the extent and wrong about the stroke: `EditPreviewComposer` resamples the pixels
-  `preview.bin` holds into the widget's new rectangle, so a vector arc grown 25% shows a
-  stroke 25% thicker than the watch will draw. It is an approximation of a widget that is
-  really there rather than an invented one — the line the AOD renderer draws — and the
-  extent it gets right is the thing being edited. Worth knowing before trusting the Validate
-  page on an arc to the pixel.
+  misbehaves on a wrist. Hands now draw on both style and AOD canvases; their unrotated
+  guide is still `WidgetPlacement.HIDDEN`, so the canvas does not offer a misleading
+  axis-aligned hit rectangle for a rotated hand.
+* **The resource preview is not a pixel-exact watch emulator.** Arcs retain their stored
+  stroke thickness when their boxes resize, and image-backed geometry uses its native
+  raster. Firmware fonts are substituted, readings are sampled and animation is frozen;
+  firmware-only content may be unavailable. Corpus and synthetic checks prove the resource
+  joins and editing invariants, not the precise font metrics or antialiasing of the watch.
 * **No AOD edit has been on a wrist.** The isolation model is pinned by
   `AodIsolationTest` on the bytes and the render by `AodCanvasSweepTest` over all 99
   corpus entries, but `aod.bin` is a *firmware-rendered* entry and nothing here proves the
   watch accepts an edited one: the container-level rules it shares with a style are proven,
   the always-on path itself is the design assumption. A background *added* to AOD is the
   least proven of all — `addBackgrounds` is device-confirmed for styles only.
-* Three things the always-on canvas does not show, all deliberate and all said in words
-  rather than papered over. A Value or Composite is outlined but never drawn, so its
-  position can be edited and the drag shows only the rectangle moving. A Hand on a
-  non-clock reading — steps, battery, heart rate, calories — is left out entirely. And a
-  weekday sprite draws its *first* frame rather than the sampled Saturday, because the
-  frame order is not established: one corpus face opens on Monday, which is not evidence
-  about the rest, and a confidently wrong day is worse than an obvious first frame.
 * Reopening a project lands on the active style, never on AOD, because the selection is
   in-memory `Session` state. Persisting it would mean a schema 6 and buys little — but
   note the reason it is *safe* to skip: `activeStyleName` is what the row stores, and it

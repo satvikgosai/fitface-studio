@@ -18,6 +18,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * What the canvas must still be true of after an edit.
@@ -36,6 +40,9 @@ import org.junit.Test
  * deliberately invariants rather than per-face expectations, so dropping more containers
  * into the corpus widens the coverage for free.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CanvasIntegrityTest {
     private val root: Path = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot")))
 
@@ -57,7 +64,7 @@ class CanvasIntegrityTest {
         val guides: List<WidgetGuide>,
         val layers: List<WidgetImageLayer>,
         val sources: Map<Int, Int>,
-        val preview: EditPreview,
+        val preview: WidgetPreview,
         val width: Int,
         val height: Int,
     ) {
@@ -71,9 +78,7 @@ class CanvasIntegrityTest {
     ): Canvas? {
         val style = current.entryByBasename(styleName)
         val originalStyle = original.entryByBasename(styleName)
-        val reference = referenceFor(original, styleName) ?: return null
         val currentBackground = panelFrame(style)
-        val originalBackground = panelFrame(originalStyle)
         val sources = FaceRecordParser.originalWidgetSources(style, originalStyle)
         val duplicates = FaceRecordParser.duplicateSourceGlobalIndices(style, originalStyle)
         val originalGuides = FaceRecordParser.widgetGuides(originalStyle)
@@ -91,18 +96,13 @@ class CanvasIntegrityTest {
                 duplicateSourceGlobalIndex = duplicate,
             )
         }
-        val layers = FaceRecordParser.widgetImageLayers(style, originalStyle, reference)
+        val scene = WidgetPreviewComposer.compose(style, current.entries, WidgetTextRasterizer::render)
+        val layers = scene.widgetImageLayers
         return Canvas(
             guides = guides,
             layers = layers,
             sources = sources,
-            preview = EditPreviewComposer.compose(
-                currentBackground = currentBackground,
-                originalBackground = originalBackground,
-                reference = reference,
-                widgets = guides,
-                imageLayers = layers,
-            ),
+            preview = scene,
             width = currentBackground.width,
             height = currentBackground.height,
         )
@@ -117,7 +117,12 @@ class CanvasIntegrityTest {
     private fun checkLayerMatchesBox(label: String, canvas: Canvas, failures: MutableList<String>) {
         canvas.guides.forEach { guide ->
             val layer = canvas.layerFor(guide.globalIndex) ?: return@forEach
-            if (layer.frame.width != guide.width || layer.frame.height != guide.height) {
+            // Rotated hands and stroke overhang have their own layer origin and extent.
+            if (guide.type !in setOf(1, 3)) return@forEach
+            // A sprite's guide is the union of its frames. Face 00047 includes both
+            // 27x30 and 27x31 battery frames; a different sample may use the smaller one.
+            if (layer.frame.width > guide.width || layer.frame.height > guide.height ||
+                (guide.type == 1 && (layer.frame.width != guide.width || layer.frame.height != guide.height))) {
                 failures += "$label: widget #${guide.globalIndex} (seq ${guide.sequenceId}) " +
                     "outlines ${guide.width}×${guide.height} but its artwork is " +
                     "${layer.frame.width}×${layer.frame.height}"

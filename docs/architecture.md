@@ -76,43 +76,55 @@ the watch. They are the list a change has to preserve:
 
 The image-record count is a seventh rule of the same weight, but it is a format
 constraint rather than a pipeline one — see [editing.md](editing.md).
-
 ## The preview pipeline
 
-The canvas is not a screenshot; it is composed, and knowing where each pixel
-comes from explains most of the editor's behaviour.
+The canvas is reconstructed from the current container, not from the stock picture.
+`WidgetPreviewComposer` renders styles and AOD through the same path:
 
-- **Base layer** — the style's own full-panel raster, decoded from the container.
-  A style is not obliged to have one; face `00022` opens every style with a 37×28
-  icon and faces that have no panel raster simply draw onto black.
-- **Widget overlay** — `preview.bin` is the vendor's *rendered* image of the
-  unedited face. Pixels that differ from the base layer are the widgets, and that
-  difference is what gives Value, Composite, Badge, Arc and Bar widgets — drawn by
-  the watch from live data, with no artwork in the file — something to show.
-- **Decoded layers** — Static and Sprite widgets *do* have artwork, so
-  `FaceRecordParser.widgetImageLayers` decodes the exact frame the watch would
-  blit and draws it at the widget's current position. The widget list uses the
-  same decoded frame for its thumbnails, falling back to a crop of the composite
-  for the widgets that have no raster.
+- Static images, sprites, animations and clock/gauge hands decode the record's own
+  raster pointers through `WidgetSchema`. Sprites use a deterministic sample frame;
+  animations show frame zero. Hands rotate about the pivot inside their raster.
+- Value and Composite labels read the numbered font binding, localized dictionary,
+  formatting program, colour, spacing and text alignment. The glyphs are in watch ROM,
+  **not in the package**: `WidgetTextRasterizer` substitutes Android fonts at the
+  requested pixel size. Resizing the label box does not scale that font.
+- Vector arcs and rules use their stored geometry, thickness and colour. Image arcs
+  and bars mask their native-size raster with the sampled progress geometry.
+- Reserved types 8/10/11/12/14/15 are inert, as on the firmware. Type 9's firmware-only
+  resource and unavailable readings have no fabricated artwork; the preview is marked
+  approximate. Sensor readings and animation state are illustrative, never live data.
 
-That composite is what the canvas draws, and it is reused everywhere the app has to
-show *this* edit rather than the stock face: the Validate page, the current row on
-the Styles page, and the plate on the Install page — which stands for the payload,
-because nothing in the transport can report what the watch is wearing right now.
+Each drawable record becomes a `WidgetImageLayer`, with transparent pixels and an
+offset for rotation or stroke overhang. `WidgetLayerComposer` paints those layers in
+record order onto the black panel, **including all** full-panel background records.
+Source-over blending preserves alpha on the transparent overlay as well as the final
+opaque image. Layout comes from `WidgetLayout`/`drawLeft`/`drawTop`, not from signs or
+guessed anchors.
 
-Two consequences that are easy to get wrong:
+The canvas, widget thumbnails and drag artwork share these isolated layers. Dragging
+recomposes the records below and above the selected one separately: the old position
+reveals underlying widgets intact, and records above it stay above it while it moves.
+Removing or resizing cannot leave pixels from a stock preview behind. A sprite guide
+can bound several differently sized frames; the chosen frame stays at its native size.
 
-- The composer's reference must be read from `originalContainer`, never from
-  `currentContainer`. Re-rendering the face-picker thumbnail rewrites the edited
-  container's `preview.bin`, and reading that back would diff each edit against
-  the previous composite instead of against the vendor render, drifting a little
-  further every pass.
-- A removed widget's pixels are still in that raster, so the composer clears them
-  explicitly. Otherwise a widget keeps showing after being cut out.
+This composition also supplies Validate, Install, the selected Styles row and explicit
+face-picker thumbnail refresh. `preview.bin` and packaged style PNGs remain useful as
+**unedited references**, never as a source of editable widget pixels. Refreshing a
+thumbnail cannot feed its scaled pixels back into the scene. Original-container
+identity matching remains necessary for pristine resize resampling and restoration,
+but it is no longer a prerequisite for a widget to draw.
 
-The face-picker thumbnail is re-rendered on request, but only once per edit: its
-widget pixels can only come from the vendor's smaller `preview.bin` render, so
-every pass resamples them and visibly softens the result.
+The sample is 28 December 2024, 10:08:00, with illustrative health readings.
+Locale dictionaries follow supported phone languages with English fallback. Font
+substitution and unavailable content are disclosed on Canvas and Validate; this is a
+resource-based preview, not a pixel-exact emulator of the watch's GUI or live sensors.
+
+`CanvasIntegrityTest` exercises edit chains with the production text rasterizer;
+`ResourceCanvasCorpusTest` checks every style and AOD without `preview.bin`.
+Synthetic tests cover all seventeen constructors, compositing, pivots, text programs,
+alpha, z-order, clipping and fixed stroke width. Set `FITFACE_CANVAS_CONTACT_SHEET`
+to an output PNG path when running the resource corpus test to generate a stock/style/AOD
+comparison locally. The test never writes to the corpus.
 
 ## Caches and storage
 

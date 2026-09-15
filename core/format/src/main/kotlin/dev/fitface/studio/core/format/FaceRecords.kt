@@ -385,11 +385,13 @@ object FaceRecordParser {
                 globalIndex = globalIndex,
                 widgetType = widgetType,
                 sequenceId = data.u32(cursor + 4).checkedInt("sequence id"),
-                x = data.i16(cursor + 0x18),
-                y = data.i16(cursor + 0x1A),
-                raw1C = data.u16(cursor + 0x1C),
-                raw1E = data.u16(cursor + 0x1E),
-                unknown20 = data.u32(cursor + 0x20),
+                // Inert constructors can be only 16 bytes; never borrow geometry from
+                // the next record (or read past the stream when the inert one is last).
+                x = if (recordSize >= 0x1A) data.i16(cursor + 0x18) else 0,
+                y = if (recordSize >= 0x1C) data.i16(cursor + 0x1A) else 0,
+                raw1C = if (recordSize >= 0x1E) data.u16(cursor + 0x1C) else 0,
+                raw1E = if (recordSize >= 0x20) data.u16(cursor + 0x1E) else 0,
+                unknown20 = if (recordSize >= 0x24) data.u32(cursor + 0x20) else 0,
                 words = List(wordCount) { word ->
                     data.u32(cursor + WIDGET_FIXED_SIZE + word * 4)
                 },
@@ -689,6 +691,9 @@ object FaceRecordParser {
         WIDGET_SPRITE -> record.words
             .take(spriteFrameCount(record))
             .mapNotNull(imagesByRelativeOffset::get)
+        WIDGET_ANIMATION -> record.words.drop(1)
+            .take(record.frameCount ?: 0)
+            .mapNotNull(imagesByRelativeOffset::get)
         // A Hand keeps its sweep constant in words[0] and its sprite in words[1] —
         // the only word that resolves to a raster in all 469 corpus Hand records.
         // Resolving it gives the record a real artwork size to report; it does not
@@ -783,6 +788,10 @@ object FaceRecordParser {
             }
         }
     }
+
+    /** All artwork referenced by this record, in frame-table order, using the writer's schema. */
+    fun resourceImages(entry: ContainerEntry, record: WidgetRecord): List<ImageRecord> =
+        imagePointerFields(record, imagesByRelativeOffset(entry)).map { it.image }
 
     /** Widget types [imagePointerFields] knows the pointer schema of. */
     internal val POINTER_BEARING_TYPES: Set<Int> get() = WidgetSchema.pointerBearingTypes
@@ -974,6 +983,10 @@ object FaceRecordParser {
                         "A clock hand: the watch rotates its ${visualWidth}×$visualHeight " +
                             "artwork about a pivot, so there is no fixed rectangle to outline. " +
                             "Nudging still rewrites its stored coordinates." +
+                            (if (resizeKind == WidgetResizeKind.RASTER) {
+                                " Resizing scales its artwork and pivot together, keeping " +
+                                    "its rotation centre fixed."
+                            } else "") +
                             // A Hand is HIDDEN, so this arm used to swallow the pool
                             // warning for the one type that cannot show the result: 18 of
                             // the catalogue's 469 Hands share their artwork with another
@@ -1154,211 +1167,25 @@ object FaceRecordParser {
             .toMap()
     }
 
-    fun widgetImageLayers(
-        entry: ContainerEntry,
-        originalEntry: ContainerEntry,
-        reference: PreviewFrame,
-    ): List<WidgetImageLayer> {
-        val currentRecords = scanWidgets(entry)
-        val originalRecords = scanWidgets(originalEntry).associateBy(WidgetRecord::globalIndex)
-        // Never `originalRecords[current.globalIndex]`: a removal renumbers the table,
-        // and resolving a restored sprite's frames against whatever record now holds
-        // its old index returns null and drops the widget off the canvas entirely.
-        val originalSources = originalWidgetSources(entry, originalEntry)
-        val duplicateSources = duplicateSourceGlobalIndices(entry, originalEntry)
-        val currentImages = imagesByRelativeOffset(entry)
-        val originalImages = imagesByRelativeOffset(originalEntry)
-        val panel = panelSize(originalEntry)
-        // A style without a full-panel raster paints onto the watch's black panel,
-        // so that is what an embedded frame has to be differenced against. Without
-        // this, every widget on face 00022 and on any aod.bin lost its layer.
-        val originalBackground = backgroundImage(originalEntry)
-            ?.let { decodeImage(originalEntry, it) }
-            ?: blackPanel(panel)
-            ?: return emptyList()
-
-        // Anything read out of the reference render is measured with the *original*
-        // geometry, origins included: an alignment target that this edit has moved puts
-        // the widget somewhere else now, and the reference still shows where it was.
-        val originalPlacements = placements(originalEntry)
-        return currentRecords.mapNotNull { current ->
-            val original = originalSources[current.globalIndex]?.let(originalRecords::get)
-                ?: duplicateSources[current.globalIndex]?.let(originalRecords::get)
-                ?: return@mapNotNull null
-            val originalPlacement = originalPlacements[original.ordinal]
-                ?: ResolvedPlacement(0, 0, PlacementBasis.ABSOLUTE)
-            val image = when (current.widgetType) {
-                WIDGET_STATIC -> {
-                    val candidate = referencedImages(current, currentImages).singleOrNull()
-                        ?: return@mapNotNull null
-                    // The background layer is already the base image of the preview.
-                    if (candidate.width >= originalBackground.width &&
-                        candidate.height >= originalBackground.height
-                    ) {
-                        return@mapNotNull null
-                    }
-                    candidate
-                }
-
-                WIDGET_SPRITE -> {
-                    val frameCount = spriteFrameCount(original)
-                    if (frameCount <= 0) return@mapNotNull null
-                    val originalCandidates = original.words.take(frameCount).mapIndexedNotNull {
-                            index,
-                            pointer,
-                        ->
-                        originalImages[pointer]?.let { index to it }
-                    }
-                    val selectedIndex = if (frameCount == 24) {
-                        originalCandidates.firstOrNull()?.first
-                    } else {
-                        originalCandidates.minByOrNull { (_, candidate) ->
-                            frameDifference(
-                                entry = originalEntry,
-                                image = candidate,
-                                widget = original,
-                                origin = originalPlacement,
-                                background = originalBackground,
-                                reference = reference,
-                            )
-                        }?.first
-                    } ?: return@mapNotNull null
-                    current.words.getOrNull(selectedIndex)
-                        ?.let(currentImages::get)
-                        ?: return@mapNotNull null
-                }
-
-                else -> return@mapNotNull null
-            }
-            val decoded = decodeImage(entry, image)
-            // Masking guesses which frame pixels are "background" so a moved
-            // widget looks cut out. That guess is only legitimate when the
-            // watch itself honours per-pixel alpha; an RGB565 frame is blitted
-            // as a solid rectangle, and pretending otherwise is exactly how the
-            // editor used to show transparent digits that install with a black
-            // box behind them.
-            val opaque = !image.hasAlphaChannel
-            WidgetImageLayer(
-                globalIndex = current.globalIndex,
-                frame = if (opaque) {
-                    decoded
-                } else {
-                    maskEmbeddedFrameBackground(
-                        frame = decoded,
-                        widget = original,
-                        origin = originalPlacement,
-                        background = originalBackground,
-                    )
-                },
-                isOpaque = opaque,
-            )
+    /** Isolated native raster layers. No original-container pairing or preview matching. */
+    fun widgetImageLayers(entry: ContainerEntry): List<WidgetImageLayer> {
+        val guides = widgetGuides(entry).associateBy { it.globalIndex }
+        return scanWidgets(entry).filter {
+            it.widgetType in setOf(WIDGET_STATIC, WIDGET_SPRITE, WIDGET_ANIMATION) &&
+                guides[it.globalIndex]?.placement != WidgetPlacement.BACKGROUND
+        }.mapNotNull { record ->
+            val images = resourceImages(entry, record)
+            val index = if (record.widgetType == WIDGET_SPRITE)
+                WidgetPreviewSample.spriteFrame(record.sourceId, images.size) else 0
+            val image = images.getOrNull(index) ?: return@mapNotNull null
+            WidgetImageLayer(record.globalIndex, decodeImage(entry, image), !image.hasAlphaChannel)
         }
-    }
-
-    private fun clonePayloadMatches(first: WidgetRecord, second: WidgetRecord): Boolean =
-        first.recordSize == second.recordSize &&
-            first.widgetType == second.widgetType &&
-            first.sequenceId == second.sequenceId &&
-            first.unknown20 == second.unknown20 &&
-            first.words == second.words
-
-    private fun maskEmbeddedFrameBackground(
-        frame: PreviewFrame,
-        widget: WidgetRecord,
-        origin: ResolvedPlacement,
-        background: PreviewFrame,
-    ): PreviewFrame {
-        val left = origin.originX + widget.x
-        val top = origin.originY + widget.y
-        val pixels = frame.argb.copyOf()
-        for (localY in 0 until frame.height) {
-            for (localX in 0 until frame.width) {
-                val index = localY * frame.width + localX
-                val framePixel = pixels[index]
-                if (framePixel ushr 24 == 0) continue
-                val x = left + localX
-                val y = top + localY
-                if (x !in 0 until background.width || y !in 0 until background.height) continue
-                val backgroundPixel = background.argb[y * background.width + x]
-                if (colorDifference(blend(backgroundPixel, framePixel), backgroundPixel) < 18) {
-                    pixels[index] = 0
-                }
-            }
-        }
-        return PreviewFrame(frame.width, frame.height, pixels)
     }
 
     internal fun imagesByRelativeOffset(entry: ContainerEntry): Map<Long, ImageRecord> {
         val images = scanImages(entry)
         val firstOffset = images.firstOrNull()?.recordOffset ?: return emptyMap()
         return images.associateBy { (it.recordOffset - firstOffset).toLong() }
-    }
-
-    /** The unlit panel a style with no background raster is drawn onto. */
-    private fun blackPanel(panel: PanelSize): PreviewFrame? {
-        if (panel.width <= 0 || panel.height <= 0) return null
-        val pixels = IntArray(panel.width * panel.height) { 0xFF00_0000.toInt() }
-        return PreviewFrame(panel.width, panel.height, pixels)
-    }
-
-    private fun frameDifference(
-        entry: ContainerEntry,
-        image: ImageRecord,
-        widget: WidgetRecord,
-        origin: ResolvedPlacement,
-        background: PreviewFrame,
-        reference: PreviewFrame,
-    ): Long {
-        val frame = decodeImage(entry, image)
-        val left = origin.originX + widget.x
-        val top = origin.originY + widget.y
-        var difference = 0L
-        var compared = 0
-        for (localY in 0 until frame.height) {
-            for (localX in 0 until frame.width) {
-                val x = left + localX
-                val y = top + localY
-                if (x !in 0 until background.width || y !in 0 until background.height) continue
-                val framePixel = frame.argb[localY * frame.width + localX]
-                val backgroundPixel = background.argb[y * background.width + x]
-                val expected = blend(backgroundPixel, framePixel)
-                val referenceX = x * reference.width / background.width
-                val referenceY = y * reference.height / background.height
-                val actual = reference.argb[referenceY * reference.width + referenceX]
-                val expectedForeground = colorDifference(expected, backgroundPixel) >= 18
-                val actualForeground = colorDifference(actual, backgroundPixel) >= 18
-                if (!expectedForeground && !actualForeground) continue
-                difference += colorDifferenceSquared(expected, actual)
-                compared++
-            }
-        }
-        return if (compared == 0) Long.MAX_VALUE else difference / compared
-    }
-
-    private fun blend(background: Int, foreground: Int): Int {
-        val alpha = foreground ushr 24 and 0xFF
-        if (alpha == 0xFF) return foreground
-        if (alpha == 0) return background
-        val inverse = 0xFF - alpha
-        val red = ((foreground ushr 16 and 0xFF) * alpha +
-            (background ushr 16 and 0xFF) * inverse) / 0xFF
-        val green = ((foreground ushr 8 and 0xFF) * alpha +
-            (background ushr 8 and 0xFF) * inverse) / 0xFF
-        val blue = ((foreground and 0xFF) * alpha +
-            (background and 0xFF) * inverse) / 0xFF
-        return (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
-    }
-
-    private fun colorDifference(first: Int, second: Int): Int =
-        abs((first ushr 16 and 0xFF) - (second ushr 16 and 0xFF)) +
-            abs((first ushr 8 and 0xFF) - (second ushr 8 and 0xFF)) +
-            abs((first and 0xFF) - (second and 0xFF))
-
-    private fun colorDifferenceSquared(first: Int, second: Int): Long {
-        val red = (first ushr 16 and 0xFF) - (second ushr 16 and 0xFF)
-        val green = (first ushr 8 and 0xFF) - (second ushr 8 and 0xFF)
-        val blue = (first and 0xFF) - (second and 0xFF)
-        return red.toLong() * red + green.toLong() * green + blue.toLong() * blue
     }
 
     private fun imageSection(entry: ContainerEntry): Pair<Int, Int> {

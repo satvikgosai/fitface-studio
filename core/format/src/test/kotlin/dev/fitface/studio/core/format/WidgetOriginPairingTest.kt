@@ -268,7 +268,7 @@ class WidgetOriginPairingTest {
             FaceRecordParser.scanImages(preview).first(),
         )
         val layer = FaceRecordParser
-            .widgetImageLayers(editedStyle, originalStyle, reference)
+            .widgetImageLayers(editedStyle)
             .singleOrNull { it.globalIndex == moved.globalIndex }
         assertNotNull("the restored sprite must keep an image layer to draw", layer)
         assertEquals(99, layer!!.frame.width)

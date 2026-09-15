@@ -1967,13 +1967,23 @@ class WatchFaceRepositoryImpl @Inject constructor(
         private class AodRender(
             val container: Fit3Container,
             val payload: ByteArray,
-            val preview: AodPreview,
+            val preview: WidgetPreview,
+            val locale: String,
         )
 
         private var cachedAodPreview: AodRender? = null
 
+        private fun previewLocale(): String = java.util.Locale.getDefault().let {
+            when (it.language) {
+                "zh" -> if (it.script == "Hant" || it.country in setOf("TW", "HK", "MO")) "cn2" else "cn0"
+                "pt" -> "pt_rPT"
+                "fr", "ko", "ja", "it" -> it.language
+                else -> "en"
+            }
+        }
+
         /**
-         * [AodPreviewComposer.compose] for the current `aod.bin`. Null when the container
+         * [WidgetPreviewComposer.compose] for the current `aod.bin`. Null when the container
          * carries none.
          *
          * Memoized because every snapshot needs it — the Styles page shows the AOD row a
@@ -1986,17 +1996,24 @@ class WatchFaceRepositoryImpl @Inject constructor(
          * over the entry, but a 32-bit hash can collide, and a collision here would keep
          * showing the pre-edit picture as though the edit had not landed.
          */
-        fun aodPreview(): AodPreview? {
+        fun aodPreview(): WidgetPreview? {
             val entry = FaceResources.aodOrNull(currentContainer) ?: return null
-            cachedAodPreview?.let { cached ->
+            val locale = previewLocale()
+            cachedAodPreview?.takeIf { it.locale == locale }?.let { cached ->
                 if (cached.container === currentContainer) return cached.preview
-                if (cached.payload.contentEquals(entry.data)) {
-                    cachedAodPreview = AodRender(currentContainer, entry.data, cached.preview)
+                if (cached.payload.contentEquals(entry.data) &&
+                    cached.container.entries.filter { it.basename.startsWith("font_") }
+                        .map { it.basename to it.data.toList() } ==
+                    currentContainer.entries.filter { it.basename.startsWith("font_") }
+                        .map { it.basename to it.data.toList() }) {
+                    cachedAodPreview = AodRender(currentContainer, entry.data, cached.preview, locale)
                     return cached.preview
                 }
             }
-            val preview = AodPreviewComposer.compose(entry)
-            cachedAodPreview = AodRender(currentContainer, entry.data, preview)
+            val preview = WidgetPreviewComposer.compose(
+                entry, currentContainer.entries, WidgetTextRasterizer::render, locale,
+            )
+            cachedAodPreview = AodRender(currentContainer, entry.data, preview, locale)
             return preview
         }
 
@@ -2032,44 +2049,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
          * recomputed on every commit — and a commit happens on every nudge, so a
          * press-and-hold recomputed it dozens of times.
          */
-        private class OriginalStyleState(
-            val background: PreviewFrame,
-            val reference: PreviewFrame?,
-            val widgetsByGlobalIndex: Map<Int, WidgetGuide>,
-        )
+        private val originalStyleCache = mutableMapOf<String, Map<Int, WidgetGuide>>()
 
-        private val originalStyleCache = mutableMapOf<String, OriginalStyleState>()
-
-        /**
-         * [styleIndex] is the entry's frame in `preview.bin`, or null for one that has
-         * none — which is `aod.bin`, always: that raster holds exactly one frame per
-         * numbered style. Everything else here is as useful for AOD as for a style, so
-         * this is the only part that has to know the difference.
-         */
-        private fun originalStateFor(
-            styleName: String,
-            styleIndex: Int?,
-        ): OriginalStyleState = originalStyleCache.getOrPut(styleName) {
-            val originalStyle = originalContainer.entryByBasename(styleName)
-            OriginalStyleState(
-                background = panelFrame(originalStyle),
-                // The vendor's rendered preview of the *unedited* face. It has to come
-                // from the original container: re-rendering the face-picker thumbnail
-                // rewrites the edited container's preview.bin, and reading that back
-                // as the reference would diff each edit against the previous
-                // composite instead of against the vendor render — the preview would
-                // drift a little further every time the thumbnail was refreshed.
-                reference = styleIndex?.let { index ->
-                    FaceResources.previewOrNull(originalContainer)?.let { previewEntry ->
-                        FaceRecordParser.scanImages(previewEntry)
-                            .getOrNull(index)
-                            ?.let { FaceRecordParser.decodeImage(previewEntry, it) }
-                    }
-                },
-                widgetsByGlobalIndex = FaceRecordParser.widgetGuides(originalStyle)
-                    .associateBy { it.globalIndex },
-            )
-        }
+        private fun originalGuidesFor(styleName: String): Map<Int, WidgetGuide> =
+            originalStyleCache.getOrPut(styleName) {
+                FaceRecordParser.widgetGuides(originalContainer.entryByBasename(styleName))
+                    .associateBy { it.globalIndex }
+            }
 
         fun snapshot(requestedStyle: String? = null): EditorSnapshot {
             val styles = styleEntries()
@@ -2097,13 +2083,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // as "the style's first raster": faces 00022 and 00108 open with a small
             // icon, and a style with no full-panel raster simply draws onto black.
             val currentBackground = panelFrame(selected)
-            val original = originalStateFor(
-                selected.basename,
-                styles.indexOf(selected).takeIf { it >= 0 },
-            )
-            val originalBackground = original.background
-            val referencePreview = original.reference
-            val originalWidgets = original.widgetsByGlobalIndex
+            val originalWidgets = originalGuidesFor(selected.basename)
             val duplicateSources = FaceRecordParser.duplicateSourceGlobalIndices(
                 selected,
                 originalStyle,
@@ -2133,47 +2113,18 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     duplicateSourceGlobalIndex = duplicateSource,
                 )
             }
-            // AOD renders straight from its own bytes — there is no `preview.bin` frame
-            // for it to diff against, so it never reaches the code above this line that
-            // reads `referencePreview`/`originalStyle` for that purpose. Computed here
-            // (cached on the entry's own bytes) whether or not AOD is what is selected,
-            // because the Styles page always shows its row a real thumbnail.
+            // Every variant is reconstructed from its current records, in record order.
+            // Pristine bytes remain useful for edit identity/resize, never for drawing.
             val aodComposition = aodPreview()
-            val widgetImageLayers = if (isAod) {
-                aodComposition?.widgetImageLayers.orEmpty()
-            } else {
-                referencePreview?.let { reference ->
-                    FaceRecordParser.widgetImageLayers(
-                        entry = selected,
-                        originalEntry = originalStyle,
-                        reference = reference,
-                    )
-                }.orEmpty()
-            }
-            val editPreview = if (isAod) {
-                EditPreview(
-                    composed = aodComposition?.composed ?: currentBackground,
-                    widgetOverlay = aodComposition?.widgetOverlay
-                        ?: PreviewFrame(
-                            currentBackground.width,
-                            currentBackground.height,
-                            IntArray(currentBackground.width * currentBackground.height),
-                        ),
-                )
-            } else {
-                EditPreviewComposer.compose(
-                    currentBackground = currentBackground,
-                    originalBackground = originalBackground,
-                    reference = referencePreview,
-                    widgets = widgets,
-                    imageLayers = widgetImageLayers,
-                    // Only the variants the record was actually cut from; a removal
-                    // applied to one style must not blank the widget on the others.
-                    removedWidgets = removedWidgets.filter {
-                        selected.basename in it.recordsByVariant
-                    },
+            val composition = if (isAod) requireNotNull(aodComposition) else {
+                WidgetPreviewComposer.compose(
+                    selected,
+                    currentContainer.entries,
+                    WidgetTextRasterizer::render,
+                    previewLocale(),
                 )
             }
+            val widgetImageLayers = composition.widgetImageLayers
             val report = if (currentContainer === originalContainer) {
                 originalReport
             } else {
@@ -2198,11 +2149,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 activeStyleName = activeStyleName ?: styles.first().basename,
                 editedVariantNames = editedVariantNames(variants),
                 aodThumbnail = aodComposition?.composed,
-                selectedVariantApproximate = isAod && aodComposition?.isApproximate == true,
+                selectedVariantApproximate = composition.isApproximate,
                 preview = currentBackground,
-                referencePreview = referencePreview,
-                composedPreview = editPreview.composed,
-                widgetOverlay = editPreview.widgetOverlay,
+                composedPreview = composition.composed,
+                widgetOverlay = composition.widgetOverlay,
                 widgetImageLayers = widgetImageLayers,
                 widgets = widgets,
                 removedWidgets = removedWidgets.toList(),

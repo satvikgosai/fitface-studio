@@ -87,18 +87,19 @@
     <string name="editor_badge_unapplied">UNAPPLIED</string>
 
     <!-- Canvas -->
-    <string name="editor_canvas_hint_none">Each outlined region is a draggable widget. Tap one to select it.</string>
+    <string name="editor_canvas_hint_none">Built from the face’s resources with sample readings. Tap an outlined widget to select it.</string>
     <string name="editor_canvas_hint_all_styles">Drag to move, or hold a nudge button. Changes apply to every style that has this widget.</string>
     <string name="editor_canvas_hint_this_style">Drag to move, or hold a nudge button. Changes only apply here.</string>
     <string name="editor_canvas_hint_aod">Drag to move, or hold a nudge button. Changes apply only to the always-on display.</string>
+    <string name="editor_canvas_nudge_all_styles">Use the nudge buttons to move this record. Changes apply to every style that has it.</string>
+    <string name="editor_canvas_nudge_this_style">Use the nudge buttons to move this record. Changes only apply here.</string>
+    <string name="editor_canvas_nudge_aod">Use the nudge buttons to move this record. Changes apply only to the always-on display.</string>
     <!--
-      Shown in place of the ordinary canvas hint when part of the always-on display cannot
-      be drawn here. Nothing is invented in its place, so the reader is told rather than
-      shown a box where the watch will put glyphs. Same fact as editor_aod_approximate,
-      which says it on the Validate page, where the picture is presented as what installs.
+      Styles and AOD share the resource renderer. Both disclose font substitution and
+      unavailable firmware content here and on Validate.
     -->
-    <string name="editor_canvas_hint_none_approximate">Each outlined region is a draggable widget. Outlines with nothing in them are live text the watch draws from its own fonts.</string>
-    <string name="editor_aod_approximate">Live text and gauge needles are outlined but not drawn: the watch renders them from fonts and readings this app does not have. Everything else here is the artwork in the container. Your edits are sent whole either way.</string>
+    <string name="editor_canvas_hint_none_approximate">Built from the face’s resources with sample readings. Watch fonts are approximated; some firmware-only content cannot be previewed.</string>
+    <string name="editor_aod_approximate">Resource preview with sample readings, not live watch data. Text uses the face’s strings and font size with substitute glyphs. Firmware-only content may be unavailable. Your edits are sent whole.</string>
     <string name="editor_canvas_pick_from_list">OR PICK FROM THE LIST ›</string>
     <string name="editor_canvas_a11y">Fit3 watch-face editor for %1$s. %2$d movable widgets.</string>
 
@@ -107,19 +108,20 @@
     <string name="editor_selection_geometry">x %1$d · y %2$d · %3$d×%4$d</string>
     <string name="editor_inspect">Inspect ›</string>
     <string name="editor_nudge_hint">tap for 1 px · hold to keep moving · drag on canvas for coarse</string>
+    <string name="editor_nudge_hint_no_drag">tap for 1 px · hold to keep moving</string>
     <string name="editor_nudge_locked">position locked by container</string>
 
     <!-- Widget list -->
     <string name="editor_widgets_on_canvas_title">On the canvas</string>
     <string name="editor_widgets_on_canvas_detail">%1$d of %2$d records draw a rectangle you can select and drag.</string>
-    <string name="editor_widgets_off_canvas_title">Not shown on the canvas</string>
-    <string name="editor_widgets_off_canvas_detail">These records exist in the container but have no drawable rectangle the editor can place — clock hands, and the full-face background layer. Nudging one still rewrites its stored coordinates; you just will not see it move here.</string>
+    <string name="editor_widgets_off_canvas_title">Edit from this list</string>
+    <string name="editor_widgets_off_canvas_detail">Clock hands have no fixed selection outline, and full-face backgrounds cannot be selected by tapping the canvas. Open a record here for its available controls. Supported artwork is still shown in the preview.</string>
     <string name="editor_widgets_removed_title">Removed</string>
     <string name="editor_widgets_removed_detail">Kept so you can put them back. Restoring appends the original record at the end of the widget table.</string>
 
     <!-- Widget row -->
     <string name="editor_row_placement_background">Background</string>
-    <string name="editor_row_placement_hidden">No preview</string>
+    <string name="editor_row_placement_hidden">No outline</string>
     <string name="editor_row_placement_last">Last</string>
     <string name="editor_row_opaque">Opaque</string>
     <string name="editor_row_record">%1$s · %2$s · %3$d×%4$d</string>
@@ -156,7 +158,7 @@
     <string name="editor_remove_confirm">Remove</string>
     <string name="editor_cancel">Cancel</string>
     <string name="editor_label_background">BG</string>
-    <string name="editor_label_hidden">HIDDEN</string>
+    <string name="editor_label_hidden">NO OUTLINE</string>
     <string name="editor_label_opaque">OPAQUE</string>
     <string name="editor_opaque_body">This widget\'s frames have no transparency, so the watch paints its whole %1$d×%2$d rectangle — including the black behind the glyphs. The preview shows it the same way.</string>
     <string name="editor_position_heading">Position · display space</string>
@@ -273,7 +275,7 @@
     <!-- Thumbnail card -->
     <string name="editor_thumbnail_heading">Face-picker thumbnail</string>
     <string name="editor_thumbnail_in_sync_label">IN SYNC</string>
-    <string name="editor_thumbnail_in_sync">Matches your edit, so the watch\'s carousel shows the same layout as %1$s. Updating it again would only resample it, so there is nothing left to do.</string>
+    <string name="editor_thumbnail_in_sync">Matches your edit, so the watch\'s carousel shows the same layout as %1$s. Make another edit before updating it again.</string>
     <string name="editor_thumbnail_unedited">Unedited, so the stock thumbnail already matches this face.</string>
     <string name="editor_thumbnail_blocked">Resolve the errors above first — a thumbnail rendered from a container that does not validate would bake in a broken layout.</string>
     <string name="editor_thumbnail_stale">The watch\'s face picker still shows the stock image. Update it once so the carousel matches what you install.</string>
@@ -358,6 +360,6 @@
       style would have it disagree with every "Style N" the rest of the app shows.
     -->
     <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
-    <string name="editor_destructive_note">Duplicate appends a selected clone you can drag immediately. Removal and duplication rebuild the widget table and every CRC.</string>
+    <string name="editor_destructive_note">Duplicate appends a selected clone. Use its available controls to edit it. Removal and duplication rebuild the widget table and every CRC.</string>
     <string name="editor_transfer_progress">%1$d/%2$d windows · %3$d/%4$d bytes</string>
 </resources>

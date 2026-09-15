@@ -104,6 +104,37 @@ class EditorViewModelTest {
         )
     }
 
+    @Test
+    fun nudgesAccumulateFromTheMoveBeingSaved() {
+        val repository = FakeRepository(snapshot(widgets))
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+
+        viewModel.nudgeWidget(1, 1, 0)
+        settle() // 21 is in flight, but the snapshot still reports 20.
+        viewModel.nudgeWidget(1, 1, 0)
+        assertEquals(22f, viewModel.state.value.pendingWidgetMove?.displayX)
+        viewModel.nudgeWidget(1, 1, 0)
+        repository.releaseAll()
+        settle()
+        assertEquals(listOf(21 to 20, 23 to 20), repository.committed(1))
+    }
+
+    @Test
+    fun aDragBackToTheSavedPositionSupersedesAnInFlightMove() {
+        val repository = FakeRepository(snapshot(widgets))
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.moveWidget(1, 40, 20)
+        settle()
+        viewModel.moveWidget(1, 20, 20)
+        repository.releaseAll()
+        settle()
+        assertEquals(listOf(40 to 20, 20 to 20), repository.committed(1))
+    }
+
     /**
      * Targets for different widgets do not evict each other. The queue was a single slot
      * keyed by one global index, so a target queued for one widget and then replaced by a
@@ -307,7 +338,6 @@ class EditorViewModelTest {
         styleNames = listOf("style0.bin"),
         activeStyleName = "style0.bin",
         preview = frame(),
-        referencePreview = null,
         composedPreview = frame(),
         widgetOverlay = frame(),
         widgetImageLayers = emptyList(),

@@ -23,11 +23,8 @@ import org.junit.Test
 /**
  * What the always-on canvas must be true of, over every container in the corpus.
  *
- * [CanvasIntegrityTest] cannot cover this: every invariant it checks is about agreement
- * with the vendor's `preview.bin` render, and its `canvasOf` returns null without one —
- * which `aod.bin` never has. So the equivalent assertions for a from-scratch render live
- * here, and they are invariants rather than per-face expectations for the same reason:
- * dropping more containers into the corpus widens the coverage for free.
+ * [CanvasIntegrityTest] exercises edit chains on numbered styles. These assertions
+ * sweep AOD-specific artwork and isolation, through the same resource renderer.
  *
  * The failure these guard against is the one the old code had, and it threw nothing and
  * failed no validation — feeding AOD through the diff composer produced a bare background
@@ -58,7 +55,7 @@ class AodCanvasSweepTest {
         forEachAod { face, entry ->
             composed++
             val panel = FaceRecordParser.panelSize(entry)
-            val render = runCatching { AodPreviewComposer.compose(entry) }.getOrElse { error ->
+            val render = runCatching { WidgetPreviewComposer.compose(entry) }.getOrElse { error ->
                 failures += "$face: ${error::class.simpleName} ${error.message}"
                 return@forEachAod
             }
@@ -88,7 +85,7 @@ class AodCanvasSweepTest {
                 val record = records[guide.globalIndex]
                 guide.placement != WidgetPlacement.BACKGROUND && when (record?.widgetType) {
                     WIDGET_STATIC, WIDGET_SPRITE -> true
-                    WIDGET_HAND -> AodPreviewComposer.sampleHandFraction(record.sourceId) != null
+                    WIDGET_HAND -> dev.fitface.studio.core.format.WidgetPreviewSample.fraction(record.sourceId) != null
                     else -> false
                 }
             }
@@ -101,8 +98,7 @@ class AodCanvasSweepTest {
                     failures += "$face: ${drawable.size} drawable widgets and none of them drew"
                 }
             }
-            // Image layers are the raster-backed widgets' own decoded frames; a rotated
-            // hand has no axis-aligned frame to hand the canvas, and no rectangle either.
+            // Image layers retain the decoded artwork; hands also carry rotation offsets.
             if (rasterBacked > 0 && render.widgetImageLayers.isEmpty()) {
                 failures += "$face: $rasterBacked raster widgets and no image layers"
             }
@@ -115,7 +111,8 @@ class AodCanvasSweepTest {
                     failures += "$face: layer ${layer.globalIndex} belongs to no widget"
                     return@forEach
                 }
-                if (layer.frame.width > guide.width || layer.frame.height > guide.height) {
+                if (guide.type in setOf(WIDGET_STATIC, WIDGET_SPRITE) &&
+                    (layer.frame.width > guide.width || layer.frame.height > guide.height)) {
                     failures += "$face/${layer.globalIndex}: layer " +
                         "${layer.frame.width}x${layer.frame.height} exceeds the widget's " +
                         "${guide.width}x${guide.height}"
@@ -142,8 +139,8 @@ class AodCanvasSweepTest {
         val failures = mutableListOf<String>()
 
         forEachAod { face, entry ->
-            val first = AodPreviewComposer.compose(entry)
-            val second = AodPreviewComposer.compose(entry)
+            val first = WidgetPreviewComposer.compose(entry)
+            val second = WidgetPreviewComposer.compose(entry)
             if (!first.composed.argb.contentEquals(second.composed.argb)) {
                 failures += "$face: composed twice, differently"
             }
@@ -156,7 +153,7 @@ class AodCanvasSweepTest {
     }
 
     /**
-     * [AodPreview.isApproximate] has to mean what it says in both directions: set when
+     * [WidgetPreview.isApproximate] has to mean what it says in both directions: set when
      * the entry holds a record this renderer leaves out, clear when everything in it was
      * drawn. A flag that is always true is no more use than one that is always false.
      */
@@ -178,14 +175,14 @@ class AodCanvasSweepTest {
                     when (record.widgetType) {
                         WIDGET_STATIC, WIDGET_SPRITE -> false
                         WIDGET_HAND ->
-                            AodPreviewComposer.sampleHandFraction(record.sourceId) == null
+                            dev.fitface.studio.core.format.WidgetPreviewSample.fraction(record.sourceId) == null
                         WIDGET_PAIR, WIDGET_COMP -> true
                         else -> true
                     }
                 }
             if (expected) partial++ else complete++
 
-            val actual = AodPreviewComposer.compose(entry).isApproximate
+            val actual = WidgetPreviewComposer.compose(entry).isApproximate
             if (actual != expected) {
                 failures += "$face: isApproximate=$actual, entry says $expected"
             }
@@ -222,7 +219,7 @@ class AodCanvasSweepTest {
             } ?: return@forEachAod
             val record = records[guide.globalIndex] ?: return@forEachAod
 
-            val before = AodPreviewComposer.compose(entry)
+            val before = WidgetPreviewComposer.compose(entry)
             val edit = runCatching {
                 FaceEditor.moveWidgetAcrossStyles(
                     source = container,
@@ -236,7 +233,7 @@ class AodCanvasSweepTest {
             }.getOrNull() ?: return@forEachAod
             moved++
 
-            val after = AodPreviewComposer.compose(
+            val after = WidgetPreviewComposer.compose(
                 FaceResources.aodOrNull(edit.container)!!,
             )
             if (before.composed.argb.contentEquals(after.composed.argb)) {

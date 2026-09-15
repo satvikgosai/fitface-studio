@@ -86,18 +86,15 @@ class AodHandGeometryTest {
     private fun blank() = IntArray(CANVAS * CANVAS)
 
     private fun rotate(canvas: IntArray, degrees: Double) {
-        AodPreviewComposer.drawRotatedRaster(
-            canvas = canvas,
-            canvasWidth = CANVAS,
-            canvasHeight = CANVAS,
-            raster = strip,
-            forceOpaque = false,
-            pivotX = 1,
-            pivotY = 0,
-            left = left,
-            top = top,
-            angleDegrees = degrees,
-        )
+        val rotated = WidgetPreviewComposer.rotate(strip, 1, 0, degrees)
+        for (y in 0 until rotated.frame.height) for (x in 0 until rotated.frame.width) {
+            val px = left + rotated.offsetX + x
+            val py = top + rotated.offsetY + y
+            if (px in 0 until CANVAS && py in 0 until CANVAS) {
+                canvas[py * CANVAS + px] = dev.fitface.studio.core.model.WidgetLayerComposer.over(
+                    canvas[py * CANVAS + px], rotated.frame.argb[y * rotated.frame.width + x])
+            }
+        }
     }
 
     private fun IntArray.at(x: Int, y: Int): Int = this[y * CANVAS + x]

@@ -222,8 +222,6 @@ class CorpusParityTest {
 
         val layers = FaceRecordParser.widgetImageLayers(
             entry = style,
-            originalEntry = style,
-            reference = preview,
         ).associateBy { it.globalIndex }
 
         assertEquals(setOf(6, 7, 8, 9, 10, 11), layers.keys)

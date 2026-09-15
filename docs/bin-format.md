@@ -639,16 +639,22 @@ Each 100-byte record contains four 12-byte programs at `+0x24`, `+0x30`,
 
 | Offset | Field |
 | ---: | --- |
-| `B+0x00` | u16 live-data source; `0xFFFF` disables this part |
-| `B+0x02` | u16 fixed dictionary index A, or `0xFFFF` |
-| `B+0x04` | u16 fixed dictionary index B, or `0xFFFF` |
-| `B+0x06` | u16 dynamic dictionary base, or `0xFFFF` |
+| `B+0x00` | u16 live-data source; `0xFFFF` disables the dynamic fragment, not fixed text |
+| `B+0x02` | u16 fixed prefix dictionary index A, or `0xFFFF` |
+| `B+0x04` | u16 fixed suffix dictionary index B, or `0xFFFF` |
+| `B+0x06` | u16 dynamic dictionary base; `0xFFFF` disables dynamic output in **both** modes |
 | `B+0x08` | u8 dynamic mode: 0 dictionary lookup, nonzero numeric formatting |
 | `B+0x09` | u8 numeric format selector |
 | `B+0x0A` | u16 ignored padding |
 
-Each part produces fixed-A, fixed-B and dynamic fragments, and the twelve
-resulting fragments are joined in order. Record `+0x54..+0x57` is not read,
+Each part joins **fixed-A, dynamic, fixed-B** (prefix, value, suffix). The update
+loads both fixed strings before checking the source and base sentinels at
+`0x2C10795E..976`; those gate dynamic output, even numeric mode. The final
+`snprintf` argument setup at `0x2C107CAE..CB6` passes buffer slots **0, 2, 1**.
+Reading storage order as display order previously put the degree sign before its
+temperature and dropped date separators carried by fixed-only parts. The same
+order is used by the permutation path at `0x2C1077C4..7D0`.
+Record `+0x54..+0x57` is not read,
 `+0x58` is stored AARRGGBB text colour (RGB consumed, alpha ignored), `+0x5C` is rotation in tenths of a degree,
 `+0x5E` selects `font_N.bin`, `+0x60` is signed letter spacing, and `+0x62`
 is a dictionary index containing a digit permutation such as `"1234"` or

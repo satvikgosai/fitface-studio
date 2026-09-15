@@ -139,6 +139,10 @@ class EditorViewModel @Inject constructor(
     // back-to-back drags of different widgets only landed the second. Access is guarded
     // because the worker drains it from its own coroutine.
     private val pendingMoves = LinkedHashMap<PendingMoveKey, PendingWidgetTarget>()
+    // Taking a target out of the queue must not forget its position while the save
+    // suspends. Repeats build on the newest queued target, then this in-flight one,
+    // and only then the committed snapshot. Guarded by pendingMoves as well.
+    private var inFlightMove: Pair<PendingMoveKey, PendingWidgetTarget>? = null
     /** Whether a worker is committing [pendingMoves]. Guarded by that map's own lock. */
     private var moveWorkerDraining = false
 
@@ -391,7 +395,9 @@ class EditorViewModel @Inject constructor(
     fun moveWidget(globalIndex: Int, x: Int, y: Int) {
         val snapshot = mutableState.value.snapshot ?: return
         val selected = snapshot.widgets.singleOrNull { it.globalIndex == globalIndex } ?: return
-        if (selected.x == x && selected.y == y) return
+        val base = pendingTarget(snapshot.selectedVariant.basename, globalIndex)
+            ?: PendingWidgetTarget(selected.x, selected.y, selected.type, selected.sequenceId)
+        if (base.x == x && base.y == y) return
         queueWidgetMove(snapshot, selected, x, y)
     }
 
@@ -561,11 +567,17 @@ class EditorViewModel @Inject constructor(
     }
 
     private fun pendingTarget(variantBasename: String, globalIndex: Int): PendingWidgetTarget? =
-        synchronized(pendingMoves) { pendingMoves[PendingMoveKey(variantBasename, globalIndex)] }
+        synchronized(pendingMoves) {
+            val key = PendingMoveKey(variantBasename, globalIndex)
+            pendingMoves[key] ?: inFlightMove?.takeIf { it.first == key }?.second
+        }
 
     /** The next target to commit, or null — which also retires the worker asking. */
     private fun takePendingMove(): Pair<PendingMoveKey, PendingWidgetTarget>? {
         synchronized(pendingMoves) {
+            // The previous commit has published its snapshot (or failed) before
+            // the worker asks for another target.
+            inFlightMove = null
             // Every exit that returns null must retire the worker. Leaving
             // `moveWorkerDraining` true on the way out would convince `queueWidgetMove`
             // that a drain is still running, and no later move would ever start one.
@@ -577,12 +589,15 @@ class EditorViewModel @Inject constructor(
             val key = entry.key
             val target = entry.value
             pendingMoves.remove(key)
-            return key to target
+            return (key to target).also { inFlightMove = it }
         }
     }
 
     private fun clearPendingMoves() {
-        synchronized(pendingMoves) { pendingMoves.clear() }
+        synchronized(pendingMoves) {
+            pendingMoves.clear()
+            inFlightMove = null
+        }
     }
 
     /**

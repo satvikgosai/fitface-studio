@@ -109,6 +109,7 @@ import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.WidgetCategory
 import dev.fitface.studio.core.model.WidgetResizeStepPercent
 import dev.fitface.studio.core.model.WidgetGuide
+import dev.fitface.studio.core.model.WidgetLayerComposer
 import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.nextWidgetSize
 import dev.fitface.studio.core.model.widgetSizePercent
@@ -964,6 +965,12 @@ private fun CanvasHint(
         Text(
             stringResource(
                 when {
+                    selected != null && selected.placement != WidgetPlacement.CANVAS &&
+                        state.snapshot?.isAodSelected == true -> R.string.editor_canvas_nudge_aod
+                    selected != null && selected.placement != WidgetPlacement.CANVAS &&
+                        state.applyWidgetEditsToAllStyles -> R.string.editor_canvas_nudge_all_styles
+                    selected != null && selected.placement != WidgetPlacement.CANVAS ->
+                        R.string.editor_canvas_nudge_this_style
                     selected != null && state.snapshot?.isAodSelected == true ->
                         R.string.editor_canvas_hint_aod
                     selected != null && state.applyWidgetEditsToAllStyles ->
@@ -1096,10 +1103,10 @@ private fun SelectionPeek(
         }
         MicroLabel(
             stringResource(
-                if (widget.canEditPosition) {
-                    R.string.editor_nudge_hint
-                } else {
-                    R.string.editor_nudge_locked
+                when {
+                    !widget.canEditPosition -> R.string.editor_nudge_locked
+                    widget.placement == WidgetPlacement.CANVAS -> R.string.editor_nudge_hint
+                    else -> R.string.editor_nudge_hint_no_drag
                 },
             ),
             Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp),
@@ -1395,21 +1402,7 @@ private fun WidgetRow(
     }
 }
 
-/**
- * The widget itself, so the list shows what is being edited instead of only its
- * coordinates.
- *
- * Two sources, in order of truthfulness. A Static or Sprite has a raster in the
- * container, and `widgetImageLayers` has already decoded exactly the frame the
- * watch would blit — that is drawn as-is. Everything else (Value, Composite,
- * Badge, Arc, Bar) is drawn by the watch from live data and has no artwork to
- * decode, so the fallback crops the composed preview: the style's own background
- * with those widgets' pixels lifted out of the vendor's `preview.bin` render.
- *
- * Records with no drawable rectangle — clock hands, whose record stores a rotation
- * pivot rather than an extent — keep the plain accent bar, because there is nothing
- * truthful to draw for them.
- */
+/** The isolated resource layer, never a crop that can include the background or a neighbour. */
 @Composable
 private fun WidgetThumbnail(
     snapshot: EditorSnapshot,
@@ -1417,7 +1410,7 @@ private fun WidgetThumbnail(
     accent: Color,
     extent: Dp = 34.dp,
 ) {
-    val crop = remember(
+    val artwork = remember(
         snapshot.composedPreview.argb,
         snapshot.widgetImageLayers,
         widget.globalIndex,
@@ -1428,17 +1421,15 @@ private fun WidgetThumbnail(
     ) {
         snapshot.widgetImageLayers
             .firstOrNull {
-                it.globalIndex == widget.globalIndex &&
-                    widget.placement == WidgetPlacement.CANVAS
+                it.globalIndex == widget.globalIndex
             }
             ?.frame
-            ?: cropWidgetPreview(snapshot.composedPreview, widget)
     }
-    if (crop == null) {
+    if (artwork == null) {
         Box(Modifier.width(3.dp).height(28.dp).background(accent))
         return
     }
-    val bitmap = crop.rememberBitmap()
+    val bitmap = artwork.rememberBitmap()
     Canvas(
         Modifier.size(extent)
             .clip(RoundedCornerShape(5.dp))
@@ -1446,9 +1437,9 @@ private fun WidgetThumbnail(
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(5.dp)),
     ) {
         // Letterboxed, never stretched: a 242x4 divider has to stay readable as one.
-        val scale = minOf(size.width / crop.width, size.height / crop.height)
-        val drawWidth = (crop.width * scale).coerceAtLeast(1f)
-        val drawHeight = (crop.height * scale).coerceAtLeast(1f)
+        val scale = minOf(size.width / artwork.width, size.height / artwork.height)
+        val drawWidth = (artwork.width * scale).coerceAtLeast(1f)
+        val drawHeight = (artwork.height * scale).coerceAtLeast(1f)
         drawImage(
             image = bitmap,
             dstOffset = IntOffset(
@@ -1512,29 +1503,6 @@ private fun RemovedWidget.removedScopeLabel(): String =
         pluralStringResource(R.plurals.editor_row_removed_styles, styleCount, styleCount)
     }
 
-/** The composed-preview pixels under [widget], or null when it covers nothing. */
-private fun cropWidgetPreview(frame: PreviewFrame, widget: WidgetGuide): PreviewFrame? {
-    if (widget.width <= 0 || widget.height <= 0) return null
-    val left = widget.drawLeft
-    val top = widget.drawTop
-    val startX = left.coerceIn(0, frame.width)
-    val startY = top.coerceIn(0, frame.height)
-    val endX = (left + widget.width).coerceIn(0, frame.width)
-    val endY = (top + widget.height).coerceIn(0, frame.height)
-    val cropWidth = endX - startX
-    val cropHeight = endY - startY
-    if (cropWidth <= 0 || cropHeight <= 0) return null
-    val pixels = IntArray(cropWidth * cropHeight)
-    for (row in 0 until cropHeight) {
-        frame.argb.copyInto(
-            destination = pixels,
-            destinationOffset = row * cropWidth,
-            startIndex = (startY + row) * frame.width + startX,
-            endIndex = (startY + row) * frame.width + endX,
-        )
-    }
-    return PreviewFrame(cropWidth, cropHeight, pixels)
-}
 
 @Composable
 private fun RemovedWidgetRow(
@@ -3118,6 +3086,11 @@ private fun DirectWatchCanvas(
                     ),
                     filterQuality = FilterQuality.Low,
                 )
+                drawImage(
+                    image = dragLayer.foreground,
+                    dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                    filterQuality = FilterQuality.Low,
+                )
             }
         }
 
@@ -3941,6 +3914,7 @@ private fun PreviewFrame.rememberBitmap(): ImageBitmap {
 
 private data class WidgetDragLayer(
     val base: ImageBitmap,
+    val foreground: ImageBitmap,
     val widget: ImageBitmap,
     val offsetX: Int,
     val offsetY: Int,
@@ -3950,130 +3924,31 @@ private data class WidgetDragLayer(
 )
 
 @Composable
-private fun EditorSnapshot.rememberWidgetDragLayer(
-    globalIndex: Int,
-): WidgetDragLayer? = remember(
-    composedPreview.argb,
-    preview.argb,
-    widgetOverlay.argb,
-    widgetImageLayers,
-    widgets,
-    globalIndex,
-) {
-    val selected = widgets.singleOrNull { it.globalIndex == globalIndex }
-        ?: return@remember null
-    val sourceX = selected.drawLeft
-    val sourceY = selected.drawTop
-    val embeddedFrame = widgetImageLayers
-        .singleOrNull { it.globalIndex == globalIndex }
-        ?.frame
-    if (embeddedFrame != null) {
-        val basePixels = composedPreview.argb.copyOf()
-        for (localY in 0 until embeddedFrame.height) {
-            for (localX in 0 until embeddedFrame.width) {
-                val pixel = embeddedFrame.argb[localY * embeddedFrame.width + localX]
-                if (pixel ushr 24 == 0) continue
-                val x = sourceX + localX
-                val y = sourceY + localY
-                if (x !in 0 until preview.width || y !in 0 until preview.height) continue
-                val index = y * preview.width + x
-                basePixels[index] = preview.argb[index]
-            }
-        }
-        val baseBitmap = Bitmap.createBitmap(
-            basePixels,
-            preview.width,
-            preview.height,
-            Bitmap.Config.ARGB_8888,
-        )
-        val widgetBitmap = Bitmap.createBitmap(
-            embeddedFrame.argb,
-            embeddedFrame.width,
-            embeddedFrame.height,
-            Bitmap.Config.ARGB_8888,
-        )
-        return@remember WidgetDragLayer(
-            base = baseBitmap.asImageBitmap(),
-            widget = widgetBitmap.asImageBitmap(),
-            offsetX = 0,
-            offsetY = 0,
-            width = embeddedFrame.width,
-            height = embeddedFrame.height,
-            bitmaps = listOf(baseBitmap, widgetBitmap),
+private fun EditorSnapshot.rememberWidgetDragLayer(globalIndex: Int): WidgetDragLayer? =
+    remember(widgetImageLayers, widgets, preview.width, preview.height, globalIndex) {
+        val selected = widgets.singleOrNull { it.globalIndex == globalIndex }
+            ?: return@remember null
+        val position = widgetImageLayers.indexOfFirst { it.globalIndex == globalIndex }
+        if (position < 0) return@remember null
+        val layer = widgetImageLayers[position]
+        // Rebuild both sides of the selected record's z-order. No erasing from a flat
+        // image: lower widgets are revealed intact, upper widgets remain above the drag.
+        val base = WidgetLayerComposer.compose(preview.width, preview.height,
+            widgetImageLayers.take(position), widgets)
+        val foreground = WidgetLayerComposer.compose(preview.width, preview.height,
+            widgetImageLayers.drop(position + 1), widgets, transparent = true)
+        fun bitmap(frame: PreviewFrame) = Bitmap.createBitmap(
+            frame.argb, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+        val baseBitmap = bitmap(base)
+        val foregroundBitmap = bitmap(foreground)
+        val widgetBitmap = bitmap(layer.frame)
+        WidgetDragLayer(
+            baseBitmap.asImageBitmap(), foregroundBitmap.asImageBitmap(), widgetBitmap.asImageBitmap(),
+            selected.drawOffsetX + layer.offsetX, selected.drawOffsetY + layer.offsetY,
+            layer.frame.width, layer.frame.height,
+            listOf(baseBitmap, foregroundBitmap, widgetBitmap),
         )
     }
-    val cropLeft = sourceX.coerceIn(0, preview.width)
-    val cropTop = sourceY.coerceIn(0, preview.height)
-    val cropRight = (sourceX + selected.width).coerceIn(0, preview.width)
-    val cropBottom = (sourceY + selected.height).coerceIn(0, preview.height)
-    val cropWidth = cropRight - cropLeft
-    val cropHeight = cropBottom - cropTop
-    if (cropWidth <= 0 || cropHeight <= 0) return@remember null
-
-    val selectedArea = selected.width.toLong() * selected.height
-    val smallerOverlapMask = BooleanArray(preview.width * preview.height)
-    widgets.filter { other ->
-        other.globalIndex != selected.globalIndex &&
-            other.width > 0 &&
-            other.height > 0 &&
-            other.width.toLong() * other.height < selectedArea
-    }.forEach { other ->
-        val left = other.drawLeft
-        val top = other.drawTop
-        val right = (left + other.width).coerceAtMost(preview.width)
-        val bottom = (top + other.height).coerceAtMost(preview.height)
-        for (y in top.coerceAtLeast(0) until bottom) {
-            for (x in left.coerceAtLeast(0) until right) {
-                smallerOverlapMask[y * preview.width + x] = true
-            }
-        }
-    }
-    val layerPixels = IntArray(cropWidth * cropHeight)
-    var hasPixels = false
-    for (localY in 0 until cropHeight) {
-        for (localX in 0 until cropWidth) {
-            val x = cropLeft + localX
-            val y = cropTop + localY
-            if (smallerOverlapMask[y * preview.width + x]) continue
-            val pixel = widgetOverlay.argb[y * preview.width + x]
-            layerPixels[localY * cropWidth + localX] = pixel
-            hasPixels = hasPixels || pixel ushr 24 != 0
-        }
-    }
-    if (!hasPixels) return@remember null
-
-    val basePixels = composedPreview.argb.copyOf()
-    for (localY in 0 until cropHeight) {
-        for (localX in 0 until cropWidth) {
-            if (layerPixels[localY * cropWidth + localX] ushr 24 == 0) continue
-            val x = cropLeft + localX
-            val y = cropTop + localY
-            val index = y * preview.width + x
-            basePixels[index] = preview.argb[index]
-        }
-    }
-    val baseBitmap = Bitmap.createBitmap(
-        basePixels,
-        preview.width,
-        preview.height,
-        Bitmap.Config.ARGB_8888,
-    )
-    val widgetBitmap = Bitmap.createBitmap(
-        layerPixels,
-        cropWidth,
-        cropHeight,
-        Bitmap.Config.ARGB_8888,
-    )
-    WidgetDragLayer(
-        base = baseBitmap.asImageBitmap(),
-        widget = widgetBitmap.asImageBitmap(),
-        offsetX = cropLeft - sourceX,
-        offsetY = cropTop - sourceY,
-        width = cropWidth,
-        height = cropHeight,
-        bitmaps = listOf(baseBitmap, widgetBitmap),
-    )
-}
 
 private fun fittedRect(
     sourceWidth: Int,

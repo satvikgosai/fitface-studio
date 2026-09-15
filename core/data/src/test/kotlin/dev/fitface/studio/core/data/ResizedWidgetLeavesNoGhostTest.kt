@@ -130,18 +130,7 @@ class ResizedWidgetLeavesNoGhostTest {
             return listOf("$face: resize did not shrink the reported extent")
         }
 
-        val result = EditPreviewComposer.compose(
-            currentBackground = panelFrame(editedStyle),
-            originalBackground = panelFrame(style),
-            reference = reference,
-            widgets = widgets,
-            imageLayers = FaceRecordParser.widgetImageLayers(
-                entry = editedStyle,
-                originalEntry = style,
-                reference = reference,
-            ),
-        )
-
+        val result = WidgetPreviewComposer.compose(editedStyle, shrunk.entries)
         val ghosts = ghostPixels(result.widgetOverlay, resized, widgets)
         if (ghosts == 0) return emptyList()
         return listOf(
