@@ -25,6 +25,15 @@ import dev.fitface.studio.core.format.ProjectArchiveException
 import dev.fitface.studio.core.format.ProjectManifest
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StructuralEdit
+import dev.fitface.studio.core.format.StyleWidgetMatch
+import dev.fitface.studio.core.format.WidgetImporter
+import dev.fitface.studio.core.format.WidgetImportEdit
+import dev.fitface.studio.core.format.WidgetImportOrigin
+import dev.fitface.studio.core.format.WidgetImportOrigins
+import dev.fitface.studio.core.format.WidgetPristine
+import dev.fitface.studio.core.model.WidgetDonor
+import dev.fitface.studio.core.model.WidgetDonorVariant
+import dev.fitface.studio.core.model.WidgetImportPreview
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
@@ -56,10 +65,13 @@ import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -95,6 +107,93 @@ class WatchFaceRepositoryImpl @Inject constructor(
 ) : WatchFaceRepository {
     private val mutex = Mutex()
     private var session: Session? = null
+    private data class Donor(val handle: String, val faceId: String, val container: Fit3Container)
+    private data class PendingImport(val ticket: String, val donor: Donor, val session: Session,
+        val before: Fit3Container, val variant: String, val result: WidgetImportEdit)
+    private var donor: Donor? = null
+    private var pendingImport: PendingImport? = null
+
+    override suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = withContext(Dispatchers.Default) {
+        // This must not call openPackage: inspecting a donor never replaces the active project.
+        val loaded = loadSession(download.copyBytes(), download.displayName)
+        if (loaded.apk.faceId != download.expectedFaceId)
+            throw WatchFaceException("The downloaded package belongs to a different face. Try again.")
+        val candidate = Donor(UUID.randomUUID().toString(), loaded.apk.faceId, loaded.originalContainer)
+        mutex.withLock {
+            currentCoroutineContext().ensureActive()
+            donor = candidate
+            pendingImport = null
+            WidgetDonor(candidate.handle, candidate.faceId, FaceResources.variantEntries(candidate.container).map {
+                val number = EditorVariant.styleNumberOf(it.basename)
+                EditorVariant(it.basename, if (number == null) VariantKind.AOD else VariantKind.STYLE, number)
+            })
+        }
+    }
+
+    override suspend fun widgetDonorVariant(handle: String, variant: String): WidgetDonorVariant =
+        withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val source = donor?.takeIf { it.handle == handle }
+                    ?: throw WatchFaceException("Choose the source watch face again.")
+                val entry = StyleWidgetMatch.requireVariantEntry(source.container.entryByBasename(variant))
+                val guides = FaceRecordParser.widgetGuides(entry)
+                val composition = WidgetPreviewComposer.compose(entry, source.container.entries,
+                    WidgetTextRasterizer::render, java.util.Locale.getDefault().toString())
+                // `composed` is the donor face itself, and it was already being built here
+                // to obtain the layers — the picker draws it rather than describing each
+                // record in words, and hit-tests the same guides on it.
+                WidgetDonorVariant(guides, composition.widgetImageLayers, guides.mapNotNull { guide ->
+                    WidgetImporter.unavailableReason(entry, guide.globalIndex)?.let { guide.globalIndex to it }
+                }.toMap(), composition.composed, guides.mapNotNull { guide ->
+                    WidgetImporter.addedBytesEstimate(entry, guide.globalIndex)?.let { guide.globalIndex to it }
+                }.toMap())
+            }
+        }
+
+    override suspend fun previewWidgetImport(handle: String, donorVariant: String, index: Int,
+        projectId: Long, targetVariant: String): WidgetImportPreview = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            pendingImport = null
+            val current = requireSession()
+            if (current.projectId != projectId || current.selectedVariantName != targetVariant)
+                throw WatchFaceException("The target project changed. Open the importer again.")
+            val source = donor?.takeIf { it.handle == handle }
+                ?: throw WatchFaceException("Choose the source watch face again.")
+            val result = WidgetImporter.importWidget(current.currentContainer, targetVariant,
+                source.container, donorVariant, index)
+            val origins = current.originsWith(source.faceId, targetVariant, result)
+            origins.validate(current.originalContainer, result.edit.container)
+            val entry = result.edit.container.entryByBasename(targetVariant)
+            val preview = WidgetPreviewComposer.compose(entry, result.edit.container.entries,
+                WidgetTextRasterizer::render, java.util.Locale.getDefault().toString()).composed
+            val ticket = UUID.randomUUID().toString()
+            currentCoroutineContext().ensureActive()
+            pendingImport = PendingImport(ticket, source, current, current.currentContainer, targetVariant, result)
+            WidgetImportPreview(ticket, result.edit.sizeDelta, result.edit.container.fileSize,
+                FaceRecordParser.widgetGuides(entry).last(), preview)
+        }
+    }
+
+    override suspend fun importWidget(ticket: String): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val pending = pendingImport?.takeIf { it.ticket == ticket }
+                ?: throw WatchFaceException("Preview this widget again before adding it.")
+            val current = requireSession()
+            if (current !== pending.session || current.currentContainer !== pending.before ||
+                current.selectedVariantName != pending.variant || donor !== pending.donor)
+                throw WatchFaceException("The project changed after the preview. Preview the import again.")
+            val origins = current.originsWith(pending.donor.faceId, pending.variant, pending.result)
+            val snapshot = commit(current, pending.result.edit.container,
+                pending.result.edit.audit("Widget imported from face ${pending.donor.faceId} into ${pending.variant}"),
+                pending.variant, origins)
+            pendingImport = null
+            snapshot
+        }
+    }
+
+    override suspend fun releaseWidgetDonor(handle: String) = mutex.withLock {
+        if (donor?.handle == handle) { donor = null; pendingImport = null }
+    }
     private val removedWidgetIds = AtomicLong()
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -322,6 +421,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     localApkPath = null,
                     editedBinPath = null,
                 )
+                source.editedBinPath?.let(::File)?.takeIf(::isCheckpoint)?.let(::readCheckpoint)
                 val newId = projectDao.insert(copy)
                 // The same shape as `openPackage`, and for the same reason: the id is what
                 // names the directory, so the row has to exist before the files can be
@@ -336,7 +436,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                             ?.let(::File)
                             ?.takeIf(File::isFile)
                             ?.let { edited ->
-                                File(target, "edited.bin")
+                                File(target, if (isCheckpoint(edited)) edited.name else "edited.bin")
                                     .also { copyFileAtomically(edited, it) }
                             }
                         // These two are found by convention rather than by a stored path,
@@ -421,11 +521,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     "export: missing local APK for project $projectId",
                 )
             val directory = projectDirectory(projectId)
-            val edited = project.editedBinPath
+            val editedFile = project.editedBinPath
                 ?.let(::File)
                 ?.takeIf(File::isFile)
-                ?.readBytes()
+            val checkpoint = project.editedBinPath?.let(::File)?.takeIf(::isCheckpoint)?.let(::readCheckpoint)
+            val edited = checkpoint?.editedContainer?.let { Base64.getDecoder().decode(it) } ?: editedFile?.readBytes()
+            val sessionBytes = checkpoint?.let { json.encodeToString(it.copy(editedContainer = null)).encodeToByteArray() }
+                ?: File(directory, "session.json").takeIf(File::isFile)?.readBytes()
             val manifest = ProjectManifest(
+                schema = if (checkpoint == null) 1 else 2,
                 projectName = project.resolvedName,
                 faceId = project.faceId,
                 displayName = project.displayName,
@@ -458,9 +562,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                             destination = output,
                             manifest = manifest,
                             editedContainer = edited,
-                            sessionState = File(directory, "session.json")
-                                .takeIf(File::isFile)
-                                ?.readBytes(),
+                            sessionState = sessionBytes,
                         )
                     }
                 }
@@ -530,7 +632,37 @@ class WatchFaceRepositoryImpl @Inject constructor(
                             "container=${loaded.apk.faceId}",
                     )
                 }
-                val edited = contents.editedContainer?.let { validateEdited(it, loaded) }
+                if (contents.manifest.schema == 1) contents.sessionState?.let { bytes ->
+                    val state = json.parseToJsonElement(bytes.decodeToString()) as? kotlinx.serialization.json.JsonObject
+                    require(state?.get("schema")?.toString()?.let { it == "1" } != false) {
+                        "This session state requires a newer project archive schema."
+                    }
+                    require(state?.get("importOrigins") == null || state["importOrigins"] == kotlinx.serialization.json.JsonNull) {
+                        "Imported artwork requires project archive schema 2."
+                    }
+                }
+                val storedImports = if (contents.manifest.schema == 2) {
+                    val state = contents.sessionState ?: throw WatchFaceException("This project's imported artwork is missing.")
+                    json.decodeFromString<StoredSessionState>(state.decodeToString()).also {
+                        require(it.schema == 2 && it.importOrigins != null && it.editedContainer == null) {
+                            "Invalid imported artwork metadata."
+                        }
+                    }
+                } else null
+                val edited = contents.editedContainer?.let { validateEdited(it, loaded, storedImports?.importOrigins) }
+                if (storedImports != null) {
+                    require(edited != null) { "This project's imported edit is missing." }
+                    loaded.currentContainer = Fit3Container.parse(edited)
+                    applyStoredState(storedImports, loaded)
+                }
+                // ZIP inflation and private checkpoint limits differ because the latter
+                // base64-encodes the BIN. Refuse an unopenable checkpoint before any row.
+                val checkpointBytes = storedImports?.let { stored ->
+                    json.encodeToString(stored.copy(editedContainer =
+                        Base64.getEncoder().encodeToString(requireNotNull(edited)))).encodeToByteArray().also {
+                        require(it.size <= MAX_CHECKPOINT_BYTES) { "This project's saved import data is too large." }
+                    }
+                }
                 val now = System.currentTimeMillis()
                 val siblings = projectDao.findByFaceId(loaded.apk.faceId)
                 val project = ProjectEntity(
@@ -571,11 +703,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         val localApk = File(projectDirectory(newId).apply { mkdirs() }, "source.apk")
                         writeAtomically(localApk, bytes)
                         val editedFile = edited?.let {
-                            File(projectDirectory(newId), "edited.bin").also { file ->
-                                writeAtomically(file, it)
+                            File(projectDirectory(newId), if (storedImports == null) "edited.bin"
+                                else "edit-${UUID.randomUUID()}.checkpoint").also { file ->
+                                writeAtomically(file, checkpointBytes ?: it)
                             }
                         }
-                        contents.sessionState?.takeIf { edited != null }?.let {
+                        contents.sessionState?.takeIf { edited != null && storedImports == null }?.let {
                             writeAtomically(File(projectDirectory(newId), "session.json"), it)
                         }
                         // Written here rather than left to the first `openProject`, which is
@@ -664,12 +797,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
      * Two checks, and each one catches a failure that would otherwise be silent. A container
      * that does not validate is one `validatedBytes()` refuses to send, and finding that out
      * on the Install page — after the edits have been reviewed — is finding it out too late.
-     * And the entry paths have to match the pristine container's, which is what an
-     * `edited.bin` from a different face fails: no edit in this app adds or removes a
-     * container entry, so the two lists are equal for every project the app itself wrote.
-     * An edit that ever does change them has to relax this, and would know to.
+     * Entry paths must match the pristine container's. Imported-widget provenance makes
+     * one narrow exception: original paths stay in order and bounded named font resources
+     * may be appended, with native bindings/dictionary prefixes preserved.
      */
-    private fun validateEdited(bytes: ByteArray, loaded: Session): ByteArray {
+    private fun validateEdited(bytes: ByteArray, loaded: Session, origins: WidgetImportOrigins? = null): ByteArray {
         // Refused here rather than left to `validatedBytes()`. A container past the ceiling
         // transfers, is accepted and leaves the old face up — the failure looks exactly like
         // success — and this app's own `rebuild` refuses to grow one past it, so a container
@@ -701,7 +833,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
         val expected = loaded.originalContainer.entries.map(ContainerEntry::path)
         val actual = container.entries.map(ContainerEntry::path)
-        if (expected != actual) {
+        origins?.validate(loaded.originalContainer, container)
+        if (origins == null && expected != actual) {
             throw WatchFaceException(
                 "That project's saved edit does not belong to the watch face beside it.",
                 "import: entry mismatch expected=${expected.size} actual=${actual.size}",
@@ -874,6 +1007,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     height = prepared.height,
                     argb = pixels,
                 )
+                val origins = edit.changedStyles.fold(current.importOrigins) { saved, variant ->
+                    saved?.renumber(variant) { it + 1 }
+                }
                 commit(
                     current,
                     edit.container,
@@ -890,6 +1026,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                                 "black to stay under the watch's size ceiling"
                         },
                     ),
+                    importOrigins = origins,
                 )
             }
         }
@@ -973,7 +1110,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.editTargets(styleName, applyToAllStyles)
+            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
             val edit = FaceEditor.recolorPairWidgetAcrossStyles(
                 source = current.currentContainer,
                 entryBasenames = styleNames,
@@ -1008,7 +1145,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.editTargets(styleName, applyToAllStyles)
+            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
             val edit = FaceEditor.moveWidgetAcrossStyles(
                 source = current.currentContainer,
                 entryBasenames = styleNames,
@@ -1073,7 +1210,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.editTargets(styleName, applyToAllStyles)
+            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
             val edit = StructuralEditor.resizeWidget(
                 current.currentContainer,
                 styleNames,
@@ -1088,6 +1225,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // same reason `reference` is read from the original container. Without
                 // it, Smaller-then-Larger hands back a blurred sprite.
                 pristine = current.originalContainer,
+                pristineWidgets = current.pristineWidgets(styleNames, styleName, globalIndex),
             )
             commit(
                 current,
@@ -1110,7 +1248,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.editTargets(styleName, applyToAllStyles)
+            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
             val guide = FaceRecordParser.widgetGuides(
                 current.currentContainer.entryByBasename(styleName),
             ).firstOrNull { it.globalIndex == globalIndex }
@@ -1155,6 +1293,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 sourceLabel = guide?.sourceLabel,
                 followsReading = guide?.followsReading ?: false,
                 recordsByVariant = edit.removedRecords,
+                importOriginId = current.importOrigins?.find(styleName, globalIndex)?.id,
             )
             val previousRemoved = current.removedWidgets.toList()
             current.removedWidgets += removed
@@ -1164,6 +1303,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     edit.container,
                     edit.audit("Widget removed " + editScope(styleName, applyToAllStyles)),
                     styleName,
+                    importOrigins = edit.removedRecords.entries.fold(current.importOrigins) { origins, (variant, raw) ->
+                        val cut = (raw[0x0E].toInt() and 255) or ((raw[0x0F].toInt() and 255) shl 8)
+                        origins?.renumber(variant) { if (it == cut) null else if (it > cut) it - 1 else it }
+                    },
                 )
             } catch (error: Throwable) {
                 current.removedWidgets.clear()
@@ -1194,6 +1337,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         // end, so the one it carried when it was cut is not where it lands
                         // and naming it here would be pointing at another widget.
                         edit.audit("Widget restored at the end of the table"),
+                        importOrigins = removed.importOriginId?.let { id ->
+                            current.importOrigins?.append(id,
+                                FaceRecordParser.scanWidgets(edit.container.entryByBasename(removed.recordsByVariant.keys.single())).last().globalIndex)
+                        } ?: current.importOrigins,
                     )
                 } catch (error: Throwable) {
                     current.removedWidgets.clear()
@@ -1266,7 +1413,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.editTargets(styleName, applyToAllStyles)
+            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
             val edit = StructuralEditor.duplicateWidget(
                 current.currentContainer,
                 styleNames,
@@ -1281,6 +1428,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 edit.container,
                 edit.audit("Widget duplicated " + editScope(styleName, applyToAllStyles)),
                 styleName,
+                importOrigins = current.importOrigins?.find(styleName, globalIndex)?.let { origin ->
+                    current.importOrigins?.append(origin.id,
+                        FaceRecordParser.scanWidgets(edit.container.entryByBasename(styleName)).last().globalIndex)
+                } ?: current.importOrigins,
             )
         }
     }
@@ -1293,6 +1444,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val previousRemoved = current.removedWidgets.toList()
             val previousThumbnail = current.thumbnailContainer
             current.currentContainer = current.originalContainer
+            val previousOrigins = current.importOrigins
+            current.importOrigins = null
             current.audit = null
             current.removedWidgets.clear()
             current.thumbnailContainer = null
@@ -1308,6 +1461,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 current.removedWidgets.clear()
                 current.removedWidgets += previousRemoved
                 current.thumbnailContainer = previousThumbnail
+                current.importOrigins = previousOrigins
                 throw error
             }
         }
@@ -1376,14 +1530,26 @@ class WatchFaceRepositoryImpl @Inject constructor(
         container: Fit3Container,
         audit: EditAuditSummary,
         styleName: String? = null,
+        importOrigins: WidgetImportOrigins? = current.importOrigins,
     ): EditorSnapshot {
         val previousContainer = current.currentContainer
         val previousAudit = current.audit
         val previousActiveStyle = current.activeStyleName
         val previousVariant = current.selectedVariantName
+        val previousOrigins = current.importOrigins
+        val previousRemoved = current.removedWidgets.toList()
         current.currentContainer = container
+        current.importOrigins = importOrigins
         current.audit = audit
         return try {
+            val relocated = current.removedWidgets.map { removed ->
+                removed.copy(recordsByVariant = removed.recordsByVariant.mapValues { (variant, raw) ->
+                    StructuralEditor.relocateSavedWidget(previousContainer.entryByBasename(variant),
+                        container.entryByBasename(variant), raw)
+                })
+            }
+            current.removedWidgets.clear()
+            current.removedWidgets += relocated
             val snapshot = current.snapshot(styleName)
             persistEdited(current, keepEdited = true)
             // Recorded only once the edit has actually stuck. The worst bugs here leave a
@@ -1406,6 +1572,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
             current.audit = previousAudit
             current.activeStyleName = previousActiveStyle
             current.selectedVariantName = previousVariant
+            current.importOrigins = previousOrigins
+            current.removedWidgets.clear()
+            current.removedWidgets += previousRemoved
             throw error
         }
     }
@@ -1413,7 +1582,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
     /**
      * Writes an edit — or a reset — as one commit across the database and the disk.
      *
-     * **The database pointer goes first, and that ordering is the whole fix.** It used to
+     * Imported-widget checkpoints use a new immutable file and then swap the row pointer.
+     * The following describes the retained legacy BIN/session branch only.
+     * **The database pointer goes first.** It used to
      * come last: `edited.bin` was replaced, then `session.json`, then the row, and the row
      * is the only one of the three behind a cancellable suspension. So a commit that threw
      * or was cancelled at the DAO left the new container on disk while [commit] rolled
@@ -1439,6 +1610,29 @@ class WatchFaceRepositoryImpl @Inject constructor(
         if (current.projectId <= 0) return
         val project = projectDao.findById(current.projectId) ?: return
         val directory = projectDirectory(current.projectId)
+        if (keepEdited && current.importOrigins != null) {
+            // A new immutable file plus one Room pointer swap is the commit point. Neither
+            // the previous BIN nor its provenance is overwritten before the DAO succeeds.
+            val checkpoint = File(directory, "edit-${UUID.randomUUID()}.checkpoint")
+            val stored = storedState(current).copy(editedContainer =
+                Base64.getEncoder().encodeToString(current.currentContainer.toByteArray()))
+            val bytes = json.encodeToString(stored).encodeToByteArray()
+            require(bytes.size <= MAX_CHECKPOINT_BYTES) { "This project's saved import data is too large." }
+            withContext(NonCancellable) {
+                try {
+                    writeAtomically(checkpoint, bytes)
+                    projectDao.insert(project.copy(editedBinPath = checkpoint.absolutePath,
+                        selectedStyle = current.activeStyleName, updatedAtEpochMillis = System.currentTimeMillis()))
+                } catch (error: Throwable) {
+                    checkpoint.delete()
+                    throw error
+                }
+                project.editedBinPath?.let(::File)?.takeIf {
+                    it.parentFile == directory && isCheckpoint(it) && it != checkpoint
+                }?.let { runCatching { it.delete() } }
+            }
+            return
+        }
         val editedFile = File(directory, "edited.bin")
         projectDao.insert(
             project.copy(
@@ -1457,6 +1651,48 @@ class WatchFaceRepositoryImpl @Inject constructor(
             editedFile.delete()
         }
         persistSessionState(directory, current, keepEdited)
+        if (!keepEdited) project.editedBinPath?.let(::File)?.takeIf {
+            it.parentFile == directory && isCheckpoint(it)
+        }?.let { runCatching { it.delete() } }
+    }
+
+    private fun storedState(current: Session) = StoredSessionState(
+        schema = if (current.importOrigins == null) 1 else 2,
+        thumbnailRefreshed = current.thumbnailRefreshed,
+        removed = current.removedWidgets.map(::StoredRemovedWidget),
+        importOrigins = current.importOrigins,
+    )
+
+    private fun isCheckpoint(file: File) = file.name.matches(Regex("edit-[a-f0-9-]{36}\\.checkpoint"))
+
+    private fun readCheckpoint(file: File): StoredSessionState {
+        require(file.isFile && file.length() in 1..MAX_CHECKPOINT_BYTES.toLong()) { "The project's saved import data is missing or too large." }
+        val stored = json.decodeFromString<StoredSessionState>(file.readText())
+        require(stored.schema == 2 && stored.importOrigins != null && stored.editedContainer != null) {
+            "The project's imported artwork cannot be read."
+        }
+        require(stored.editedContainer.length <= (WATCH_CONTAINER_BYTE_CEILING + 2) / 3 * 4) { "The saved edit is too large." }
+        return stored
+    }
+
+    private fun applyStoredState(stored: StoredSessionState, current: Session) {
+        require(stored.schema in 1..2 && (stored.schema != 2 || stored.importOrigins != null)) {
+            "This project's import data needs a newer app or is incomplete."
+        }
+        stored.importOrigins?.validate(current.originalContainer, current.currentContainer)
+        val removed = stored.removed.map { it.toModel(removedWidgetIds.incrementAndGet()) }
+        removed.forEach { widget ->
+            widget.importOriginId?.let { id ->
+                val origin = stored.importOrigins?.widgets?.singleOrNull { it.id == id }
+                require(origin != null && widget.recordsByVariant.keys == setOf(origin.variant)) {
+                    "A removed widget's imported artwork is missing."
+                }
+            }
+        }
+        current.importOrigins = stored.importOrigins
+        current.thumbnailContainer = current.currentContainer.takeIf { stored.thumbnailRefreshed }
+        current.removedWidgets.clear()
+        current.removedWidgets += removed
     }
 
     /**
@@ -1492,13 +1728,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }.getOrNull() ?: return
         // The edited BIN on disk is the container whose preview.bin was rendered, so
         // the restored session's thumbnail is current for exactly that container.
-        current.thumbnailContainer = current.currentContainer.takeIf {
-            stored.thumbnailRefreshed
-        }
-        current.removedWidgets.clear()
-        stored.removed.forEach { entry ->
-            current.removedWidgets += entry.toModel(removedWidgetIds.incrementAndGet())
-        }
+        require(stored.importOrigins == null && stored.schema == 1) { "Imported artwork requires an atomic checkpoint." }
+        applyStoredState(stored, current)
     }
 
     private fun requireSession(): Session =
@@ -1534,12 +1765,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
             )
         }
         val original = Fit3Container.parse(apk.binary)
-        val current = editedBinPath
-            ?.let(::File)
-            ?.takeIf(File::isFile)
-            ?.readBytes()
-            ?.let(Fit3Container::parse)
-            ?: original
+        val editedFile = editedBinPath?.let(::File)
+        val checkpoint = editedFile?.takeIf(::isCheckpoint)?.let(::readCheckpoint)
+        val current = (checkpoint?.editedContainer?.let { Base64.getDecoder().decode(it) }
+            ?: editedFile?.takeIf(File::isFile)?.readBytes())?.let(Fit3Container::parse) ?: original
         val resolvedName = fallbackName.ifBlank {
             "SM-R390_${apk.faceId}.apk"
         }
@@ -1551,7 +1780,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
             sourceName = resolvedName,
             activeStyleName = activeStyleName,
         ).also {
-            if (projectId > 0 && current !== original) {
+            if (checkpoint != null) {
+                validateEdited(current.toByteArray(), it, checkpoint.importOrigins)
+                applyStoredState(checkpoint, it)
+            } else if (projectId > 0 && current !== original) {
                 restoreSessionState(projectDirectory(projectId), it)
             }
         }
@@ -1689,6 +1921,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         /** Style index → the package's preview for it, extracted to app storage. */
         var stylePreviewFiles: Map<Int, String> = emptyMap(),
         val removedWidgets: MutableList<RemovedWidget> = mutableListOf(),
+        var importOrigins: WidgetImportOrigins? = null,
         /**
          * Committed edits and resets, in order, for the bug report. Never persisted, and
          * bounded like [DiagnosticsLog] is — a session left open all afternoon would
@@ -1706,6 +1939,36 @@ class WatchFaceRepositoryImpl @Inject constructor(
          */
         var thumbnailContainer: Fit3Container? = null,
     ) {
+        fun originsWith(faceId: String, variant: String, result: WidgetImportEdit): WidgetImportOrigins {
+            val previous = importOrigins ?: WidgetImportOrigins(WidgetImportOrigins.digest(originalContainer.toByteArray()), emptyList())
+            return previous.copy(widgets = previous.widgets + WidgetImportOrigin(
+                UUID.randomUUID().toString(), faceId, variant,
+                Base64.getEncoder().encodeToString(result.baseline.data), listOf(result.globalIndex)))
+        }
+
+        fun widgetEditTargets(styleName: String, applyToAllStyles: Boolean, index: Int): List<String> {
+            if (importOrigins?.find(styleName, index) != null) return listOf(styleName)
+            val source = FaceRecordParser.scanWidgets(currentContainer.entryByBasename(styleName))
+                .singleOrNull { it.globalIndex == index } ?: return listOf(styleName)
+            return editTargets(styleName, applyToAllStyles).filter { variant ->
+                variant == styleName || StyleWidgetMatch.match(currentContainer.entryByBasename(variant), source)
+                    ?.let { importOrigins?.find(variant, it.globalIndex) == null } != false
+            }
+        }
+
+        fun pristineWidgets(styleNames: List<String>, styleName: String, index: Int): Map<String, WidgetPristine> {
+            val origins = importOrigins ?: return emptyMap()
+            val imported = origins.find(styleName, index)
+            if (imported != null) return mapOf(styleName to WidgetPristine(
+                imported.entry(currentContainer.entryByBasename(styleName)), imported.indices.associateWith { 0 }))
+            return styleNames.associateWith { variant ->
+                val entry = currentContainer.entryByBasename(variant)
+                val original = originalContainer.entryByBasename(variant)
+                val excluded = origins.indices(variant)
+                WidgetPristine(original, FaceRecordParser.originalWidgetSources(entry, original, excluded) +
+                    FaceRecordParser.duplicateSourceGlobalIndices(entry, original, excluded))
+            }
+        }
         private val originalReport = originalContainer.validate()
 
         val thumbnailRefreshed: Boolean
@@ -2084,16 +2347,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // icon, and a style with no full-panel raster simply draws onto black.
             val currentBackground = panelFrame(selected)
             val originalWidgets = originalGuidesFor(selected.basename)
+            val importedIndices = importOrigins?.indices(selected.basename).orEmpty()
             val duplicateSources = FaceRecordParser.duplicateSourceGlobalIndices(
                 selected,
                 originalStyle,
+                importedIndices,
             )
             // A structural edit renumbers the table, so the original has to be resolved
             // by identity rather than by index — see `originalWidgetSources`.
-            val originalSources = FaceRecordParser.originalWidgetSources(selected, originalStyle)
+            val originalSources = FaceRecordParser.originalWidgetSources(selected, originalStyle, importedIndices)
             val widgets = FaceRecordParser.widgetGuides(selected).map { widget ->
                 val duplicateSource = duplicateSources[widget.globalIndex]
-                val original = originalSources[widget.globalIndex]?.let(originalWidgets::get)
+                val imported = importOrigins?.find(selected.basename, widget.globalIndex)
+                val original = imported?.let { FaceRecordParser.widgetGuides(it.entry(selected)).single() }
+                    ?: originalSources[widget.globalIndex]?.let(originalWidgets::get)
                     ?: duplicateSource?.let(originalWidgets::get)
                 widget.copy(
                     originalX = original?.x ?: widget.x,
@@ -2111,6 +2378,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     originalHeight = original?.height ?: widget.height,
                     originalColorArgb = original?.colorArgb ?: widget.colorArgb,
                     duplicateSourceGlobalIndex = duplicateSource,
+                    importedFromFaceId = imported?.faceId,
                 )
             }
             // Every variant is reconstructed from its current records, in record order.
@@ -2222,8 +2490,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
 @Serializable
 private data class StoredSessionState(
+    val schema: Int = 1,
     val thumbnailRefreshed: Boolean = false,
     val removed: List<StoredRemovedWidget> = emptyList(),
+    val importOrigins: WidgetImportOrigins? = null,
+    /** Present only in the app-private atomic checkpoint, never in exported session.json. */
+    val editedContainer: String? = null,
 )
 
 /**
@@ -2249,6 +2521,7 @@ private data class StoredRemovedWidget(
     val globalIndex: Int = UnknownGlobalIndex,
     val sourceLabel: String? = null,
     val followsReading: Boolean = false,
+    val importOriginId: String? = null,
     @SerialName("label") val legacyLabel: String? = null,
 ) {
     constructor(widget: RemovedWidget) : this(
@@ -2264,6 +2537,7 @@ private data class StoredRemovedWidget(
         globalIndex = widget.globalIndex,
         sourceLabel = widget.sourceLabel,
         followsReading = widget.followsReading,
+        importOriginId = widget.importOriginId,
     )
 
     fun toModel(id: Long) = RemovedWidget(
@@ -2277,6 +2551,7 @@ private data class StoredRemovedWidget(
         height = height,
         sourceLabel = sourceLabel,
         followsReading = followsReading,
+        importOriginId = importOriginId,
         recordsByVariant = recordsByVariant.mapValues { Base64.getDecoder().decode(it.value) },
     )
 
@@ -2291,6 +2566,7 @@ private data class StoredRemovedWidget(
 
 /** [RemovedWidget.globalIndex] for a session that predates the field. */
 private const val UnknownGlobalIndex = -1
+private const val MAX_CHECKPOINT_BYTES = 13 * 1024 * 1024
 
 /**
  * A manifest read back from a file, cut down to what a project row can hold.

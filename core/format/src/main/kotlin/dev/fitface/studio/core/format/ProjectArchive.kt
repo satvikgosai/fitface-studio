@@ -29,7 +29,7 @@ data class ProjectManifest(
      * a build that guessed at a newer layout would import a project silently missing
      * whatever the newer field was, and the reader would find out by looking at the face.
      */
-    val schema: Int = ProjectArchive.Schema,
+    val schema: Int = 1,
     /** The name the project had. Deduplicated against the importing library on the way in. */
     val projectName: String,
     val faceId: String,
@@ -97,7 +97,7 @@ data class ProjectArchiveContents(
  * fresh one instead of nesting them.
  */
 object ProjectArchive {
-    const val Schema = 1
+    const val Schema = 2
 
     const val ManifestEntry = "fitface/project.json"
     const val EditedEntry = "fitface/edited.bin"
@@ -158,8 +158,11 @@ object ProjectArchive {
         editedContainer: ByteArray?,
         sessionState: ByteArray?,
     ) {
-        require(manifest.schema == Schema) {
+        require(manifest.schema in 1..Schema) {
             "a manifest is written at schema $Schema, not ${manifest.schema}"
+        }
+        require(manifest.schema != 2 || (editedContainer != null && sessionState != null)) {
+            "imported-widget archives require both the edit and its artwork metadata"
         }
         var containers = 0
         try {
@@ -260,11 +263,13 @@ object ProjectArchive {
         // Refused rather than read hopefully. `ignoreUnknownKeys` means a newer archive
         // decodes without complaint while quietly dropping whatever the new field was, and
         // the reader would find that out by looking at the face rather than by being told.
-        if (manifest.schema > Schema) {
+        if (manifest.schema !in 1..Schema) {
             throw ProjectArchiveException(
                 "that project was exported by a newer version of this app",
             )
         }
+        if (manifest.schema == 2 && (edited == null || session == null))
+            throw ProjectArchiveException("that project's imported artwork or saved edit is missing")
         // A session with no edit describes removals from a container nothing removed
         // anything from. `pack` will not write that pair; an archive that carries it was
         // assembled by hand, and dropping the half that cannot apply is the honest reading.

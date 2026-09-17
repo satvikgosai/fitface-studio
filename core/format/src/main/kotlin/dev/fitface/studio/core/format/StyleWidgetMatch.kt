@@ -17,7 +17,7 @@ import dev.fitface.studio.core.model.AOD_ENTRY_NAME
  * happen or fail loudly — and every other variant is best effort: it is edited
  * where the same widget is unambiguously there, and left alone where it is not.
  */
-internal object StyleWidgetMatch {
+object StyleWidgetMatch {
     private val STYLE_ENTRY = Regex("""style\d+\.bin""")
 
     fun isVariantEntry(basename: String): Boolean =

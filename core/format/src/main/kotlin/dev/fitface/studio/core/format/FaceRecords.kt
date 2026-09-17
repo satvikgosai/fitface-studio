@@ -1038,9 +1038,11 @@ object FaceRecordParser {
     fun originalWidgetSources(
         entry: ContainerEntry,
         originalEntry: ContainerEntry,
+        excludedIndices: Set<Int> = emptySet(),
     ): Map<Int, Int> {
         val originals = scanWidgets(originalEntry)
-        val current = scanWidgets(entry).sortedBy(WidgetRecord::globalIndex)
+        val current = scanWidgets(entry).filterNot { it.globalIndex in excludedIndices }
+            .sortedBy(WidgetRecord::globalIndex)
         val originalImages = imagesByRelativeOffset(originalEntry)
         val currentImages = imagesByRelativeOffset(entry)
         val claimed = mutableSetOf<Int>()
@@ -1144,14 +1146,15 @@ object FaceRecordParser {
     fun duplicateSourceGlobalIndices(
         entry: ContainerEntry,
         originalEntry: ContainerEntry,
+        excludedIndices: Set<Int> = emptySet(),
     ): Map<Int, Int> {
-        val sources = originalWidgetSources(entry, originalEntry)
+        val sources = originalWidgetSources(entry, originalEntry, excludedIndices)
         val originals = scanWidgets(originalEntry)
         val originalImages = imagesByRelativeOffset(originalEntry)
         val currentImages = imagesByRelativeOffset(entry)
         return scanWidgets(entry)
             .asSequence()
-            .filterNot { it.globalIndex in sources }
+            .filterNot { it.globalIndex in sources || it.globalIndex in excludedIndices }
             .mapNotNull { duplicate ->
                 val key = payloadKey(duplicate, currentImages)
                 val matches = originals.filter { payloadKey(it, originalImages) == key }

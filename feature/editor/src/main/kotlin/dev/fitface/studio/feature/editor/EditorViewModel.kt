@@ -284,10 +284,23 @@ class EditorViewModel @Inject constructor(
     }
 
     fun selectWidget(globalIndex: Int?) {
-        mutableState.value = mutableState.value.copy(selectedWidgetIndex = globalIndex)
+        val imported = mutableState.value.snapshot?.widgets?.singleOrNull { it.globalIndex == globalIndex }
+            ?.importedFromFaceId != null
+        mutableState.value = mutableState.value.copy(selectedWidgetIndex = globalIndex,
+            applyWidgetEditsToAllStyles = !imported && mutableState.value.applyWidgetEditsToAllStyles)
+    }
+
+    fun acceptWidgetImport(snapshot: EditorSnapshot) {
+        if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
+        mutableState.value = mutableState.value.copy(snapshot = snapshot,
+            selectedWidgetIndex = snapshot.widgets.lastOrNull()?.globalIndex,
+            applyWidgetEditsToAllStyles = false, previewReviewed = false, pendingWidgetMove = null)
     }
 
     fun setApplyWidgetEditsToAllStyles(value: Boolean) {
+        if (value && mutableState.value.snapshot?.widgets?.singleOrNull {
+            it.globalIndex == mutableState.value.selectedWidgetIndex
+        }?.importedFromFaceId != null) return
         mutableState.value = mutableState.value.copy(applyWidgetEditsToAllStyles = value)
     }
 

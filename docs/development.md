@@ -94,15 +94,16 @@ anyone holding it can produce an APK a device will accept as an update.
   :app:lintDebug
 ```
 
-Current baseline: **456 unit tests, 0 failures, 0 lint errors, 16 lint warnings.**
+Current corpus-backed baseline: **555 tests collected, 554 passed, 1 skipped,
+0 failures, 0 lint errors, 23 lint warnings.**
 Every warning is a dependency- or SDK-version notice in a build file, none in this
 code, so the count tracks whatever the ecosystem has published since.
 
-127 of the 456 read the uncommitted corpus and skip without it, and
-`IdentityTransferProtocolTest` skips without the recorded protocol fixtures. A clean
-clone therefore runs 328 and still passes.
+The skipped test is `IdentityTransferProtocolTest`, which needs recorded protocol
+fixtures. Tests that read the uncommitted corpus also skip when it is absent; a clean
+clone therefore runs a smaller subset. Do not infer corpus coverage from success alone.
 
-27 of them are `:core:ui`'s, which is the only module whose tests measure composables.
+`:core:ui` is the only module whose tests measure composables.
 `FitTopBarLayoutTest` is the one that measures a real layout, so it runs Robolectric in
 `@GraphicsMode(NATIVE)`: the default stub font metrics collapse every string to a few
 pixels, which makes a text-labelled button look tiny and a title column look enormous.

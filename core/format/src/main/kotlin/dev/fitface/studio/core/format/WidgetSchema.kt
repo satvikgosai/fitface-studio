@@ -39,6 +39,9 @@ object WidgetSchema {
     /** Widget types this format defines. Anything outside `1..17` is not a widget. */
     val SUPPORTED_TYPES = 1..17
 
+    /** Vendor-produced types whose resource closure the experimental importer implements. */
+    val IMPORTABLE_STOCK_TYPES = setOf(1, 2, 3, 5, 6, 7, 13, 16, 17)
+
     /**
      * A field holding the global index of the widget this one is positioned against.
      *

@@ -226,6 +226,7 @@ fun EditorRoute(
         onRemoveWidget = viewModel::removeSelectedWidget,
         onDuplicateWidget = viewModel::duplicateSelectedWidget,
         onRestoreWidget = viewModel::restoreWidget,
+        onWidgetImported = viewModel::acceptWidgetImport,
         onResizeWidget = viewModel::resizeSelectedWidget,
         onWidgetColor = viewModel::setSelectedWidgetColor,
         onSyncThumbnail = viewModel::refreshThumbnail,
@@ -316,6 +317,7 @@ private fun EditorScreen(
     onRemoveWidget: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRestoreWidget: (Long) -> Unit,
+    onWidgetImported: (EditorSnapshot) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -344,8 +346,16 @@ private fun EditorScreen(
     onResetDelivery: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(EditorPage.Canvas) }
+    var importing by rememberSaveable { mutableStateOf(false) }
 
     val snapshot = state.snapshot
+    if (importing && snapshot != null) WidgetImportRoute(snapshot,
+        onDismiss = { importing = false },
+        onImported = { result ->
+            onWidgetImported(result)
+            importing = false
+            page = EditorPage.Canvas
+        })
     val selected = snapshot?.widgets?.singleOrNull {
         it.globalIndex == state.selectedWidgetIndex
     }
@@ -433,6 +443,7 @@ private fun EditorScreen(
                         onRemoveWidget = onRemoveWidget,
                         onDuplicateWidget = onDuplicateWidget,
                         onRestoreWidget = onRestoreWidget,
+                        onImportWidget = { importing = true },
                         onResizeWidget = onResizeWidget,
                         onWidgetColor = onWidgetColor,
                         onSyncThumbnail = onSyncThumbnail,
@@ -785,6 +796,7 @@ private fun EditorPageContent(
     onRemoveWidget: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRestoreWidget: (Long) -> Unit,
+    onImportWidget: () -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -825,6 +837,7 @@ private fun EditorPageContent(
             enabled = !state.isWorking,
             onSelect = { onWidget(it.globalIndex); onNavigate(EditorPage.Inspector) },
             onRestore = onRestoreWidget,
+            onImport = onImportWidget,
             modifier = modifier,
         )
         EditorPage.Inspector -> InspectorWorkspace(
@@ -1232,6 +1245,7 @@ private fun WidgetsWorkspace(
     enabled: Boolean,
     onSelect: (WidgetGuide) -> Unit,
     onRestore: (Long) -> Unit,
+    onImport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val onCanvas = snapshot.canvasWidgets
@@ -1241,6 +1255,10 @@ private fun WidgetsWorkspace(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        item {
+            FitButton(stringResource(R.string.widget_import_open), onImport, Modifier.fillMaxWidth(),
+                enabled = enabled, style = FitButtonStyle.Secondary)
+        }
         item {
             SectionHeading(
                 stringResource(R.string.editor_widgets_on_canvas_title),
@@ -1782,7 +1800,10 @@ private fun InspectorWorkspace(
                 }
             }
         }
-        if (snapshot.isAodSelected) {
+        if (widget.importedFromFaceId != null) {
+            Text(stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+        } else if (snapshot.isAodSelected) {
             Text(
                 stringResource(R.string.editor_apply_all_aod),
                 style = MaterialTheme.typography.bodySmall,
@@ -1889,6 +1910,9 @@ private fun WidgetSizeControls(
                 widget.height == widget.originalHeight
             Text(
                 when {
+                    shipped && widget.importedFromFaceId != null -> stringResource(
+                        R.string.widget_import_original_size, WidgetResizeStepPercent,
+                    )
                     shipped -> stringResource(
                         R.string.editor_size_shipped,
                         WidgetResizeStepPercent,
@@ -2600,7 +2624,6 @@ private fun ValidateWorkspace(
                             audit.changedPayloadBytes,
                             "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
                             audit.changedStyles.size,
-                            snapshot.styleNames.size,
                             mebibytes(snapshot.containerBytes),
                             mebibytes(WATCH_CONTAINER_BYTE_CEILING),
                         )

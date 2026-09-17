@@ -264,7 +264,7 @@
     <string name="editor_check_payload_length">Payload length</string>
     <string name="editor_check_face_id">Face ID byte range</string>
     <string name="editor_audit_heading">Audit</string>
-    <string name="editor_audit_detail">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nstyles touched %4$d of %5$d\ncontainer %6$s of %7$s</string>
+    <string name="editor_audit_detail">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nentries rewritten %4$d\ncontainer %5$s of %6$s</string>
     <!-- Same as editor_audit_detail, for an edit that touched only the always-on display —
          "%4$d of %5$d styles" would misreport it as one of the numbered styles, when it is
          neither counted among nor touched by them. -->

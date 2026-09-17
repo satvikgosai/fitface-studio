@@ -50,6 +50,12 @@ cannot notice that a document went out of date.
 
 ## The menus
 
+The experimental widget importer is a full-screen child flow opened from Widgets,
+not a sixth rail destination. It uses `FitTopBar`, `FitButton`, `FitChip` and
+`StatusBanner`, with a scrolling body and persistent in-flow errors. Donor rows use
+resource-rendered widget artwork; the review outlines the addition on the target canvas.
+There is no Projects tab in this picker and no new colour or typography token.
+
 There are two: `AppMenuAction` in both top bars, and the overflow on a project row. They
 share `FitDropdownMenu` and `FitMenuEntry` so that they are one thing with two anchors —
 assembled separately they had already drifted, the row menu taking Material's default entry

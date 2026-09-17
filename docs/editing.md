@@ -3,6 +3,10 @@
 What `:core:format` will and will not change, and what the catalogue sweep proved.
 [bin-format.md](bin-format.md) is the byte-level reference this rests on.
 
+Cross-face widget import is a separately disclosed experimental path. Its additive
+raster/font closure, explicit pristine identities and variant isolation are documented
+in [widget-import.md](widget-import.md); it does not relax existing resize invariants.
+
 ## Preservation
 
 The format layer preserves:

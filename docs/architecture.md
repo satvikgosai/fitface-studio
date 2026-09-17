@@ -40,8 +40,9 @@ packet encoding stay pure Kotlin and are JVM-tested.
 - ViewModels own interaction state and coroutine lifecycles.
 - `WatchFaceRepository` owns the original and edited container snapshots.
 - Every committed edit produces a new reparsed snapshot.
-- Every successful commit atomically updates the private project BIN; a failed
-  commit rolls the in-memory session back — container, audit and selected style.
+- Every successful commit updates the private project BIN; imported-widget projects
+  atomically commit the BIN and required provenance together in a checkpoint. A failed
+  commit rolls the in-memory session back — container, audit, selected style and origins.
 - `Fit3DirectInstaller` owns the delivery state machine.
 - Transfer bytes are copied and identity-frozen before delivery begins.
 
@@ -136,6 +137,7 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/projects/<id>/source.apk` | The package a project was opened from |
 | `filesDir/projects/<id>/edited.bin` | The current edited container |
 | `filesDir/projects/<id>/session.json` | Removed widget records, base64, so restore survives process death |
+| `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state for imported artwork; the row names the committed file |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
 
@@ -163,6 +165,12 @@ compares against, with no network call. A row written before schema 5 whose
 means "say nothing", never "out of date".
 
 ### The project archive
+
+Imported-widget projects use schema 2 and require their pristine donor artwork in
+`fitface/session.json`; ordinary projects still use schema 1. The vendor original remains
+unchanged, so Reset still restores the stock face. See [widget-import.md](widget-import.md)
+for the checkpoint, provenance checks and additive font-resource exception to entry-path
+equality.
 
 A project leaves the device as a zip that **is a watch-face package**: the members
 `Fit3Apk.parse` reads, under exactly the names the package gave them, plus a `fitface/`
@@ -223,7 +231,8 @@ device the file is refused as unreadable. Neither is relied on. The rest is dept
 | a manifest that is missing, unparseable, or of a **newer schema** | `ignoreUnknownKeys` would decode a newer one cleanly while dropping whatever the new field carried |
 | a container the app cannot open, through the download funnel | same failure, same wording |
 | an `edited.bin` that does not validate, or exceeds `WATCH_CONTAINER_BYTE_CEILING` | `validatedBytes()` would refuse to send it, and a container over the ceiling transfers, is accepted and leaves the old face up |
-| an `edited.bin` whose entry paths differ from the pristine container's | the only thing that catches an edit swapped in from another face — it validates on its own. No edit here changes a container's entry list |
+| an `edited.bin` with foreign entry paths | schema 1 requires exact equality; schema 2 requires the original paths in order and validates explicitly bounded added font resources plus import provenance |
+| schema 2 missing or carrying inconsistent imported artwork | imported widgets must never silently resolve to unrelated native resize sources |
 
 Manifest strings are clamped rather than refused: they reach a database row and a list title,
 but a long name does not make an archive unusable. A `selectedStyle` that is not a style name

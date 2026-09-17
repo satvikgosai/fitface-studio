@@ -631,6 +631,8 @@ data class WidgetGuide(
     val colorArgb: Int?,
     val originalColorArgb: Int? = colorArgb,
     val duplicateSourceGlobalIndex: Int? = null,
+    /** Imports are edited only in the variant where they were added. */
+    val importedFromFaceId: String? = null,
     val supportMessage: String,
 ) {
     /** Whether the editor may offer to resize this widget at all. */
@@ -729,6 +731,7 @@ data class RemovedWidget(
     val sourceLabel: String? = null,
     val followsReading: Boolean = false,
     val recordsByVariant: Map<String, ByteArray>,
+    val importOriginId: String? = null,
 ) {
     /** What it draws, named — the same label the widget list shows for a live record. */
     val category: WidgetCategory get() = WidgetCategory.forWidgetType(widgetType)
@@ -1069,6 +1072,13 @@ class DirectInstallPayload(
 }
 
 interface WatchFaceRepository {
+    /** Loads an independent catalogue package without creating/opening a donor project. */
+    suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = throw UnsupportedOperationException()
+    suspend fun widgetDonorVariant(handle: String, variant: String): WidgetDonorVariant = throw UnsupportedOperationException()
+    suspend fun previewWidgetImport(handle: String, donorVariant: String, index: Int,
+        projectId: Long, targetVariant: String): WidgetImportPreview = throw UnsupportedOperationException()
+    suspend fun importWidget(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
+    suspend fun releaseWidgetDonor(handle: String) {}
     fun observeProjects(): Flow<List<ProjectSummary>>
 
     fun observeImageFit(): Flow<ImageFit>

@@ -21,7 +21,31 @@ data class StructuralEdit(
     val removedRecords: Map<String, ByteArray> = emptyMap(),
 )
 
+/** Explicit provenance overrides index/record heuristics for widgets from another face. */
+data class WidgetPristine(val entry: ContainerEntry, val sources: Map<Int, Int>)
+
 object StructuralEditor {
+    /** Saved removals point at retained rasters; resize moves their offsets too. */
+    fun relocateSavedWidget(before: ContainerEntry, after: ContainerEntry, raw: ByteArray): ByteArray {
+        val oldImages = FaceRecordParser.scanImages(before)
+        val newImages = FaceRecordParser.scanImages(after)
+        fun offsets(images: List<ImageRecord>) = images.map { it.recordOffset - images.first().recordOffset }
+        val oldOffsets = offsets(oldImages)
+        val newOffsets = offsets(newImages)
+        if (oldOffsets == newOffsets.take(oldOffsets.size)) return raw
+        if (newImages.size < oldImages.size) throw Fit3FormatException("Saved widget artwork was removed.")
+        val header = StyleHeader.parse(before)
+        val data = WidgetImporter.styleBytes(before.data, raw, 1,
+            before.data.copyOfRange(header.storedImageOffset, before.data.size), header.fontBindingCount)
+        val saved = before.copy(data = data, size = data.size)
+        val record = FaceRecordParser.scanWidgets(saved).single()
+        val result = raw.copyOf()
+        FaceRecordParser.imagePointerFields(record, FaceRecordParser.imagesByRelativeOffset(saved)).forEach { field ->
+            result.putU32(field.offset - record.recordOffset, newOffsets[field.image.index])
+        }
+        return result
+    }
+
     private const val StaticWidgetType = 1
 
     /** Fallback thickness for a Rule that stores an implausible one — as `drawnExtents`. */
@@ -237,6 +261,7 @@ object StructuralEditor {
         width: Int,
         height: Int,
         pristine: Fit3Container? = null,
+        pristineWidgets: Map<String, WidgetPristine> = emptyMap(),
     ): StructuralEdit {
         requireValidAndTight(source)
         // The precise per-side bound needs the widget's shipped extent, which only
@@ -251,12 +276,13 @@ object StructuralEditor {
             .forEach { (entry, target) ->
                 replacements[entry.index] = resizeWidgetEntry(
                     entry = entry,
-                    pristineEntry = pristine?.entries?.singleOrNull {
+                    pristineEntry = pristineWidgets[entry.basename]?.entry ?: pristine?.entries?.singleOrNull {
                         it.basename == entry.basename
                     },
                     target = target,
                     width = width,
                     height = height,
+                    sourceIndices = pristineWidgets[entry.basename]?.sources,
                 )
             }
         return rebuild(source, replacements)
@@ -703,6 +729,7 @@ object StructuralEditor {
         target: WidgetRecord,
         width: Int,
         height: Int,
+        sourceIndices: Map<Int, Int>?,
     ): ByteArray {
         val spec = WidgetSchema.spec(target.widgetType)
         return when (val model = spec.resize) {
@@ -712,8 +739,8 @@ object StructuralEditor {
             is WidgetSchema.ResizeModel.Box ->
                 resizeBoxEntry(entry, target, width, height)
             is WidgetSchema.ResizeModel.Endpoint ->
-                resizeEndpointEntry(entry, pristineEntry, target, width, height)
-            else -> resizeRasterEntry(entry, pristineEntry, target, model, width, height)
+                resizeEndpointEntry(entry, pristineEntry, target, width, height, sourceIndices)
+            else -> resizeRasterEntry(entry, pristineEntry, target, model, width, height, sourceIndices)
         }
     }
 
@@ -774,8 +801,9 @@ object StructuralEditor {
         target: WidgetRecord,
         width: Int,
         height: Int,
+        sourceIndices: Map<Int, Int>?,
     ): ByteArray {
-        val origin = pristineEntry?.let { pristineRecord(entry, it, target) } ?: target
+        val origin = pristineEntry?.let { pristineRecord(entry, it, target, sourceIndices) } ?: target
         val spanX = origin.raw1C.toShort().toInt() - origin.x
         val spanY = origin.raw1E.toShort().toInt() - origin.y
         // The extent a Rule reports is its span **or its thickness**, whichever is larger —
@@ -887,6 +915,7 @@ object StructuralEditor {
         model: WidgetSchema.ResizeModel,
         width: Int,
         height: Int,
+        sourceIndices: Map<Int, Int>?,
     ): ByteArray {
         val images = FaceRecordParser.scanImages(entry)
         val widgets = FaceRecordParser.scanWidgets(entry)
@@ -944,8 +973,8 @@ object StructuralEditor {
         // the pristine frames were dropped entirely and every resize resampled the
         // *previous* resize — Smaller, Larger, Smaller came back visibly softer — and
         // even with the count patched up, index i would name the raster before it.
-        val pristineOrigins = pristineFrameOrigins(entry, pristineEntry, widgets, relativeImages)
-        val pristineRecords = pristineRecords(entry, pristineEntry, pool.widgets)
+        val pristineOrigins = pristineFrameOrigins(entry, pristineEntry, widgets, relativeImages, sourceIndices)
+        val pristineRecords = pristineRecords(entry, pristineEntry, pool.widgets, sourceIndices)
         val pristineTarget = pristineRecords[target.globalIndex]
         val pristineRaster = targetIndices.mapNotNull { pristineOrigins[it] }
 
@@ -1288,9 +1317,10 @@ object StructuralEditor {
         entry: ContainerEntry,
         pristineEntry: ContainerEntry?,
         records: List<WidgetRecord>,
+        sourceIndices: Map<Int, Int>?,
     ): Map<Int, WidgetRecord> {
         if (pristineEntry == null) return emptyMap()
-        val sources = FaceRecordParser.originalWidgetSources(entry, pristineEntry)
+        val sources = sourceIndices ?: FaceRecordParser.originalWidgetSources(entry, pristineEntry)
         val pristine = FaceRecordParser.scanWidgets(pristineEntry)
             .associateBy(WidgetRecord::globalIndex)
         return records.mapNotNull { record ->
@@ -1313,8 +1343,9 @@ object StructuralEditor {
         entry: ContainerEntry,
         pristineEntry: ContainerEntry,
         target: WidgetRecord,
+        sourceIndices: Map<Int, Int>?,
     ): WidgetRecord? {
-        val index = FaceRecordParser.originalWidgetSources(entry, pristineEntry)[
+        val index = (sourceIndices ?: FaceRecordParser.originalWidgetSources(entry, pristineEntry))[
             target.globalIndex,
         ] ?: return null
         return FaceRecordParser.scanWidgets(pristineEntry)
@@ -1347,6 +1378,7 @@ object StructuralEditor {
         pristineEntry: ContainerEntry?,
         widgets: List<WidgetRecord>,
         relativeImages: Map<Long, ImageRecord>,
+        sourceIndices: Map<Int, Int>?,
     ): Map<Int, ImageRecord> {
         if (pristineEntry == null) return emptyMap()
         val pristineImages = FaceRecordParser.scanImages(pristineEntry)
@@ -1357,7 +1389,7 @@ object StructuralEditor {
         }
         val pristineWidgets = FaceRecordParser.scanWidgets(pristineEntry)
             .associateBy(WidgetRecord::globalIndex)
-        val pristineSources = FaceRecordParser.originalWidgetSources(entry, pristineEntry)
+        val pristineSources = sourceIndices ?: FaceRecordParser.originalWidgetSources(entry, pristineEntry)
         val origins = mutableMapOf<Int, ImageRecord>()
         val ambiguous = mutableSetOf<Int>()
         widgets.filter { it.widgetType in FaceRecordParser.POINTER_BEARING_TYPES }
@@ -1873,7 +1905,7 @@ object StructuralEditor {
         return names.map(source::entryByBasename)
     }
 
-    private fun requireValidAndTight(source: Fit3Container) {
+    internal fun requireValidAndTight(source: Fit3Container) {
         val report = source.validate()
         if (!report.isValid) {
             throw Fit3FormatException(
@@ -1896,15 +1928,16 @@ object StructuralEditor {
         }
     }
 
-    private fun rebuild(
+    internal fun rebuild(
         source: Fit3Container,
         replacements: Map<Int, ByteArray>,
+        addedResources: Map<String, ByteArray> = emptyMap(),
     ): StructuralEdit {
         val original = source.toByteArray()
         val header = original.copyOfRange(0, CONTAINER_HEADER_SIZE)
-        val directory = source.entries.map { it.rawRecord.copyOf() }
+        val directory = source.entries.map { it.rawRecord.copyOf() }.toMutableList()
         val body = ByteArrayOutputStream()
-        var cursor = source.bodyOffset
+        var cursor = source.bodyOffset + addedResources.size * DIRECTORY_ENTRY_SIZE
         source.entries.forEach { entry ->
             val payload = replacements[entry.index] ?: entry.data
             directory[entry.index].putU32(0x40, cursor)
@@ -1913,6 +1946,24 @@ object StructuralEditor {
             body.write(payload)
             cursor += payload.size
         }
+        val prefix = source.entries.first().path.substringBeforeLast('/') + "/"
+        addedResources.forEach { (name, payload) ->
+            if (!Regex("font_[A-Za-z0-9_]+\\.bin").matches(name) ||
+                source.entries.any { it.basename == name }) {
+                throw Fit3FormatException("invalid or duplicate added resource $name")
+            }
+            val path = (prefix + name).toByteArray(Charsets.UTF_8)
+            if (path.size >= 64) throw Fit3FormatException("resource path is too long")
+            directory += ByteArray(DIRECTORY_ENTRY_SIZE).also {
+                path.copyInto(it)
+                it.putU32(0x40, cursor)
+                it.putU32(0x44, payload.size)
+                it.putU16(0x48, Crc16.ccittFalse(payload))
+            }
+            body.write(payload)
+            cursor += payload.size
+        }
+        header.putU32(0x0C, directory.size)
         header.putU32(0x08, cursor - CONTAINER_HEADER_SIZE)
         val output = ByteArrayOutputStream()
         output.write(header)
@@ -1942,13 +1993,17 @@ object StructuralEditor {
         }
         val changed = replacements.entries.sumOf { (index, bytes) ->
             val before = source.entries[index].data
-            before.indices.take(minOf(before.size, bytes.size)).count {
-                before[it] != bytes[it]
-            } + kotlin.math.abs(before.size - bytes.size)
+            // No boxed index list: a style can be hundreds of kilobytes, and the old
+            // take(...).count allocated one Integer per byte during every structural edit.
+            var count = kotlin.math.abs(before.size - bytes.size)
+            for (offset in 0 until minOf(before.size, bytes.size)) {
+                if (before[offset] != bytes[offset]) count++
+            }
+            count
         }
         return StructuralEdit(
             container = parsed,
-            changedPayloadBytes = changed,
+            changedPayloadBytes = changed + addedResources.values.sumOf { it.size },
             // The variants actually rewritten, not the ones the edit was offered:
             // a widget missing from a sibling style leaves that style untouched.
             changedStyles = replacements.keys.map { source.entries[it].basename },
