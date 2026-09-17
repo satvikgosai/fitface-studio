@@ -166,6 +166,75 @@ class PackageCacheTest {
         fetchedAtEpochMillis = 1_700_000_000_000L,
     )
 
+    /**
+     * Two writers of one cache file both finish, and what lands is one of them whole.
+     *
+     * This is not hypothetical concurrency: nothing joined the catalogue load the library
+     * starts on its first frame to the one the widget importer starts when it opens, so on
+     * a cold start they could be in flight together. While every write shared a single
+     * `<name>.tmp` they interleaved their bytes into that one file, and whichever renamed
+     * second failed on a path the first had already consumed — "Could not cache the
+     * catalogue", and a whole catalogue fetched again on the next launch.
+     *
+     * Honest about what this proves: it passes against the shared name too, because a 70 KB
+     * write on a JVM closes the window most of the time. It holds the *invariant* — every
+     * writer commits, what is read back is one whole catalogue, nothing is left behind —
+     * rather than reproducing the failure. The unique scratch name is what makes the
+     * invariant hold by construction, and [scratchFilesAreThisWritesOwnAndOldOnesAreSwept]
+     * pins that half deterministically.
+     */
+    @Test
+    fun concurrentWritersEachCommitAWholeCatalogue() {
+        val first = catalog()
+        val second = catalog().copy(styleCount = 99)
+        val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val threads = (0 until 8).map { index ->
+            Thread {
+                start.await()
+                runCatching { cache.writeCatalog(if (index % 2 == 0) first else second) }
+                    .onFailure(failures::add)
+            }.apply { start() }
+        }
+        start.countDown()
+        threads.forEach(Thread::join)
+
+        assertEquals(emptyList<Throwable>(), failures.toList())
+        // Whole, and one of the two — never a blend of both.
+        val written = requireNotNull(cache.readCatalog()) { "no catalogue was committed" }
+        assertTrue(written.styleCount == first.styleCount || written.styleCount == second.styleCount)
+        assertEquals(first.faces.map { it.productId }, written.faces.map { it.productId })
+        // And nothing is left behind for the next reader to trip over.
+        assertEquals(
+            emptyList<String>(),
+            root.listFiles().orEmpty().map { it.name }.filter { it.endsWith(".tmp") },
+        )
+    }
+
+    /**
+     * A write uses a scratch file of its own and cleans up after the ones that died.
+     *
+     * The shared `<name>.tmp` gave one thing for free: a write killed mid-flight left a
+     * scratch file that the next write to the same target truncated and reused. A unique
+     * name would leave it there for ever, so the sweep replaces that — and it has to leave
+     * a *fresh* scratch file alone, because that one may belong to a writer still running.
+     */
+    @Test
+    fun scratchFilesAreThisWritesOwnAndOldOnesAreSwept() {
+        root.mkdirs()
+        val abandoned = File(root, "catalog.json.dead-writer.tmp").apply {
+            writeText("half a catalogue")
+            setLastModified(System.currentTimeMillis() - 2 * 60 * 60 * 1000)
+        }
+        val live = File(root, "catalog.json.another-writer.tmp").apply { writeText("in flight") }
+
+        cache.writeCatalog(catalog())
+
+        assertFalse("an hour-old scratch file is swept", abandoned.exists())
+        assertTrue("a scratch file that may still be in use is left alone", live.exists())
+        assertEquals(catalog().faces.size, requireNotNull(cache.readCatalog()).faces.size)
+    }
+
     private companion object {
         const val AppId = "dev.fitface.face00046"
     }

@@ -7,8 +7,7 @@ what the app does and how to use it; everything here is implementation detail.
 | --- | --- |
 | [architecture.md](architecture.md) | Modules, data flow, state ownership, caches, and the six invariants |
 | [bin-format.md](bin-format.md) | The container format byte by byte, derived from the corpus; §14 lists related public work |
-| [editing.md](editing.md) | Which edits are safe, what the catalogue sweep proved, and why |
-| [widget-import.md](widget-import.md) | Experimental catalogue-only widget import, dependencies, provenance and persistence |
+| [editing.md](editing.md) | Which edits are safe, what the catalogue sweep proved, and why — including importing a widget from another face |
 | [direct-install.md](direct-install.md) | Accessory discovery, the OTA/RFCOMM transfer, security posture |
 | [design-system.md](design-system.md) | The token layer, and the three places the code knowingly departs from the design |
 | [design-system.html](design-system.html) | The same system, drawn — palette in both themes, type scale, every component state. Open it in a browser; it needs no server and no network |

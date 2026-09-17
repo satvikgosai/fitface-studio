@@ -1108,8 +1108,12 @@ private fun SelectionPeek(
                     label = direction.glyph,
                     enabled = widget.canEditPosition,
                     modifier = Modifier.weight(1f),
-                    onStep = {
-                        onNudgeWidget(widget.globalIndex, direction.deltaX, direction.deltaY)
+                    onStep = { pixels ->
+                        onNudgeWidget(
+                            widget.globalIndex,
+                            direction.deltaX * pixels,
+                            direction.deltaY * pixels,
+                        )
                     },
                 )
             }
@@ -1151,7 +1155,7 @@ private fun RepeatingNudgeButton(
     label: String,
     enabled: Boolean,
     modifier: Modifier = Modifier,
-    onStep: () -> Unit,
+    onStep: (Int) -> Unit,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
@@ -1160,15 +1164,20 @@ private fun RepeatingNudgeButton(
 
     LaunchedEffect(pressed, enabled) {
         if (!pressed || !enabled) return@LaunchedEffect
-        step()
+        // The first step is always the one the label promises, however long the press
+        // turns out to be: a hold that began as a tap must not overshoot.
+        step(1)
         steppedWhilePressed.value = true
         delay(FirstRepeatDelayMillis)
         var interval = RepeatIntervalMillis
+        var repeat = 0
         while (true) {
-            step()
+            step(nudgeStepPixels(repeat))
+            repeat++
             delay(interval)
-            // Accelerate a little so long journeys do not take forever, but never
-            // faster than the editor can commit an edit.
+            // The repeat rate accelerates too, but never faster than the editor can
+            // commit an edit. Rate alone was not enough: at one pixel a tick, the far
+            // side of a 402px panel is still half a minute away.
             interval = (interval - 8).coerceAtLeast(MinRepeatIntervalMillis)
         }
     }
@@ -1176,7 +1185,7 @@ private fun RepeatingNudgeButton(
     FitButton(
         text = label,
         onClick = {
-            if (!steppedWhilePressed.value) step()
+            if (!steppedWhilePressed.value) step(1)
             steppedWhilePressed.value = false
         },
         modifier = modifier,
@@ -1186,7 +1195,32 @@ private fun RepeatingNudgeButton(
     )
 }
 
+/**
+ * How far one tick of a held nudge moves, on its [repeat]-th repetition.
+ *
+ * A held button that never coarsens is the complaint this answers: one pixel a tick across
+ * a 256×402 panel is hundreds of ticks, and the rate alone cannot close that without
+ * becoming unusable for the single pixel the control exists to give. So a hold starts at
+ * the pixel the label promises and widens twice, about a second and about two and a half
+ * seconds in — long enough that placing a widget precisely never reaches the coarse steps,
+ * short enough that crossing the face does.
+ *
+ * Pure so the curve is pinned by a test: `:feature:editor` cannot measure a composable, and
+ * "it feels about right" is not a regression test.
+ */
+internal fun nudgeStepPixels(repeat: Int): Int = when {
+    repeat >= CoarseNudgeRepeat -> CoarseNudgePixels
+    repeat >= MediumNudgeRepeat -> MediumNudgePixels
+    else -> 1
+}
+
 private const val FirstRepeatDelayMillis = 420L
+
+/** Repetitions before a held nudge widens its step, and how far it widens it. */
+private const val MediumNudgeRepeat = 10
+private const val CoarseNudgeRepeat = 24
+private const val MediumNudgePixels = 2
+private const val CoarseNudgePixels = 5
 private const val RepeatIntervalMillis = 110L
 private const val MinRepeatIntervalMillis = 45L
 
@@ -1673,14 +1707,16 @@ private fun InspectorWorkspace(
             Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CoordinateControl(
                     stringResource(R.string.editor_axis_x), displayX, widget.canEditPosition,
-                    { onNudgeWidget(widget.globalIndex, -1, 0) },
-                    { onNudgeWidget(widget.globalIndex, 1, 0) },
+                    NudgeDirection.LEFT, NudgeDirection.RIGHT,
+                    { pixels -> onNudgeWidget(widget.globalIndex, -pixels, 0) },
+                    { pixels -> onNudgeWidget(widget.globalIndex, pixels, 0) },
                     Modifier.weight(1f),
                 )
                 CoordinateControl(
                     stringResource(R.string.editor_axis_y), displayY, widget.canEditPosition,
-                    { onNudgeWidget(widget.globalIndex, 0, -1) },
-                    { onNudgeWidget(widget.globalIndex, 0, 1) },
+                    NudgeDirection.UP, NudgeDirection.DOWN,
+                    { pixels -> onNudgeWidget(widget.globalIndex, 0, -pixels) },
+                    { pixels -> onNudgeWidget(widget.globalIndex, 0, pixels) },
                     Modifier.weight(1f),
                 )
             }
@@ -1755,12 +1791,18 @@ private fun InspectorWorkspace(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(
-                widget.supportMessage,
-                modifier = Modifier.padding(top = 6.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
+            // Only when the banner at the top of this page is not already showing it. A
+            // widget with no outline — a clock hand, anything off-canvas — puts its
+            // support message in that banner, and printing it again a few hundred dp
+            // below was the same sentence twice on one screen.
+            if (widget.placement == WidgetPlacement.CANVAS) {
+                Text(
+                    widget.supportMessage,
+                    modifier = Modifier.padding(top = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
             widget.duplicateSourceGlobalIndex?.let { source ->
                 MicroLabel(
                     stringResource(R.string.editor_duplicate_of, source),
@@ -1990,13 +2032,25 @@ private val RecordsWithoutArtwork = setOf(
     WidgetCategory.UNKNOWN,
 )
 
+/**
+ * One axis of the selected widget's position, with the two buttons that change it.
+ *
+ * The buttons are **arrows**, not a minus and a plus. This control sits under a picture of
+ * the face and moves the widget on it: "+" on the Y axis is only obviously *down* if you
+ * already know the panel's origin is its top-left corner, which is a thing about the file
+ * format rather than about the face. `←` and `↓` say which way the widget goes, and they
+ * are the same glyphs as the canvas page's own nudge row, so the two controls read as the
+ * same control in two places.
+ */
 @Composable
 private fun CoordinateControl(
     label: String,
     value: Int,
     enabled: Boolean,
-    onMinus: () -> Unit,
-    onPlus: () -> Unit,
+    decrease: NudgeDirection,
+    increase: NudgeDirection,
+    onMinus: (Int) -> Unit,
+    onPlus: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -2011,8 +2065,8 @@ private fun CoordinateControl(
             Text(value.toString(), style = FitFaceType.readout)
         }
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            RepeatingNudgeButton("−", enabled, Modifier.weight(1f), onMinus)
-            RepeatingNudgeButton("+", enabled, Modifier.weight(1f), onPlus)
+            RepeatingNudgeButton(decrease.glyph, enabled, Modifier.weight(1f), onMinus)
+            RepeatingNudgeButton(increase.glyph, enabled, Modifier.weight(1f), onPlus)
         }
     }
 }
@@ -2329,11 +2383,11 @@ private fun PlacementControls(
                     label = direction.glyph,
                     enabled = enabled,
                     modifier = Modifier.weight(1f),
-                    onStep = {
+                    onStep = { pixels ->
                         onTransformImage(
                             1f,
-                            direction.deltaX * horizontalStep,
-                            direction.deltaY * verticalStep,
+                            direction.deltaX * horizontalStep * pixels,
+                            direction.deltaY * verticalStep * pixels,
                         )
                     },
                 )
@@ -2344,6 +2398,8 @@ private fun PlacementControls(
             modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
+            // One rung a tick however long the hold runs: zoom steps a ladder of fixed
+            // percentages, so a wider step would skip rungs rather than move faster.
             RepeatingNudgeButton(
                 "−",
                 enabled && (placement.zoom * 100).roundToInt() > MinZoomPercent,

@@ -135,12 +135,19 @@ class WidgetImportViewModelTest {
         coVerify(exactly = 0) { repository.previewWidgetImport(any(), any(), any(), any(), any()) }
     }
 
-    /** With nothing downloaded yet, the chip cannot open on an empty screen. */
-    @Test fun theOnThisPhoneFilterFallsBackToTheWholeCatalogueWhenNothingIsHere() {
+    /**
+     * Every face is offered whether or not its package is here; the cache decides what a
+     * card *says*, never whether it is listed.
+     */
+    @Test fun theWholeCatalogueIsListedAndOnlyTheSearchNarrowsIt() {
         coEvery { catalog.isPackageCached(face) } returns false
         vm.loadCatalog(); settle()
-        assertFalse(vm.state.value.cachedOnly)
         assertEquals(listOf(face), vm.state.value.visibleFaces)
+        assertTrue(vm.state.value.cachedFaces.isEmpty())
+        vm.setQuery("00008")
+        assertEquals(listOf(face), vm.state.value.visibleFaces)
+        vm.setQuery("nothing here")
+        assertTrue(vm.state.value.visibleFaces.isEmpty())
     }
 
     @Test fun addIsSingleFlightAndCannotBeDismissedMidCommit() {

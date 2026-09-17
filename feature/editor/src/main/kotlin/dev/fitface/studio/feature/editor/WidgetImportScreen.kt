@@ -59,7 +59,6 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
     LaunchedEffect(Unit) { viewModel.start(snapshot) }
     LaunchedEffect(state.imported) { state.imported?.let { viewModel.close(); onImported(it) } }
     val back = { if (viewModel.back()) { viewModel.close(); onDismiss() } }
-    var explaining by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false,
         decorFitsSystemWindows = false)) {
         BackHandler(onBack = back)
@@ -86,7 +85,7 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                 // Pinned, not scrolled with the content. As a list item the progress bar
                 // and its Cancel button sat at the top of a list someone had scrolled far
                 // down to tap a face — a transfer with no visible way to stop it.
-                ImportNotices(state, viewModel, onExplain = { explaining = true })
+                ImportNotices(state, viewModel)
                 when (state.stage) {
                     WidgetImportStage.FACES -> DonorFacesPage(state, viewModel, Modifier.weight(1f))
                     WidgetImportStage.WIDGETS ->
@@ -96,23 +95,6 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                 }
             }
         }
-    }
-    if (explaining) {
-        AlertDialog(
-            onDismissRequest = { explaining = false },
-            confirmButton = {
-                TextButton({ explaining = false }) { Text(stringResource(R.string.widget_import_close)) }
-            },
-            title = { Text(stringResource(R.string.widget_import_experimental_label)) },
-            // Every dialog in this app scrolls its text slot: an AlertDialog caps its own
-            // height and clips what is left, which in landscape is most of this.
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text(stringResource(R.string.widget_import_experimental),
-                        style = MaterialTheme.typography.bodyMedium)
-                }
-            },
-        )
     }
 }
 
@@ -126,14 +108,13 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
 private fun ImportNotices(
     state: WidgetImportUiState,
     viewModel: WidgetImportViewModel,
-    onExplain: () -> Unit,
 ) {
     Column(Modifier.padding(bottom = 4.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(end = 16.dp)
                 .background(MaterialTheme.fitColors.warning.copy(alpha = .08f),
                     RoundedCornerShape(topEnd = 9.dp, bottomEnd = 9.dp))
-                .padding(start = 14.dp, top = 8.dp, end = 4.dp, bottom = 8.dp),
+                .padding(start = 14.dp, top = 8.dp, end = 14.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -144,13 +125,7 @@ private fun ImportNotices(
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.fitText.secondary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
-            TextButton(onExplain) {
-                Text(stringResource(R.string.widget_import_details),
-                    style = MaterialTheme.typography.labelMedium)
-            }
         }
         state.error?.let { error ->
             StatusBanner(FitStatus.Fail, error, Modifier.padding(top = 6.dp, end = 16.dp))
@@ -209,24 +184,12 @@ private fun DonorFacesPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(state.query, viewModel::setQuery, Modifier.fillMaxWidth(),
-                    singleLine = true, enabled = !state.busy,
-                    label = { Text(stringResource(R.string.widget_import_search)) })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    MicroLabel(stringResource(R.string.widget_import_show))
-                    FitChip(
-                        stringResource(R.string.widget_import_filter_cached, state.cachedFaces.size),
-                        state.cachedOnly, { viewModel.setCachedOnly(true) },
-                        enabled = !state.busy && state.cachedFaces.isNotEmpty(),
-                    )
-                    FitChip(
-                        stringResource(R.string.widget_import_filter_all, state.faces.size),
-                        !state.cachedOnly, { viewModel.setCachedOnly(false) }, enabled = !state.busy,
-                    )
-                }
-            }
+            // One list, in catalogue order. A chip that split it in two made the reader
+            // choose a haystack before they had seen a needle, and the badge on each card
+            // already says which ones cost a download.
+            OutlinedTextField(state.query, viewModel::setQuery, Modifier.fillMaxWidth(),
+                singleLine = true, enabled = !state.busy,
+                label = { Text(stringResource(R.string.widget_import_search)) })
         }
         if (faces.isEmpty() && !state.busy) {
             item(span = { GridItemSpan(maxLineSpan) }) {

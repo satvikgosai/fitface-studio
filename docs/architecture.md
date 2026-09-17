@@ -168,9 +168,27 @@ means "say nothing", never "out of date".
 
 Imported-widget projects use schema 2 and require their pristine donor artwork in
 `fitface/session.json`; ordinary projects still use schema 1. The vendor original remains
-unchanged, so Reset still restores the stock face. See [widget-import.md](widget-import.md)
-for the checkpoint, provenance checks and additive font-resource exception to entry-path
-equality.
+unchanged, so Reset removes every import and restores the stock bytes.
+
+An imported widget is **not** identified by its global index, its type/source tuple or the
+donor package it came from — all three change or go away. `WidgetImportOrigins` stores an
+explicit origin id, the donor face, the target variant, the current indices and a compact
+pristine entry holding the imported record with its original rasters; removals and inserts
+renumber those indices explicitly, a removed import keeps its origin link, and a restored or
+duplicated one resolves the same pristine artwork. `WidgetPristine` hands the resize engine
+that mapping, so every resize of an imported widget starts from the donor's artwork rather
+than from the previous resize or a same-numbered native widget, and native original matching
+excludes imported indices entirely. Evicting the donor from the package cache has no effect
+on a saved import.
+
+A project carrying imports keeps its edit in an immutable app-private `edit-<UUID>.checkpoint`
+— one bounded JSON file holding both the edited container and its session state, written
+whole before a single database pointer swap commits it, so a failed write leaves the previous
+file and the in-memory state intact. The next successful edit removes the one before it;
+projects with no imports keep their existing storage shape. `WidgetImportRepositoryTest`
+covers the edit/reopen chains, apply-all collisions, saved-pointer relocation, archive, copy
+and reset independence, AOD isolation, stale tickets, missing or foreign provenance and
+rollback on a database failure.
 
 A project leaves the device as a zip that **is a watch-face package**: the members
 `Fit3Apk.parse` reads, under exactly the names the package gave them, plus a `fitface/`

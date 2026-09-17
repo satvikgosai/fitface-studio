@@ -459,7 +459,10 @@ enum class WidgetCategory(val label: String, val detail: String) {
     IMAGE("Image", "One static raster blitted at a fixed position."),
     SPRITE("Sprite", "A table of frames the watch indexes with a live value."),
     ANIMATION("Animation", "A frame sequence the watch plays on its own timer."),
-    HAND("Clock hand", "A hand rotated about a pivot, so it has no fixed rectangle."),
+    // What it is, not why it has no outline: the panel above this one already says that,
+    // in the support message, and the two together said "rotated about a pivot" twice on
+    // one screen.
+    HAND("Clock hand", "The hour, minute or second hand."),
     VALUE("Value", "A live reading the watch draws with its own glyphs."),
     RULE("Rule", "A straight line between two stored endpoints."),
     COMPOSITE("Composite", "Several sub-fields laid out together, such as a date."),

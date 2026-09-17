@@ -1001,6 +1001,27 @@ The four that catch people fastest:
   trailed by the whole overshoot for the rest of the drag and the further you pushed the
   worse it got. `stepDragAxis` keeps `track` unclamped and clamps on the way out;
   `WidgetHitTest.aDragPushedPastTheEdgeComesBackUnderTheFinger` pins it.
+* **An atomic write needs a scratch file of its own, because two writers of one target is
+  the normal case here.** `PackageCache.writeAtomically` used a single `<name>.tmp`, and
+  nothing joined the catalogue load the library starts on its first frame to the one the
+  widget importer starts when it opens — about twelve milliseconds apart on a cold start.
+  Both opened that one scratch file and interleaved their bytes into it; the first rename
+  took whatever was there and the second failed on a path that no longer existed, reported
+  as "Could not cache the catalogue" and paid for by a whole catalogue refetched on the
+  next launch. Two downloads of one package raced the same way. The name carries a `UUID`
+  now, and a sweep of scratch files older than an hour replaces what the shared name gave
+  for free — a write killed mid-flight used to be truncated and reused by the next one.
+  **`FaceCatalogRepositoryImpl` also holds a `Mutex` around `loadCatalog`**, so the second
+  caller finds the cache the first wrote instead of fetching the catalogue again; a JVM
+  test cannot reproduce the race itself — 70 KB closes the window — so `PackageCacheTest`
+  pins the invariant and the sweep instead, and says so.
+* **A widget with no outline prints its support message in the banner, so the record card
+  must not print it again.** `InspectorWorkspace` shows `supportMessage` twice — once as
+  the NO OUTLINE / BACKGROUND banner at the top of the page and once under the record — and
+  for a clock hand that was the same paragraph about pivots twice on one screen, with
+  `WidgetCategory.HAND.detail` saying it a third time. The card prints it only for a
+  `CANVAS` widget now, the hand's message is one sentence, and the category detail says
+  what the widget *is* rather than why it has no rectangle.
 
 ## Invariants to preserve
 

@@ -226,8 +226,18 @@ class WidgetResizeCensusTest {
         )
     }
 
+    /**
+     * A hand that can be resized says so, and says it in one sentence.
+     *
+     * The type arm for a Hand comes before every resize arm in `supportMessage`, so the
+     * sentence about resizing has to be written into that arm or it is swallowed and the
+     * panel offers size controls under a paragraph that only talks about nudging. The
+     * length bound is the other half: this message is printed in the banner at the top of
+     * the Inspector, and it used to be a paragraph that the record card below then printed
+     * again, word for word.
+     */
     @Test
-    fun everyResizableHandExplainsItsPivotPreservingResize() {
+    fun everyResizableHandExplainsItsPivotPreservingResizeInOneSentence() {
         var checked = 0
         containers.forEach { path ->
             val container = Fit3Container.parse(Files.readAllBytes(path))
@@ -235,7 +245,19 @@ class WidgetResizeCensusTest {
                 .flatMap(FaceRecordParser::widgetGuides)
                 .filter { it.type == WIDGET_HAND && it.canResize }
                 .forEach { hand ->
-                    assertTrue(hand.supportMessage, "Resizing scales its artwork and pivot" in hand.supportMessage)
+                    assertTrue(hand.supportMessage, "pivot" in hand.supportMessage)
+                    assertTrue(
+                        hand.supportMessage,
+                        "Resizing scales the artwork and the pivot" in hand.supportMessage,
+                    )
+                    // Not a tight budget — a hand whose artwork is shared adds a
+                    // sentence saying which other widget resizes with it, and that is a
+                    // fact the reader needs. The bound is here to stop this becoming a
+                    // paragraph again, which is what made the Inspector print it twice.
+                    assertTrue(
+                        "too long for the banner it is printed in: ${hand.supportMessage}",
+                        hand.supportMessage.length <= 300,
+                    )
                     checked++
                 }
         }

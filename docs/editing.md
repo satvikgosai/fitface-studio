@@ -3,9 +3,9 @@
 What `:core:format` will and will not change, and what the catalogue sweep proved.
 [bin-format.md](bin-format.md) is the byte-level reference this rests on.
 
-Cross-face widget import is a separately disclosed experimental path. Its additive
-raster/font closure, explicit pristine identities and variant isolation are documented
-in [widget-import.md](widget-import.md); it does not relax existing resize invariants.
+Adding a widget copied from another face is an edit like the others and is described
+below, under [Adding a widget from another face](#adding-a-widget-from-another-face). It
+is additive and relaxes none of the resize invariants here.
 
 ## Preservation
 
@@ -355,6 +355,81 @@ its pointer stale — which draws nothing and fails no validation.
 every post-edit check reads, and `referencedImages` stays narrower on purpose: an Arc's
 310×310 raster is not its drawn extent, and measuring it that way would report the widget
 as the background layer and make it unselectable.
+
+## Adding a widget from another face
+
+Copying a widget from one face onto another is an **addition**: the record is appended with
+the resources it names, at the coordinates it held on the face it came from, and nothing the
+target shipped with is given up. It is device-confirmed on an SM-R390 — a face carrying an
+imported widget installs and draws. What is *not* established is a type-by-type matrix, so
+the app discloses the feature as new rather than claiming every combination has been on a
+wrist.
+
+The nine types the catalogue actually produces can travel: Static, Sprite, Hand, Value,
+Composite, vector Arc, Rule, image Arc and LineBar. Each keeps its live source and every
+field not explicitly relocated. Full-panel backgrounds are refused here and belong to
+[the background page](#adding-a-background-to-a-face-that-has-none); the remaining eight
+constructors have no producer record in the corpus, so importing one would be from-scratch
+authoring wearing an import's clothes.
+
+`WidgetImporter` copies the closure it can *name*, never one guessed from words that look
+like offsets:
+
+- **Rasters** through `WidgetSchema`'s pointer map, every sprite frame included. References
+  shared inside one imported record stay shared; separate imports get separate pools, and a
+  duplicated import keeps the editor's ordinary shared-pool behaviour.
+- **Alignment** for Static, Hand, Value and Composite is resolved on the donor and then
+  rebased to the panel with the unresolvable target `0xFFFF`. The alignment *code* is kept,
+  because Value and Composite also use it for justification, and the widget-count bound
+  leaves index 65535 permanently unreachable, so no later append can make that target
+  resolve.
+- **Text** reuses an identical numbered ROM-font binding or appends one, up to the
+  firmware's ten. Every variant's font-count declaration is synchronised; their widgets and
+  rasters are untouched.
+- **Locale dictionaries** keep every target prefix and append the donor's tables. A missing
+  locale falls back to the corresponding English table, or refuses when there is none. Only
+  real dictionary references are rebased — a Composite's numeric base is a presence flag,
+  not an index.
+
+Unknown alignment, unsupported dynamic dictionary indexing, an incomplete reference,
+mismatched panel dimensions, invalid UTF-8, exhausted font or index space and a container
+that would cross `WATCH_CONTAINER_BYTE_CEILING` all refuse the import outright. Value source
+116 — the configured second time zone — is refused by name: its constructor bypasses the
+numbered fonts and can create a fixed clickable overlay the editor cannot describe.
+
+An import writes **only the selected variant**, and stays that way: later edits to an
+imported widget are variant-local even when a caller asks for apply-to-all, and a native
+apply-to-all skips matches belonging to an import in another style.
+`WidgetImporterTest` covers the nine types, the source and alignment profiles, locale
+semantics, isolated raster pools, pristine resize round trips and the size refusal.
+
+### What the picker is, on screen
+
+**Widgets → Add from another watch face** lists the catalogue as the library's own grid,
+each card saying whether its package is already on the phone or what the download costs —
+read for the whole catalogue when it loads, so opening a donor is one tap. The widget is
+then picked **off the donor face itself**: the same resource-composed picture the editor's
+canvas draws, with a rectangle round everything importable and `hitWidget` — the editor's
+own hit test — deciding overlaps. `WidgetDonorVariant.composed` carries that picture, which
+the repository was already building to obtain the widget layers. Behind **List ›** are rows
+for what the face cannot offer: a rotating hand has no axis-aligned rectangle, and a widget
+the importer refuses has to *look* refused rather than merely fail to respond. Rows quote
+`WidgetImporter.addedBytesEstimate`, marked `≈` because a text widget's font and dictionary
+slice are invisible to it; picking builds the real edit, and the panel then quotes the exact
+figure and the room left under the 4 MiB ceiling.
+
+The review draws the target with the addition ringed and everything else dimmed, and shows
+the container as it is now for as long as a finger is held on it — both pictures are real
+renders of the same container, so the comparison invents nothing. Both face pages split into
+two columns in a short window on the same rule as the canvas page (`importPageSplits`,
+pinned by `WidgetImportLayoutTest`), and the notice, the progress bar and its **Cancel** are
+pinned under the top bar rather than scrolled with the content.
+
+Failures stay on the screen; preparation and download can be cancelled and retried; saving
+is single-flight. A preview ticket names the exact session, container and variant, so a
+change to any of them invalidates it rather than applying a stale preview to another face.
+`WidgetImportViewModelTest` pins the cache use, the cancellation, the refusals and the
+single-flight save.
 
 ## Applying an edit to every style
 

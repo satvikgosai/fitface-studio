@@ -186,6 +186,41 @@ class WidgetImporterTest {
         assertTrue("no artwork widgets in the sample", artwork > 0)
     }
 
+    /**
+     * Nothing the target already had moves, and the proof is on the **drawn rectangle**
+     * rather than on the record bytes.
+     *
+     * The two are not the same assertion: a widget's position is `origin + stored`, and the
+     * origin comes from whatever widget it is aligned to, so a record can survive an edit
+     * byte for byte and still be drawn somewhere else if the alignment around it resolves
+     * differently afterwards. That is the failure mode worth pinning here, because it is
+     * invisible until the container is reparsed — an import that quietly cost a face its
+     * origins would look right in the session that made it and wrong on the next open.
+     */
+    @Test fun anImportMovesNothingThatWasAlreadyOnTheFace() {
+        val target = face("00106")
+        var current = target
+        samples.forEach { (id, index) ->
+            val donor = face(id)
+            val before = FaceRecordParser.widgetGuides(entry(current))
+            val edited = WidgetImporter.importWidget(current, "style0.bin", donor, "style0.bin", index)
+                .edit.container
+            // Through the bytes, the way a reopened project reaches them.
+            val reparsed = Fit3Container.parse(edited.toByteArray())
+            val after = FaceRecordParser.widgetGuides(entry(reparsed))
+            assertEquals(before.size + 1, after.size)
+            before.zip(after).forEach { (was, now) ->
+                assertEquals("$id/$index widget ${was.globalIndex} x", was.drawLeft, now.drawLeft)
+                assertEquals("$id/$index widget ${was.globalIndex} y", was.drawTop, now.drawTop)
+                assertEquals("$id/$index widget ${was.globalIndex} w", was.width, now.width)
+                assertEquals("$id/$index widget ${was.globalIndex} h", was.height, now.height)
+                assertEquals("$id/$index widget ${was.globalIndex} origin x", was.originX, now.originX)
+                assertEquals("$id/$index widget ${was.globalIndex} origin y", was.originY, now.originY)
+            }
+            current = reparsed
+        }
+    }
+
     @Test fun fullFontTableRefusesNewBindingButStillAllowsIdenticalBindings() {
         val target = face("00106")
         val bindings = FaceResources.fontBindings(target)

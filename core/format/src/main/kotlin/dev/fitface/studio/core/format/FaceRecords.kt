@@ -979,13 +979,14 @@ object FaceRecordParser {
                             "moving it is disabled. Everything else about it is preserved."
                     placement == WidgetPlacement.BACKGROUND ->
                         "Covers the whole face. Replace it from Background instead of dragging it."
+                    // One sentence: the editor prints this under the controls *and*, for a
+                    // widget with no outline, in the banner above them, so a paragraph was
+                    // the same paragraph twice on one screen.
                     it.widgetType == WIDGET_HAND ->
-                        "A clock hand: the watch rotates its ${visualWidth}×$visualHeight " +
-                            "artwork about a pivot, so there is no fixed rectangle to outline. " +
-                            "Nudging still rewrites its stored coordinates." +
+                        "The watch rotates this ${visualWidth}×$visualHeight artwork about a " +
+                            "pivot, so it has no outline to drag; nudge it instead." +
                             (if (resizeKind == WidgetResizeKind.RASTER) {
-                                " Resizing scales its artwork and pivot together, keeping " +
-                                    "its rotation centre fixed."
+                                " Resizing scales the artwork and the pivot together."
                             } else "") +
                             // A Hand is HIDDEN, so this arm used to swallow the pool
                             // warning for the one type that cannot show the result: 18 of
@@ -999,8 +1000,7 @@ object FaceRecordParser {
                                 it,
                             )
                     placement == WidgetPlacement.HIDDEN ->
-                        "This record has no drawn rectangle, so the editor cannot preview it. " +
-                            "Nudging still rewrites its stored coordinates."
+                        "This record draws no rectangle the editor can outline; nudge it instead."
                     canEditPair -> "Drag to move; choose an opaque Value color below"
                     resizeKind == WidgetResizeKind.RASTER && resizePool != null ->
                         resizeMessage(resizePool, it)

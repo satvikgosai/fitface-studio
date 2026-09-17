@@ -25,6 +25,8 @@ import javax.inject.Singleton
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -66,35 +68,53 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         cache.addUneditable(appId)
     }
 
+    /**
+     * One catalogue load at a time, for the whole app.
+     *
+     * Two screens ask for it independently — the library on its first frame and the widget
+     * importer when it opens — and nothing joined them, so a cold start could run two full
+     * paged fetches and then race to write the same cache file. Serialising them means the
+     * second caller finds the cache the first just wrote and returns it without touching
+     * the network; `forceRefresh` still refetches, because that one is someone pressing
+     * REFRESH. The lock is inside [Dispatchers.IO] and releases on cancellation, so a
+     * caller that goes away while waiting frees the next one.
+     */
+    private val loading = Mutex()
+
     override suspend fun loadCatalog(forceRefresh: Boolean): FaceCatalog =
         withContext(Dispatchers.IO) {
-            if (!forceRefresh) {
-                cache.readCatalog()
-                    ?.takeIf { it.fetchedAtEpochMillis > System.currentTimeMillis() - CatalogTtlMillis }
-                    ?.let {
-                        // Recorded so a report from a warm start says why the network was
-                        // never touched, rather than showing an empty log that reads as
-                        // nothing having happened.
-                        diagnostics.info(
-                            TAG,
-                            "Catalogue served from cache",
-                            "faces=${it.faces.size} styles=${it.styleCount}",
-                        )
+            loading.withLock {
+                if (!forceRefresh) {
+                    cache.readCatalog()
+                        ?.takeIf {
+                            it.fetchedAtEpochMillis > System.currentTimeMillis() - CatalogTtlMillis
+                        }
+                        ?.let {
+                            // Recorded so a report from a warm start says why the network
+                            // was never touched, rather than showing an empty log that
+                            // reads as nothing having happened.
+                            diagnostics.info(
+                                TAG,
+                                "Catalogue served from cache",
+                                "faces=${it.faces.size} styles=${it.styleCount}",
+                            )
+                            return@withContext it
+                        }
+                }
+                try {
+                    fetchCatalog()
+                } catch (error: WatchFaceException) {
+                    // A failed refresh must not wipe a catalogue the user can still
+                    // browse. Every failure has to reach this guard: it used to sit after
+                    // the paging loop, where a throw out of the network call or the parser
+                    // stepped straight over it and only a page that parsed to nothing was
+                    // covered.
+                    cache.readCatalog()?.let {
+                        diagnostics.warn(TAG, "Catalogue refresh failed; keeping the cached list")
                         return@withContext it
                     }
-            }
-            try {
-                fetchCatalog()
-            } catch (error: WatchFaceException) {
-                // A failed refresh must not wipe a catalogue the user can still browse.
-                // Every failure has to reach this guard: it used to sit after the paging
-                // loop, where a throw out of the network call or the parser stepped
-                // straight over it and only a page that parsed to nothing was covered.
-                cache.readCatalog()?.let {
-                    diagnostics.warn(TAG, "Catalogue refresh failed; keeping the cached list")
-                    return@withContext it
+                    throw error
                 }
-                throw error
             }
         }
 

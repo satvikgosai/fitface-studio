@@ -28,7 +28,6 @@ data class WidgetImportUiState(
      * to find out. [FaceCatalogRepository.isPackageCached] is a file check, not a read.
      */
     val cachedFaces: Set<String> = emptySet(),
-    val cachedOnly: Boolean = true,
     val query: String = "",
     val selectedFace: CatalogFace? = null,
     val donor: WidgetDonor? = null,
@@ -46,10 +45,9 @@ data class WidgetImportUiState(
     val imported: EditorSnapshot? = null,
 ) {
     val selectedFaceCached: Boolean get() = selectedFace?.productId in cachedFaces
-    /** The faces the picker is showing, after the search box and the "on this phone" chip. */
+    /** The faces the picker is showing, after the search box. */
     val visibleFaces: List<CatalogFace> get() = faces.filter { face ->
-        (!cachedOnly || face.productId in cachedFaces) &&
-            (face.faceId.contains(query, true) || face.name.contains(query, true))
+        face.faceId.contains(query, true) || face.name.contains(query, true)
     }
 }
 
@@ -79,16 +77,14 @@ class WidgetImportViewModel @Inject constructor(
     }
 
     fun setQuery(query: String) { mutable.update { it.copy(query = query) } }
-    fun setCachedOnly(cachedOnly: Boolean) { mutable.update { it.copy(cachedOnly = cachedOnly) } }
-
     fun loadCatalog() = run {
         val faces = (catalog.cachedCatalog()?.takeIf { it.faces.isNotEmpty() } ?: catalog.loadCatalog()).faces
         val unavailable = catalog.uneditableAppIds()
         mutable.update { it.copy(faces = faces, uneditable = unavailable) }
+        // Read for the whole catalogue, for the badge on every card: a face that costs a
+        // 30 MB download should say so before it is tapped, not after.
         val cached = faces.filter { catalog.isPackageCached(it) }.map { it.productId }.toSet()
-        // The chip defaults to what is already here, and falls back to the whole catalogue
-        // when none of it is: an empty first screen is worse than a long one.
-        mutable.update { it.copy(cachedFaces = cached, cachedOnly = it.cachedOnly && cached.isNotEmpty()) }
+        mutable.update { it.copy(cachedFaces = cached) }
     }
 
     /**
