@@ -7,8 +7,8 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -24,11 +24,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxWithConstraintsScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -45,25 +46,26 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -73,21 +75,22 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -97,32 +100,33 @@ import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.EnvironmentAdvisory
 import dev.fitface.studio.core.delivery.SetupStep
-import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
+import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.RemovedWidget
-import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.ReplacementImage
+import dev.fitface.studio.core.model.VariantKind
+import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.WidgetCategory
-import dev.fitface.studio.core.model.WidgetResizeStepPercent
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetLayerComposer
 import dev.fitface.studio.core.model.WidgetPlacement
+import dev.fitface.studio.core.model.WidgetResizeStepPercent
+import dev.fitface.studio.core.model.drawLeft
+import dev.fitface.studio.core.model.drawTop
+import dev.fitface.studio.core.model.mebibytes
 import dev.fitface.studio.core.model.nextWidgetSize
 import dev.fitface.studio.core.model.widgetSizePercent
-import dev.fitface.studio.core.model.drawLeft
-import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
-import dev.fitface.studio.core.model.mebibytes
-import dev.fitface.studio.core.model.drawTop
+import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.DiagnosticsDialog
+import dev.fitface.studio.core.ui.FitBadge
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
-import dev.fitface.studio.core.ui.FitBadge
 import dev.fitface.studio.core.ui.FitChip
-import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitStatus
@@ -133,8 +137,8 @@ import dev.fitface.studio.core.ui.fitColors
 import dev.fitface.studio.core.ui.fitText
 import dev.fitface.studio.core.ui.styleLabel
 import java.io.File
-import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 @Composable
 fun EditorRoute(
@@ -270,8 +274,19 @@ private enum class EditorPage {
     Inspector,
     Background,
     Styles,
-    Validate,
-    Install,
+
+    /**
+     * The checks and the transfer, on one page.
+     *
+     * They were two rail entries describing one journey. Tapping Install with an
+     * unreviewed preview did not open Install: it silently landed on Validate and marked
+     * the preview reviewed, so the rail said one thing and the screen said another. The
+     * gate that redirect implemented is a property of the layout now — the validated
+     * render is the second thing on this page and the send button is near the last — and
+     * `previewReviewed` still arms the button, so the mechanism survives without a page
+     * that exists only to be passed through.
+     */
+    Send,
     Project,
     ;
 
@@ -284,7 +299,6 @@ private enum class EditorPage {
         get() = when (this) {
             Canvas -> null
             Inspector -> Widgets
-            Install -> Validate
             else -> Canvas
         }
 
@@ -292,14 +306,14 @@ private enum class EditorPage {
      * Whether the canvas the wide layout keeps beside this page is an editor or a picture.
      *
      * Outlined widgets are a promise you can drag them — the Canvas page's own hint says
-     * so in words — and the Install page was making that promise on the one page whose job
+     * so in words — and the send page was making that promise on the one page whose job
      * is to send what has already been decided. Nothing was ever at risk there: the pane
      * is frozen while a transfer is active, and a commit re-arms a finished one through
      * `payloadChanged()` rather than corrupting it. The affordance contradicting the page
-     * is the bug. Install therefore gets the same read-only render the Validate page uses.
+     * is the bug, so Send gets a read-only render.
      */
     val canvasIsEditable: Boolean
-        get() = this != Install
+        get() = this != Send
 }
 
 @Composable
@@ -359,18 +373,14 @@ private fun EditorScreen(
     val selected = snapshot?.widgets?.singleOrNull {
         it.globalIndex == state.selectedWidgetIndex
     }
+    // No redirect any more: Send is one page, so there is nowhere to be quietly sent
+    // instead. Arriving marks the preview reviewed, which is what arms the send button,
+    // and `SendWorkspace` re-marks it on every snapshot so an edit made on the page
+    // cannot leave it inert.
     val navigate: (EditorPage) -> Unit = { target ->
-        val gatedTarget = if (
-            target == EditorPage.Install &&
-            (snapshot == null || snapshot.validationErrors.isNotEmpty() || !state.previewReviewed)
-        ) {
-            EditorPage.Validate
-        } else {
-            target
-        }
-        if (gatedTarget != page) {
-            page = gatedTarget
-            if (gatedTarget == EditorPage.Validate) onPreviewReviewed()
+        if (target != page) {
+            page = target
+            if (target == EditorPage.Send) onPreviewReviewed()
         }
     }
     val goBack: () -> Unit = {
@@ -637,8 +647,7 @@ private fun EditorHeader(
         )
         EditorPage.Background -> stringResource(R.string.editor_page_background)
         EditorPage.Styles -> stringResource(R.string.editor_page_styles)
-        EditorPage.Validate -> stringResource(R.string.editor_page_validate)
-        EditorPage.Install -> stringResource(R.string.editor_page_install)
+        EditorPage.Send -> stringResource(R.string.editor_page_send)
         EditorPage.Project -> stringResource(R.string.editor_page_project)
     }
     val subtitle = when (page) {
@@ -684,8 +693,7 @@ private fun EditorHeader(
                 snapshot.styleNames.size,
             )
         }
-        EditorPage.Validate -> stringResource(R.string.editor_subtitle_validate)
-        EditorPage.Install -> stringResource(R.string.editor_subtitle_install)
+        EditorPage.Send -> stringResource(R.string.editor_subtitle_send)
         EditorPage.Project -> snapshot.sourceName
     }
     // Order matters. The app menu is on every page while the badge and the overflow are
@@ -732,14 +740,26 @@ private fun EditorRail(
     vertical: Boolean,
     onNavigate: (EditorPage) -> Unit,
 ) {
-    // The labels are the page titles, so the rail and the header cannot drift apart.
+    // The labels are the page titles, so the rail and the header cannot drift apart. The
+    // face is the exception and has a label of its own: its header is titled with the
+    // project's name, which is the only thing on that screen telling two projects on one
+    // face apart.
+    //
+    // It is first because it is the subject of every other page, and because until it was
+    // here the only way back to it was the `‹` arrow — which everywhere else in this app
+    // means "leave". Now `‹` means one thing again.
     val destinations = listOf(
+        Triple("▣", stringResource(R.string.editor_page_face), EditorPage.Canvas),
         Triple("▦", stringResource(R.string.editor_page_widgets), EditorPage.Widgets),
         Triple("▧", stringResource(R.string.editor_page_background), EditorPage.Background),
         Triple("◫", stringResource(R.string.editor_page_styles), EditorPage.Styles),
-        Triple("✓", stringResource(R.string.editor_page_validate), EditorPage.Validate),
-        Triple("⇧", stringResource(R.string.editor_page_install), EditorPage.Install),
+        Triple("⇧", stringResource(R.string.editor_page_send), EditorPage.Send),
     )
+    check(destinations.size == RailDestinationCount) {
+        // The budget below is a fifth of the bar. A sixth entry silently re-clips the
+        // longest label, which is exactly how `BACKGROUND` came to render as `BACKGROUN`.
+        "The rail's width budget is computed for $RailDestinationCount destinations"
+    }
     val container = Modifier.background(MaterialTheme.colorScheme.surfaceContainerLowest)
     if (vertical) {
         Column(
@@ -773,14 +793,78 @@ private fun RailItem(
     val color = if (selected) MaterialTheme.colorScheme.primary
     else MaterialTheme.fitText.secondary
     Column(
-        modifier = modifier.clickable(onClick = onClick).padding(vertical = 8.dp, horizontal = 2.dp),
+        modifier = modifier.clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = RailItemHorizontalPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Text(glyph, color = color, style = FitFaceType.numeric)
-        Text(label.uppercase(), color = color, style = FitFaceType.micro, maxLines = 1)
+        Text(
+            label.uppercase(),
+            color = color,
+            style = RailLabel,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
+
+/**
+ * [FitFaceType.micro] without its letter spacing, because the rail is the one place in the
+ * app where a label's width is a hard five-way split of the screen.
+ *
+ * `BACKGROUND` is ten characters, and at `micro`'s 1.3sp tracking that is about 67dp
+ * against the 64dp a fifth of a 339dp phone leaves it — so it rendered as `BACKGROUN`,
+ * clipped mid-word with no ellipsis and nothing in any test. Dropping the tracking costs
+ * the longest label 13dp and leaves about 15% headroom; the glyph above it carries the
+ * rhythm the tracking was there for. The ellipsis is the honest degradation for whatever
+ * a large font scale or a longer translation does next.
+ */
+private val RailLabel = FitFaceType.micro.copy(letterSpacing = 0.sp)
+
+private val RailItemHorizontalPadding = 2.dp
+
+/** Five: face, widgets, background, styles, send. [railLabelCharacterBudget] assumes it. */
+internal const val RailDestinationCount = 5
+
+/**
+ * The narrowest window this app lays out for. Below it everything is cramped; at it,
+ * nothing may be clipped.
+ */
+internal val NarrowestSupportedWidth = 320.dp
+
+/**
+ * How many characters of a rail label fit before the bar clips it.
+ *
+ * Pinned by a test in characters rather than pixels, the way `SortChipLayoutTest` pins the
+ * library's sort chips and for the same reason: `:feature:editor` cannot measure a
+ * composable, and the label is monospace, so a character count is something arithmetic can
+ * decide and a device can be checked against.
+ *
+ * This is not decoration. The rail splits its width five equal ways and the labels are the
+ * page titles, so a title one character too long is clipped mid-word on every phone, with
+ * no ellipsis, no warning and nothing in any test — which is what `BACKGROUND` did, as
+ * `BACKGROUN`, for as long as the rail existed.
+ */
+internal fun railLabelCharacterBudget(
+    railWidth: Dp = NarrowestSupportedWidth,
+    destinations: Int = RailDestinationCount,
+): Int {
+    val usable = railWidth / destinations - RailItemHorizontalPadding * 2
+    val perCharacter = RailLabel.fontSize.value * MonospaceAdvanceRatio +
+        RailLabel.letterSpacing.value
+    return (usable.value / perCharacter).toInt()
+}
+
+/**
+ * The advance of one glyph in Android's monospace face, as a fraction of the font size.
+ *
+ * Measured rather than assumed: `STYLES` occupies 129 of face 00046's rail on a 510dpi
+ * emulator, which is 6.74dp a character at `micro`'s 9.5sp and 1.3sp tracking — 0.573 of
+ * the size once the tracking is taken out. Rounded up to be safe, because the cost of
+ * being wrong in this direction is a clipped label and in the other is a shorter one.
+ */
+private const val MonospaceAdvanceRatio = 0.6f
 
 @Composable
 private fun EditorPageContent(
@@ -850,19 +934,22 @@ private fun EditorPageContent(
             onTintMagenta, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(snapshot, !state.isWorking, onVariant, modifier)
-        EditorPage.Validate -> ValidateWorkspace(
+        EditorPage.Send -> SendWorkspace(
             snapshot = snapshot,
             state = state,
             onReviewed = onPreviewReviewed,
-            onInstall = { onNavigate(EditorPage.Install) },
             onSyncThumbnail = onSyncThumbnail,
             onReset = onReset,
+            onGrantNearby = onGrantNearby,
+            onOpenCompanion = onOpenCompanion,
+            onInitializeAndDiscover = onInitializeAndDiscover,
+            onOpenPluginSettings = onOpenPluginSettings,
+            onConfirmPluginReleased = onConfirmPluginReleased,
+            onRediscover = onRediscover,
+            onSendBin = onSendBin,
+            onResetDelivery = onResetDelivery,
+            onCanvas = { onNavigate(EditorPage.Canvas) },
             modifier = modifier,
-        )
-        EditorPage.Install -> InstallWorkspace(
-            state, snapshot, onGrantNearby, onOpenCompanion, onInitializeAndDiscover,
-            onOpenPluginSettings, onConfirmPluginReleased, onRediscover, onSendBin,
-            onResetDelivery, { onNavigate(EditorPage.Canvas) }, modifier,
         )
         EditorPage.Project ->
             ProjectWorkspace(
@@ -2586,24 +2673,32 @@ private fun FacePreview(
 }
 
 @Composable
-private fun ValidateWorkspace(
+private fun SendWorkspace(
     snapshot: EditorSnapshot,
     state: EditorUiState,
     onReviewed: () -> Unit,
-    onInstall: () -> Unit,
     onSyncThumbnail: () -> Unit,
     onReset: () -> Unit,
+    onGrantNearby: () -> Unit,
+    onOpenCompanion: () -> Unit,
+    onInitializeAndDiscover: () -> Unit,
+    onOpenPluginSettings: () -> Unit,
+    onConfirmPluginReleased: () -> Unit,
+    onRediscover: () -> Unit,
+    onSendBin: () -> Unit,
+    onResetDelivery: () -> Unit,
+    onCanvas: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val valid = snapshot.validationErrors.isEmpty()
-    // Install is gated on having reviewed the validated preview, and every commit
-    // clears that flag. Without re-marking it here, editing anything while on this
-    // page (re-rendering the thumbnail, say) leaves "Continue to install" inert.
+    // Sending is gated on having seen the validated render, and every commit clears that
+    // flag. The render is the second thing on this page, so arriving is reviewing — but
+    // an edit made *while here*, such as re-rendering the thumbnail, clears it again and
+    // would leave the send button inert. Keyed on the snapshot so every commit re-marks.
     LaunchedEffect(snapshot) { onReviewed() }
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         StatusBanner(
             if (valid) FitStatus.Pass else FitStatus.Fail,
@@ -2614,89 +2709,114 @@ private fun ValidateWorkspace(
                 snapshot.validationErrors.joinToString()
             },
         )
-        DirectWatchCanvas(
-            snapshot = snapshot,
-            editing = false,
-            selectedGlobalIndex = null,
-            pendingWidgetMove = null,
-            pendingImage = null,
-            placement = state.placement,
-            enabled = false,
-            onWidget = {},
-            onMoveWidget = { _, _, _ -> },
-            onTransformImage = { _, _, _ -> },
-            modifier = Modifier.widthIn(max = 168.dp),
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            DirectWatchCanvas(
+                snapshot = snapshot,
+                editing = false,
+                selectedGlobalIndex = null,
+                pendingWidgetMove = null,
+                pendingImage = null,
+                placement = state.placement,
+                enabled = false,
+                onWidget = {},
+                onMoveWidget = { _, _, _ -> },
+                onTransformImage = { _, _, _ -> },
+                modifier = Modifier.widthIn(max = 168.dp),
+            )
+        }
+        val checks = listOf(
+            R.string.editor_check_entry_bounds,
+            R.string.editor_check_record_sizes,
+            R.string.editor_check_crc,
+            R.string.editor_check_payload_length,
+            R.string.editor_check_face_id,
         )
-        Column(Modifier.fillMaxWidth()) {
-            MicroLabel(stringResource(R.string.editor_checks_heading))
+        SendSection(
+            label = stringResource(R.string.editor_checks_heading),
+            summary = if (valid) {
+                stringResource(R.string.editor_send_checks_summary, checks.size)
+            } else {
+                stringResource(R.string.editor_send_checks_summary_failed)
+            },
+            summaryColor = if (valid) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+            // A failure is the one thing on this page nobody should have to open a
+            // section to read.
+            initiallyExpanded = !valid,
+        ) {
             Column(
-                Modifier.padding(top = 10.dp).fillMaxWidth()
+                Modifier.fillMaxWidth()
                     .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small),
             ) {
-                listOf(
-                    R.string.editor_check_entry_bounds,
-                    R.string.editor_check_record_sizes,
-                    R.string.editor_check_crc,
-                    R.string.editor_check_payload_length,
-                    R.string.editor_check_face_id,
-                ).forEach { label -> ValidationCheck(stringResource(label), valid) }
+                checks.forEach { label -> ValidationCheck(stringResource(label), valid) }
             }
         }
+        // Warnings are never folded away. A collapsed section is something the reader
+        // chose not to read; a warning they never saw is one this page failed to give.
         snapshot.validationWarnings.forEach { warning -> StatusBanner(FitStatus.Warning, warning) }
         // This page presents the picture above as what is about to be installed, so what
         // the picture cannot show has to be said here and not only on the canvas.
         if (snapshot.selectedVariantApproximate) {
             StatusBanner(FitStatus.Warning, stringResource(R.string.editor_aod_approximate))
         }
-        ThumbnailCard(
-            snapshot = snapshot,
-            working = state.isWorking,
-            onRefresh = onSyncThumbnail,
-        )
         snapshot.audit?.let { audit ->
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                    .padding(14.dp),
+            SendSection(
+                label = stringResource(R.string.editor_audit_heading),
+                summary = "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta} B",
             ) {
-                MicroLabel(stringResource(R.string.editor_audit_heading))
-                Text(
-                    if (snapshot.auditTouchedOnlyAod) {
-                        stringResource(
-                            R.string.editor_audit_detail_aod,
-                            audit.operation,
-                            audit.changedPayloadBytes,
-                            "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
-                            // The watch ignores a container over the ceiling, so how close this
-                            // edit is to it belongs beside the rest of the audit.
-                            mebibytes(snapshot.containerBytes),
-                            mebibytes(WATCH_CONTAINER_BYTE_CEILING),
-                        )
-                    } else {
-                        stringResource(
-                            R.string.editor_audit_detail,
-                            audit.operation,
-                            audit.changedPayloadBytes,
-                            "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
-                            audit.changedStyles.size,
-                            mebibytes(snapshot.containerBytes),
-                            mebibytes(WATCH_CONTAINER_BYTE_CEILING),
-                        )
-                    },
-                    modifier = Modifier.padding(top = 9.dp),
-                    style = FitFaceType.numeric,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                AuditDetail(snapshot, audit)
             }
         }
-        FitButton(
-            stringResource(R.string.editor_continue_to_install),
-            onInstall,
-            Modifier.fillMaxWidth(),
-            valid && !state.isWorking,
+        SendSection(
+            label = stringResource(R.string.editor_thumbnail_heading),
+            summary = stringResource(
+                if (snapshot.thumbnailRefreshed) {
+                    R.string.editor_thumbnail_in_sync_label
+                } else {
+                    R.string.editor_send_thumbnail_summary_stale
+                },
+            ),
+            summaryColor = if (snapshot.thumbnailRefreshed) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        ) {
+            ThumbnailDetail(snapshot, state.isWorking, onSyncThumbnail)
+        }
+
+        Box(
+            Modifier.fillMaxWidth().height(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant),
         )
-        if (!valid) {
+
+        if (valid) {
+            MicroLabel(stringResource(R.string.editor_send_watch_heading))
+            WatchSection(
+                state = state,
+                snapshot = snapshot,
+                canSend = state.previewReviewed,
+                onGrantNearby = onGrantNearby,
+                onOpenCompanion = onOpenCompanion,
+                onInitializeAndDiscover = onInitializeAndDiscover,
+                onOpenPluginSettings = onOpenPluginSettings,
+                onConfirmPluginReleased = onConfirmPluginReleased,
+                onRediscover = onRediscover,
+                onSendBin = onSendBin,
+                onReset = onResetDelivery,
+                onCanvas = onCanvas,
+            )
+        } else {
+            // No disabled transfer panel: an invalid container has nothing to send, and a
+            // page full of inert controls says less than one sentence and the way out.
+            Text(
+                stringResource(R.string.editor_send_blocked),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             FitButton(
                 stringResource(R.string.editor_reset_edits),
                 onReset, Modifier.fillMaxWidth(), !state.isWorking,
@@ -2707,66 +2827,131 @@ private fun ValidateWorkspace(
 }
 
 /**
+ * A fact about the edit, folded away behind its own summary.
+ *
+ * The send page carries everything the two pages before it carried, which is a long
+ * scroll between the render at the top and the button at the bottom. The checks, the
+ * audit and the thumbnail are all *reference*: each one's header states its conclusion,
+ * and opening it shows the working. Warnings and failures are not sections — they stay
+ * in the column where they cannot be folded away.
+ */
+@Composable
+private fun SendSection(
+    label: String,
+    summary: String,
+    summaryColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    initiallyExpanded: Boolean = false,
+    body: @Composable ColumnScope.() -> Unit,
+) {
+    var expanded by rememberSaveable(label) { mutableStateOf(initiallyExpanded) }
+    // The glyph alone announces as a character, and the row's own text says what the
+    // section holds but not that tapping opens it.
+    val action = stringResource(
+        if (expanded) R.string.editor_send_collapse else R.string.editor_send_expand,
+        label,
+    )
+    Column(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small),
+    ) {
+        Row(
+            Modifier.fillMaxWidth()
+                .clickable(role = Role.Button) { expanded = !expanded }
+                .semantics { contentDescription = action }
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            MicroLabel(label, Modifier.weight(1f))
+            Text(summary, style = FitFaceType.numeric, color = summaryColor, maxLines = 1)
+            // `▾`/`▴` rather than `▼`/`▲`: the filled-triangle pair has an emoji
+            // presentation on some builds and would be the only colour glyph on the page.
+            Text(
+                if (expanded) "▴" else "▾",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) { body() }
+        }
+    }
+}
+
+@Composable
+private fun AuditDetail(snapshot: EditorSnapshot, audit: EditAuditSummary) {
+    Text(
+        if (snapshot.auditTouchedOnlyAod) {
+            stringResource(
+                R.string.editor_audit_detail_aod,
+                audit.operation,
+                audit.changedPayloadBytes,
+                "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
+                // The watch ignores a container over the ceiling, so how close this
+                // edit is to it belongs beside the rest of the audit.
+                mebibytes(snapshot.containerBytes),
+                mebibytes(WATCH_CONTAINER_BYTE_CEILING),
+            )
+        } else {
+            stringResource(
+                R.string.editor_audit_detail,
+                audit.operation,
+                audit.changedPayloadBytes,
+                "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta}",
+                audit.changedStyles.size,
+                mebibytes(snapshot.containerBytes),
+                mebibytes(WATCH_CONTAINER_BYTE_CEILING),
+            )
+        },
+        style = FitFaceType.numeric,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/**
  * The face-picker thumbnail, updated on request but only ever once per edit.
  *
  * The button disappears as soon as the thumbnail matches, because a repeat pass is
  * pure loss: the widget pixels come from the vendor's smaller `preview.bin` render,
  * and resampling them again softens the result every time.
+ *
+ * The card's own chrome is gone — [SendSection] is the card now, and a bordered box
+ * inside a bordered box was two frames around one fact.
  */
 @Composable
-private fun ThumbnailCard(
+private fun ThumbnailDetail(
     snapshot: EditorSnapshot,
     working: Boolean,
     onRefresh: () -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-            .padding(14.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MicroLabel(stringResource(R.string.editor_thumbnail_heading))
-            if (snapshot.thumbnailRefreshed) {
-                MicroLabel(
-                    stringResource(R.string.editor_thumbnail_in_sync_label),
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-        Text(
-            when {
-                snapshot.isAodSelected -> stringResource(
-                    R.string.editor_thumbnail_aod,
-                    variantLabel(snapshot.activeStyleName),
-                )
-                snapshot.thumbnailRefreshed -> stringResource(
-                    R.string.editor_thumbnail_in_sync,
-                    variantLabel(snapshot.activeStyleName),
-                )
-                !snapshot.isDirty -> stringResource(R.string.editor_thumbnail_unedited)
-                snapshot.validationErrors.isNotEmpty() ->
-                    stringResource(R.string.editor_thumbnail_blocked)
-                else -> stringResource(R.string.editor_thumbnail_stale)
-            },
-            modifier = Modifier.padding(top = 9.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (snapshot.canRefreshThumbnail) {
-            FitButton(
-                stringResource(R.string.editor_thumbnail_update),
-                onRefresh,
-                Modifier.fillMaxWidth().padding(top = 12.dp),
-                !working,
-                loading = working,
-                style = FitButtonStyle.Secondary,
+    Text(
+        when {
+            snapshot.isAodSelected -> stringResource(
+                R.string.editor_thumbnail_aod,
+                variantLabel(snapshot.activeStyleName),
             )
-        }
+            snapshot.thumbnailRefreshed -> stringResource(
+                R.string.editor_thumbnail_in_sync,
+                variantLabel(snapshot.activeStyleName),
+            )
+            !snapshot.isDirty -> stringResource(R.string.editor_thumbnail_unedited)
+            snapshot.validationErrors.isNotEmpty() ->
+                stringResource(R.string.editor_thumbnail_blocked)
+            else -> stringResource(R.string.editor_thumbnail_stale)
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (snapshot.canRefreshThumbnail) {
+        FitButton(
+            stringResource(R.string.editor_thumbnail_update),
+            onRefresh,
+            Modifier.fillMaxWidth().padding(top = 12.dp),
+            !working,
+            loading = working,
+            style = FitButtonStyle.Secondary,
+        )
     }
 }
 
@@ -3206,13 +3391,24 @@ private fun DirectWatchCanvas(
 }
 
 // ---------------------------------------------------------------------------
-// Install
+// The watch half of the Send page
 // ---------------------------------------------------------------------------
 
+/**
+ * Everything below the checks: the watch, the setup it needs, and the transfer.
+ *
+ * This was its own page and its own scroll. Merged, it is a section of one — so it owns
+ * no scroll and no padding, and takes its spacing from the column it is placed in.
+ *
+ * [canSend] is `previewReviewed`. It is not the gate that matters — `Session.validatedBytes()`
+ * is, and it is fail-closed — but it is the one that makes having seen the render a
+ * precondition for sending it, which is the whole reason the flag exists.
+ */
 @Composable
-private fun InstallWorkspace(
+private fun ColumnScope.WatchSection(
     state: EditorUiState,
     snapshot: EditorSnapshot,
+    canSend: Boolean,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
     onInitializeAndDiscover: () -> Unit,
@@ -3222,90 +3418,84 @@ private fun InstallWorkspace(
     onSendBin: () -> Unit,
     onReset: () -> Unit,
     onCanvas: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val delivery = state.directInstall
-    Column(
-        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        DeviceStatusRow(delivery, snapshot)
+    DeviceStatusRow(delivery, snapshot)
 
-        // A note, not a wall. This used to replace the whole checklist whenever a package
-        // probe came up short, which is how a phone with the watch paired, connected and
-        // holding a live accessory session was told direct install was unavailable — with
-        // no way forward on the screen. What is installed cannot answer that question, so
-        // it is said once, in passing, and the checklist below stays usable.
-        delivery.environment.advisory?.let { advisory ->
+    // A note, not a wall. This used to replace the whole checklist whenever a package
+    // probe came up short, which is how a phone with the watch paired, connected and
+    // holding a live accessory session was told direct install was unavailable — with
+    // no way forward on the screen. What is installed cannot answer that question, so
+    // it is said once, in passing, and the checklist below stays usable.
+    delivery.environment.advisory?.let { advisory ->
+        StatusBanner(
+            FitStatus.Warning,
+            stringResource(
+                when (advisory) {
+                    EnvironmentAdvisory.FRAMEWORK_MISSING ->
+                        R.string.editor_install_advisory_framework
+                    EnvironmentAdvisory.NO_ACCESSORY_APP ->
+                        R.string.editor_install_advisory_no_agent
+                    EnvironmentAdvisory.NO_COMPANION_APP ->
+                        R.string.editor_install_advisory_no_companion
+                },
+            ),
+            label = stringResource(R.string.editor_install_advisory_label),
+        )
+    }
+
+    run {
+        // A rewound setup shows the checklist, which says what to do next but not
+        // what went wrong; the transfer panel renders its own failure banner.
+        val stopped = if (delivery.setupComplete) null else delivery.failure
+        stopped?.let { failure ->
             StatusBanner(
-                FitStatus.Warning,
-                stringResource(
-                    when (advisory) {
-                        EnvironmentAdvisory.FRAMEWORK_MISSING ->
-                            R.string.editor_install_advisory_framework
-                        EnvironmentAdvisory.NO_ACCESSORY_APP ->
-                            R.string.editor_install_advisory_no_agent
-                        EnvironmentAdvisory.NO_COMPANION_APP ->
-                            R.string.editor_install_advisory_no_companion
-                    },
-                ),
-                label = stringResource(R.string.editor_install_advisory_label),
+                FitStatus.Fail,
+                failure,
+                label = stringResource(R.string.editor_install_stopped_label),
             )
         }
-
-        run {
-            // A rewound setup shows the checklist, which says what to do next but not
-            // what went wrong; the transfer panel renders its own failure banner.
-            val stopped = if (delivery.setupComplete) null else delivery.failure
-            stopped?.let { failure ->
-                StatusBanner(
-                    FitStatus.Fail,
-                    failure,
-                    label = stringResource(R.string.editor_install_stopped_label),
-                )
-            }
-            // The banner above already says this in full; showing both is noise — and
-            // it was, on every terminal failure: `DirectInstallState.failed` writes the
-            // same string to `failure` and to `message`, so an agent that would not
-            // initialize printed itself twice, once boxed and once bare underneath. The
-            // two fields differ only after a rewind, where `failure` is what went wrong
-            // and `message` is what to do next, and there both are worth showing.
-            if (delivery.message != stopped) {
-                Text(
-                    delivery.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                )
-            }
-        }
-
-        if (delivery.setupComplete) {
-            TransferPanel(delivery, state.isWorking, onSendBin, onRediscover, onCanvas)
-        } else {
-            SetupChecklist(
-                state = delivery,
-                enabled = !state.isWorking,
-                onOpenCompanion = onOpenCompanion,
-                onGrantNearby = onGrantNearby,
-                onDiscover = onInitializeAndDiscover,
-                onOpenPluginSettings = onOpenPluginSettings,
-                onConfirmPluginReleased = onConfirmPluginReleased,
-            )
-        }
-
-        PayloadReadout(delivery)
-
-        TextButton(
-            onClick = onReset,
-            enabled = !delivery.isActive,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        // The banner above already says this in full; showing both is noise — and
+        // it was, on every terminal failure: `DirectInstallState.failed` writes the
+        // same string to `failure` and to `message`, so an agent that would not
+        // initialize printed itself twice, once boxed and once bare underneath. The
+        // two fields differ only after a rewind, where `failure` is what went wrong
+        // and `message` is what to do next, and there both are worth showing.
+        if (delivery.message != stopped) {
             Text(
-                stringResource(R.string.editor_install_restart),
-                style = MaterialTheme.typography.labelMedium,
+                delivery.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
+    }
+
+    if (delivery.setupComplete) {
+        TransferPanel(delivery, state.isWorking, canSend, onSendBin, onRediscover, onCanvas)
+    } else {
+        SetupChecklist(
+            state = delivery,
+            enabled = !state.isWorking,
+            onOpenCompanion = onOpenCompanion,
+            onGrantNearby = onGrantNearby,
+            onDiscover = onInitializeAndDiscover,
+            onOpenPluginSettings = onOpenPluginSettings,
+            onConfirmPluginReleased = onConfirmPluginReleased,
+        )
+    }
+
+    PayloadReadout(delivery)
+
+    TextButton(
+        onClick = onReset,
+        enabled = !delivery.isActive,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            stringResource(R.string.editor_install_restart),
+            style = MaterialTheme.typography.labelMedium,
+        )
     }
 }
 
@@ -3690,6 +3880,8 @@ private fun SetupStepRow(
 private fun TransferPanel(
     state: DirectInstallState,
     isWorking: Boolean,
+    /** `previewReviewed`: every button here starts a transfer, so all of them take it. */
+    canSend: Boolean,
     onSendBin: () -> Unit,
     onRediscover: () -> Unit,
     onCanvas: () -> Unit,
@@ -3751,7 +3943,7 @@ private fun TransferPanel(
                 // face for reasons that have nothing to do with the payload.
                 FitButton(
                     stringResource(R.string.editor_transfer_send_again),
-                    onSendBin, Modifier.fillMaxWidth(), !isWorking,
+                    onSendBin, Modifier.fillMaxWidth(), !isWorking && canSend,
                     style = FitButtonStyle.Secondary,
                 )
                 FitButton(
@@ -3766,7 +3958,7 @@ private fun TransferPanel(
                 // way forward was restarting the whole setup.
                 FitButton(
                     stringResource(R.string.editor_transfer_try_again),
-                    onSendBin, Modifier.fillMaxWidth(), !isWorking,
+                    onSendBin, Modifier.fillMaxWidth(), !isWorking && canSend,
                 )
                 // Re-sending only helps while the peers are still live. Anything that
                 // outlived the channel handover needs the watch connected again, and
@@ -3801,7 +3993,7 @@ private fun TransferPanel(
                     stringResource(R.string.editor_transfer_install),
                     onSendBin,
                     Modifier.fillMaxWidth(),
-                    enabled = !isWorking && state.phase == DirectInstallPhase.READY,
+                    enabled = !isWorking && canSend && state.phase == DirectInstallPhase.READY,
                 )
             }
         }

@@ -230,7 +230,7 @@ thumbnail.
 
 An archive is a zip a stranger could have written, which is a different threat from a store
 package or a picked image. Everything is checked **before a row is written**, because a
-project someone spends an evening on must not turn out on the Install page to have never
+project someone spends an evening on must not turn out on the Send page to have never
 been sendable.
 
 The structural defence is that **no entry name ever becomes a filesystem path**. An import

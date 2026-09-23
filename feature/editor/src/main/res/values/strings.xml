@@ -23,6 +23,10 @@
     <string name="editor_reopen">Reopen from library</string>
 
     <!-- Page titles, reused as the navigation rail's labels -->
+    <!-- The one exception: the Canvas page's header is titled with the project's name,
+         because two projects on one face are otherwise indistinguishable from it. The rail
+         needs a word for the destination, and this is it. -->
+    <string name="editor_page_face">Face</string>
     <string name="editor_page_widgets">Widgets</string>
     <string name="editor_page_widget_number">Widget #%1$s</string>
     <string name="editor_page_background">Background</string>
@@ -30,8 +34,9 @@
     <!-- The Styles page's row for the always-on display, and every place a variant name
          is shown — never the raw "aod.bin" basename. -->
     <string name="editor_aod_label">Always-on display</string>
-    <string name="editor_page_validate">Validate</string>
-    <string name="editor_page_install">Install</string>
+    <!-- One page: the checks and the transfer were always one journey — the rail's
+         Install entry silently redirected to Validate until the render had been seen. -->
+    <string name="editor_page_send">Send</string>
     <string name="editor_page_project">Project</string>
     <!-- The "⋯" that opens the page above. A glyph needs its label spelled out for TalkBack,
          which otherwise announces the ellipsis character itself. -->
@@ -75,8 +80,7 @@
         <item quantity="one">%1$d style · always-on display</item>
         <item quantity="other">%1$d styles · always-on display</item>
     </plurals>
-    <string name="editor_subtitle_validate">reparse of the edited container</string>
-    <string name="editor_subtitle_install">direct to paired Fit3</string>
+    <string name="editor_subtitle_send">checks, then the paired Fit3</string>
     <string name="editor_badge_edited">EDITED</string>
     <!--
       Shown in the top bar while an image is positioned but not yet committed. The bar is
@@ -258,6 +262,15 @@
     <!-- Validate page -->
     <string name="editor_validate_ok">Container reparsed successfully. Entry bounds, records and CRCs are valid.</string>
     <string name="editor_checks_heading">Checks</string>
+    <!-- The collapsed summary beside each Send-page section heading. -->
+    <string name="editor_send_checks_summary">%1$d pass</string>
+    <string name="editor_send_checks_summary_failed">failed</string>
+    <string name="editor_send_expand">Show %1$s</string>
+    <string name="editor_send_collapse">Hide %1$s</string>
+    <string name="editor_send_watch_heading">Send to the watch</string>
+    <!-- Shown in place of the watch section when the container did not reparse. Nothing
+         may be sent, so the page offers the way back rather than a disabled transfer. -->
+    <string name="editor_send_blocked">This container did not reparse, so nothing can be sent. Undo the last edit, or reset the project to the face as it was downloaded.</string>
     <string name="editor_check_entry_bounds">Entry table bounds</string>
     <string name="editor_check_record_sizes">Record sizes</string>
     <string name="editor_check_crc">Per-entry CRC</string>
@@ -269,12 +282,12 @@
          "%4$d of %5$d styles" would misreport it as one of the numbered styles, when it is
          neither counted among nor touched by them. -->
     <string name="editor_audit_detail_aod">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nvariant touched: always-on display\ncontainer %4$s of %5$s</string>
-    <string name="editor_continue_to_install">Continue to install →</string>
     <string name="editor_reset_edits">Reset project edits</string>
 
     <!-- Thumbnail card -->
     <string name="editor_thumbnail_heading">Face-picker thumbnail</string>
     <string name="editor_thumbnail_in_sync_label">IN SYNC</string>
+    <string name="editor_send_thumbnail_summary_stale">not refreshed</string>
     <string name="editor_thumbnail_in_sync">Matches your edit, so the watch\'s carousel shows the same layout as %1$s. Make another edit before updating it again.</string>
     <string name="editor_thumbnail_unedited">Unedited, so the stock thumbnail already matches this face.</string>
     <string name="editor_thumbnail_blocked">Resolve the errors above first — a thumbnail rendered from a container that does not validate would bake in a broken layout.</string>

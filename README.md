@@ -38,7 +38,7 @@ with its style picker, the inspector, the background replacement page, and the
 projects list.
 
 All ten of those are captured from an Android 16 emulator, so the watch is not
-present and the Install page is on step 3 of its checklist. The last step is the one
+present and the Send page is on step 3 of its checklist. The last step is the one
 an emulator cannot show:
 
 <img src="docs/screenshots/on-watch.jpg" alt="An SM-R390 showing a watch face sent to it by FitFace Studio: the date, the time in large green and blue digits, an emblem, and step, heart-rate and battery readings along the bottom" width="360">

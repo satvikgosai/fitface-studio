@@ -499,13 +499,18 @@ The four that catch people fastest:
   a tap shorter than that frame was cancelled before its first step — a control whose
   label promises "tap for 1 px" moving nothing. The click is the fallback, and a flag
   keeps the release of a longer press from adding a step the repeat already made.
-* **Install is gated on `previewReviewed`, and every commit clears it.** Editing
-  on the Validate page therefore has to re-mark it, or "Continue to install"
-  becomes inert.
+* **Sending is gated on `previewReviewed`, and every commit clears it.** Editing
+  on the Send page therefore has to re-mark it, or every send button goes inert —
+  `SendWorkspace`'s `LaunchedEffect(snapshot)` is what does it. The checks and the
+  transfer are **one page**: the rail's Install entry used to redirect to Validate
+  whenever the preview was unreviewed, so the rail said one thing and the screen said
+  another. The gate is the layout now — the validated render is the second thing on the
+  page, the send button is near the last — and the flag arms the button rather than
+  choosing a destination. `Session.validatedBytes()` is still the only real gate.
 * **A preview may leave a widget out. It may not invent one.** The AOD renderer's first
   pass painted a translucent coloured box over every Value and Composite rectangle,
   because those draw live text from firmware fonts this app does not have. That box is
-  pixels the watch will never draw, in the one picture the Validate page presents as what
+  pixels the watch will never draw, in the one picture the Send page presents as what
   is about to be installed — and it went into `widgetOverlay` too, so dragging such a
   widget dragged a grey rectangle around. Nothing stands in for them now: the canvas
   outlines them, and `AodPreview.isApproximate` says in words what was left out. **And a
@@ -726,7 +731,7 @@ The four that catch people fastest:
   route that used to serve both, disconnecting the watch in the companion app, does not
   free the channel — it and a manual force stop were both tried on hardware.
 * **What is installed does not decide whether the channel opens — discovery does.** The
-  Install page used to AND three package names and replace the whole checklist with a dead
+  Send page's checklist used to AND three package names and replace itself with a dead
   end if any were absent, and every part of that was wrong. **The companion app has no
   single package name**: it ships as `com.samsung.android.app.watchmanager` on mainstream
   models and `…watchmanager2` on the entry-level ones (SM-A107M, SM-A115M), with the
@@ -790,10 +795,10 @@ The four that catch people fastest:
   none, so both screens must treat absence as normal. `StylePreviewSweepTest` and
   `StylePreviewProjectTest` pin this.
 * **The canvas has one mode.** It used to toggle between the editable layout and a
-  read-only "validated preview" — the same picture the Validate page shows, so the
+  read-only "validated preview" — the same picture the Send page shows, so the
   toggle only ever took away the ability to select a widget. Both chips are gone and
   `EditorUiState` no longer carries `showLayout`; what survived is
-  `markPreviewReviewed()`, because install is still gated on having seen Validate.
+  `markPreviewReviewed()`, because sending is still gated on having seen the render.
 * **A dialog has no height to give in landscape either, and an `AlertDialog` clips rather
   than scrolls.** It caps its own height and hands the text slot whatever is left, which on
   a landscape phone is a few lines: the diagnostics blurb was cut mid-sentence, and About
@@ -854,7 +859,7 @@ The four that catch people fastest:
   `preview.bin`'s frames and the extracted PNGs, and equals the style's own number only
   while a face numbers contiguously from zero. `AOD_ENTRY_NAME` moved down to `:core:model`
   for the same reason: `:feature:editor` cannot see `:core:format`, and it had a local copy
-  of the literal within a day of needing one. Two corollaries. The Install page's payload
+  of the literal within a day of needing one. Two corollaries. The Send page's payload
   block says **`sampler`**, not `style` — it is the raw protocol byte, counted from zero, so
   labelling it a style put "style 2" on screen beside "Style 3" for one face. And a screen
   that shows a variant name at all goes through `variantLabel`, including the
