@@ -75,6 +75,32 @@ class EditorRailLayoutTest {
         )
     }
 
+    /**
+     * The other axis. A landscape phone leaves the vertical rail about 260dp, and five
+     * items at the bar's own spacing want more than that — so `SEND` was off the bottom of
+     * the screen with nothing to scroll and nothing to say it was there.
+     *
+     * The column scrolls now, so nothing can be unreachable; this asserts it does not
+     * normally have to, because a navigation rail that scrolls on every landscape phone is
+     * a rail whose last destination people will not find.
+     */
+    @Test
+    fun theVerticalRailFitsALandscapePhoneWithoutScrolling() {
+        assertTrue(
+            "the vertical rail wants ${verticalRailNaturalHeight()} of $LandscapeRailHeight",
+            verticalRailNaturalHeight() <= LandscapeRailHeight,
+        )
+    }
+
+    /** A sixth destination does not fit this axis either, with no room left to take. */
+    @Test
+    fun aSixthDestinationWouldNotFitTheVerticalRail() {
+        assertTrue(
+            verticalRailNaturalHeight(destinations = RailDestinationCount + 1) >
+                LandscapeRailHeight,
+        )
+    }
+
     /** A wider phone is only ever more room, never less. */
     @Test
     fun aWiderWindowNeverShrinksTheBudget() {

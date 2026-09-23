@@ -892,6 +892,37 @@ The four that catch people fastest:
   `SortChipLayoutTest` measures the *neighbours* of the reversed chip, not the chip itself:
   the selected one is first in the row, so its own left edge cannot move whatever it does,
   and an assertion on it passes while the bug is present.
+* **Every widget edit is on the face, and the inspector is where the facts went.** Five of
+  the six lived two screens away, behind `Inspect ›` and a scroll past a mini-canvas, two
+  banners and a Position card — so making a widget larger cost three taps and a scroll, and
+  removing one cost four taps and two scrolls, in the editor whose whole subject is editing
+  widgets. `SelectionActionBar` is the answer: move and resize are one tap, colour and the
+  destructive pair are one tap into a `FitDropdownMenu`, and the inspector survives behind
+  **Record details**. Four rules came out of building it. The widget list is a **picker** —
+  a row selects and lands on the face, never on the inspector, or picking a widget shows you
+  its type and sequence id when you wanted to move it. Both menus are `DropdownMenu`s rather
+  than a sheet for the reason the top bar's is, and every entry closes before it invokes.
+  A menu cannot show a chip's selected border, so the colour in force and the apply-to-all
+  state both carry a **tick in the label** — `checkedLabel`. And the colour control is a
+  drawn **swatch**, not a `●` tinted to the colour: face `00046`'s weekday label is
+  `FF000000`, which as a glyph is a black dot on a dark button, invisible for exactly the
+  colour a watch face is most likely to hold.
+* **The rail is a width budget on one axis and a height budget on the other, and it was
+  over both.** `BACKGROUND` is ten characters, and at `FitFaceType.micro`'s 1.3sp tracking
+  that is about 67dp against the 64dp a fifth of a 339dp phone leaves it — so it rendered as
+  `BACKGROUN`, clipped mid-word, on every phone, with no ellipsis and nothing in any test.
+  The vertical rail had the matching fault: five items at the bar's spacing are taller than
+  the ~260dp a landscape phone leaves, so `SEND` was simply off the bottom. `RailLabel`
+  drops the tracking, the vertical rail is tighter **and** scrolls, and
+  `EditorRailLayoutTest` pins both in characters and dp — this module cannot measure a
+  composable, so the arithmetic is the assertion, the way `SortChipLayoutTest` does it for
+  the library. Note what did **not** work: giving the vertical items `weight(1f)` fits five
+  slots into the height whether or not the content fits the slot, so instead of one missing
+  label there were five cut through the middle.
+* **A page that renders the face must not render it beside the one the wide layout is
+  already showing.** `CanvasSidePane` keeps a canvas next to every page but Canvas, so the
+  Send page's own read-only render made two faces at two sizes on one screen. It takes
+  `showFace` now. Background's preview stays, because there it is the thing being dragged.
 * **The editor leaves the Inspector on a removal *count*, never on "no widget is selected".**
   The second rule reads better and is wrong: `page` is local Compose state and moves in the
   same frame as the tap, while the selection arrives through `collectAsStateWithLifecycle` a

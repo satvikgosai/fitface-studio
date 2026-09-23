@@ -109,8 +109,20 @@
 
     <!-- Selection panel -->
     <string name="editor_selection_widget">Widget #%1$d</string>
-    <string name="editor_selection_geometry">x %1$d · y %2$d · %3$d×%4$d</string>
-    <string name="editor_inspect">Inspect ›</string>
+    <!-- The selection action bar under the face. Every widget edit lives here now; the
+         inspector keeps the record's facts and is reached from the "more" menu. -->
+    <string name="editor_selection_facts">#%1$d · %2$d×%3$d · x %4$d y %5$d</string>
+    <string name="editor_action_smaller_a11y">Make this widget smaller</string>
+    <string name="editor_action_larger_a11y">Make this widget larger</string>
+    <string name="editor_action_color_a11y">Colour</string>
+    <string name="editor_action_more_a11y">More actions for this widget</string>
+    <!-- Shown in the colour menu when the record carries no colour field at all, so the
+         control says why it can do nothing rather than being silently absent. -->
+    <string name="editor_action_no_color">No colour of its own — this widget draws its artwork.</string>
+    <string name="editor_action_record_details">Record details ›</string>
+    <!-- The scope toggle, as one line of a menu. The switch and its explanation stay on
+         the inspector; here a tick in the label carries the state. -->
+    <string name="editor_action_scope">Apply to all %1$d styles</string>
     <string name="editor_nudge_hint">tap for 1 px · hold to keep moving · drag on canvas for coarse</string>
     <string name="editor_nudge_hint_no_drag">tap for 1 px · hold to keep moving</string>
     <string name="editor_nudge_locked">position locked by container</string>
@@ -121,6 +133,14 @@
     <string name="editor_widgets_off_canvas_title">Edit from this list</string>
     <string name="editor_widgets_off_canvas_detail">Clock hands have no fixed selection outline, and full-face backgrounds cannot be selected by tapping the canvas. Open a record here for its available controls. Supported artwork is still shown in the preview.</string>
     <string name="editor_widgets_removed_title">Removed</string>
+    <!-- The count chip at the top of the list. Removals used to be the third section of
+         a 25-row scroll, so putting one back meant finding it first. -->
+    <plurals name="editor_widgets_removed_count">
+        <item quantity="one">%1$d removed</item>
+        <item quantity="other">%1$d removed</item>
+    </plurals>
+    <string name="editor_widgets_removed_show">Show removed widgets</string>
+    <string name="editor_widgets_removed_hide">Hide removed widgets</string>
     <string name="editor_widgets_removed_detail">Kept so you can put them back. Restoring appends the original record at the end of the widget table.</string>
 
     <!-- Widget row -->

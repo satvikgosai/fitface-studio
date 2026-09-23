@@ -33,10 +33,14 @@ cannot notice that a document went out of date.
   ladder `#0A0E0E → #101615 → #18201F → #222B29`. Elevation is expressed as lighter
   surfaces plus a 1dp `outlineVariant` border, never as a shadow, exactly as drawn.
   There are no colour literals anywhere outside that file.
-* **The information architecture.** Five rail destinations (Widgets, Background,
-  Styles, Validate, Install), selection as a peek bar over the canvas rather than a
-  page, Inspector as a child of Widgets, Install as its own page, Validate as the
-  only route to it.
+* **The information architecture.** Five rail destinations — Face, Widgets, Background,
+  Styles, Send — with selection as an action bar under the canvas rather than a page, and
+  the Inspector demoted to *Record details*, reached from that bar. Two departures from
+  the drawing, both of them measured: the checks and the transfer are **one** page,
+  because the rail's Install entry already redirected to Validate whenever the preview was
+  unreviewed, so they were two entries describing one journey; and the canvas is a
+  destination of its own, because until it was, the only way back to the thing being
+  edited was the `‹` arrow, which everywhere else in this app means "leave".
 * **Mono for quantities.** `labelMedium`, `labelSmall`, `FitFaceType.numeric`,
   `FitFaceType.micro` and `FitFaceType.readout` are monospace, and everything
   quantitative uses one of them. This is not decoration: a proportional digit changes
