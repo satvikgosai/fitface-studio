@@ -1,114 +1,74 @@
-# tools/
+# Tools
 
-Standalone Python 3 scripts. No third-party dependencies — the PNG encoder,
-pixel decoders and every chart are written against `zlib`, `struct` and
-`zipfile` only.
+All scripts in `tools/` use Python 3's standard library only. The decoder shares
+no implementation with `:core:format`, providing an independent byte-level check.
 
-| Script | Does |
+| Script | Purpose |
 | --- | --- |
-| `fetch_corpus.py` | Populates the local test corpus by driving the debug build's download path |
-| `analyze_container.py` | Decodes watch-face containers byte by byte and extracts every asset |
-| `build_report.py` | Renders a self-contained HTML anatomy report from that output |
-| `watchface_schema.py` | Shared, evidence-labelled record definitions used by both tools |
-| `test_report_tools.py` | Synthetic coverage for all 17 widget types and high-risk field regressions |
+| [fetch_corpus.py](fetch_corpus.py) | Drive the debug app's download path to obtain the local corpus |
+| [analyze_container.py](analyze_container.py) | Decode containers/APKs/directories and extract assets |
+| [build_report.py](build_report.py) | Build a self-contained HTML anatomy report from models |
+| [watchface_schema.py](watchface_schema.py) | Evidence-labelled, versioned definitions for both tools |
+| [test_report_tools.py](test_report_tools.py) | Synthetic coverage of all 17 types and field regressions |
 
-## analyze_container.py
+## Fetch the corpus
 
-Re-derives the container structure from raw bytes. It shares no code with
-`:core:format`, so agreement between the two is independent corroboration rather
-than a tautology — which is the whole reason it exists.
+Corpus configuration and expected layout are in
+[Development](../docs/development.md#the-test-corpus). Run from the repository root.
 
-Accepts `.bin` containers, the `.apk` packages they ship inside, or directories
-of either:
+To populate it from the live catalogue, with the debug build installed on a
+connected device and the app opened once so it has synced:
 
 ```bash
-python3 tools/analyze_container.py corpus/packages --out out
-python3 tools/analyze_container.py face.bin --out out
+python3 tools/fetch_corpus.py corpus
 ```
 
-It writes, per face:
+That downloads the catalogue packages and extracts their containers. The recorded
+100-face catalogue contained 99 editable containers; `00254` had none. Counts can
+change when the store changes. It works by
+driving a debug-only broadcast receiver that calls the app's own download path,
+because the store's package endpoint requires the stock plugin's signed request
+parameters. The receiver is compiled into the debug variant only.
 
-| Path | Contents |
-| --- | --- |
-| `<out>/index.json` | what was analysed, for `build_report.py` |
-| `<out>/<face>/model.json` | complete structural model — every field, every record, coverage audit |
-| `<out>/<face>/entries/*.bin` | every directory-entry payload, extracted verbatim |
-| `<out>/<face>/images/*.png` | every embedded raster decoded to full resolution |
-| `<out>/<face>/thumbs/*.png` | bounded thumbnails for the report |
+## Analyze and report
 
-The verdict is split rather than collapsed into one optimistic flag:
-
-- byte integrity — CRCs, no holes or overlaps, byte-identical reconstruction;
-- exact schema coverage — the common prefix plus the layout of whichever of the
-  17 types it is, including byte-sized and signed fields rather than generic words;
-- cross-resource validity — authoritative image pointers, style/preview counts,
-  consecutive numbered fonts, dictionary bounds and canonical image trailers.
-
-The exit status is non-zero if any container fails one, so it works as a
-corpus-wide regression check. The model also records the schema version it was
-produced with, so a stale run cannot be mistaken for a current one.
-
-It fails loudly rather than guessing — an unknown image format, an implausible
-record size, or a stream that does not end exactly on its declared boundary is
-reported, not skipped. A package with no container inside (some catalogue
-entries are customisation apps the watch renders itself) is skipped with a note.
-
-`--skip-images` writes the model without decoding rasters, which is the
-difference between about twenty seconds and several minutes over a full
-catalogue. `--thumb-cap` sets the longest thumbnail edge.
-
-## build_report.py
-
-Renders one HTML page with no external requests: rasters inlined as data URIs,
-charts as hand-built SVG, light and dark themes.
-
-```bash
-python3 tools/build_report.py out --output out/anatomy.html
-python3 tools/build_report.py out --faces SM-R390_00046_256x402 --detail 1
-```
-
-Corpus counts and validation results are computed from the models actually
-loaded. Field definitions come from the same versioned schema used by the
-analyzer. The page includes all 17 types, a byte map for each, exact Value and
-Composite formatting, source ids, the 72-slot font selector table, fixed-stride
-previews, what-the-watch-accepts against what-a-writer-should-emit, the 4 MiB
-boundary and the open evidence gaps.
-
-The builder refuses stale models, because rendering an older generic-word model
-would silently reintroduce disproven claims. Re-run the analyzer after a schema
-change.
-
-The file-layout section includes an end-to-end packing and reference graph. It
-lists every directory record and payload in one real container, then expands one
-style entry to distinguish absolute file offsets, image-section-relative raster
-pointers, logical font/glyph indices and the data-source ids the watch owns.
-
-Per-face detail — full widget dumps, asset galleries, variant diffs — is
-expensive in page weight, so it is rendered for the first `--detail` faces
-(default 2) and the page says which. Every other section is a census over
-everything loaded.
-
-## Regression checks
+Run from the repository root; generated output belongs in ignored `analysis/`:
 
 ```bash
 python3 -m unittest tools/test_report_tools.py
-python3 tools/analyze_container.py corpus/SM_R390 --out out --skip-images --quiet
-python3 tools/build_report.py out --output out/anatomy.html
+python3 tools/analyze_container.py corpus/SM_R390 \
+  --out analysis/research/format-report --skip-images --quiet
+python3 tools/build_report.py analysis/research/format-report \
+  --output analysis/research/format-report/anatomy.html
 ```
 
-That is exactly the 99 catalogue containers, and it is the regression check to
-run after changing either script.
+Drop `--skip-images` to decode raster PNGs; `--thumb-cap` controls thumbnail size.
+A single `.bin`, `.apk`, or `corpus/packages` also works as analyzer input.
 
-The reference ledger the schema quotes its totals from is a different, larger
-set: those 99 plus the two locale-rich variants under
-`corpus/SM-R390_00046/assets/` and `corpus/SM-R390_00106/assets/`, which carry
-the same face IDs and so have to be analysed separately rather than in one run.
-Keep the two apart — a 99-container pass is not the 101-container ledger — and
-never let a generated or experimental container into either count.
+| Output | Contents |
+| --- | --- |
+| `index.json` | Analyzed inputs, consumed by the report builder |
+| `<face>/model.json` | Versioned structural model, every field and coverage audit |
+| `<face>/entries/*.bin` | Verbatim entry payloads |
+| `<face>/images/*.png` | Full-resolution decoded rasters |
+| `<face>/thumbs/*.png` | Bounded report thumbnails |
 
-## Reproducing the format documentation
+Verdicts distinguish byte integrity (CRCs, coverage, exact rebuild), exact type
+schema coverage, and cross-resource validity (pointers, counts, fonts, dictionaries,
+trailers). Any failed container check exits nonzero. Unknown formats, invalid record
+sizes and boundary mismatches are errors; a containerless package is noted and skipped.
+The model-only catalogue pass has taken about twenty seconds; image output takes longer.
 
-[`docs/bin-format.md`](../docs/bin-format.md) was written from these scripts'
-output, using the two commands shown above. `out/` is not committed; see
-[`docs/development.md`](../docs/development.md) for how to obtain a corpus in the
-first place.
+The report has no external requests: inlined rasters, SVG diagrams and both themes.
+Counts come from the models actually loaded. `--faces SM-R390_00046_256x402` filters;
+`--detail 1` limits expensive per-face dumps/galleries (default 2). Other sections
+remain a census of loaded models. Stale schema versions are refused: rerun the
+analyzer after changing the schema. The packing graph distinguishes absolute file
+offsets, section-relative raster pointers, logical resource indices and data sources.
+
+Keep evidence sets separate: `corpus/SM_R390` is the 99 vendor-container census.
+The schema's 101-container ledger also includes the locale-rich variants in
+`corpus/SM-R390_00046/assets/` and `corpus/SM-R390_00106/assets/`. Analyze those
+separately because their face IDs collide with the vendor set. Never mix generated
+or experimental containers into either census. The [format reference](../docs/bin-format.md)
+records the two reference hashes and their original measurements.

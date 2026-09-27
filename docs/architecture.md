@@ -1,82 +1,59 @@
 # Architecture
 
-Kotlin, Jetpack Compose, unidirectional data flow, MVVM, Hilt, Room, DataStore,
-Navigation 3, OkHttp and Coil. The Storage Access Framework is used only when the
-user picks a replacement image.
-
-```text
-Watch faces UI -> LibraryViewModel -> FaceCatalogRepository
-                                         |
-                                         +-> catalogue / update / download
-                                         +-> PackageCache (catalogue + packages)
-                                         +-> WatchFaceRepository -> private project
-                                                                    |
-Editor UI -> EditorViewModel ---------------------------------------+
-    |                                                               |
-    +-> lossless format core                                        |
-    +-> Fit3DirectInstaller -> accessory discovery -> Bluetooth SPP -+
-```
+Kotlin, Compose, MVVM with unidirectional state, Hilt, Room, DataStore, Navigation 3,
+OkHttp and Coil. Storage Access Framework handles picked images and optional project
+archive import/export. [Format](bin-format.md) and [delivery](direct-install.md)
+references own binary and transport details.
 
 ## Modules
 
 | Module | Owns |
 | --- | --- |
-| `:app` | Application root, Hilt entry point, theme, navigation, and the two app-menu dialogs |
-| `:core:model` | Framework-free contracts and immutable state. Both repository interfaces live here. |
-| `:core:format` | Container parse, validate, edit, CRC, serialize, the per-type record schema and layout resolver, and the project archive. Pure Kotlin, JVM-tested. |
-| `:core:data` | Catalogue client, on-disk caches, private projects, Room, DataStore, image I/O, self-update |
-| `:core:delivery` | Companion probing, accessory discovery, payload verification, RFCOMM |
-| `:core:ui` | Theme tokens and shared components |
-| `:feature:library` | Catalogue browsing, sorting, download, style selection, projects |
-| `:feature:editor` | Canvas, inspector, validate, install |
+| `:app` | Application, dependency injection, navigation, app-menu dialogs |
+| `:core:model` | Framework-free contracts and immutable state, repository interfaces |
+| `:core:format` | Parse/validate/edit/serialize, schemas, layout, CRCs, project archive |
+| `:core:data` | Catalogue/cache, private projects, Room, DataStore, image I/O, updater |
+| `:core:delivery` | Companion probing, discovery, payload verification, RFCOMM |
+| `:core:ui` | Theme and shared components |
+| `:feature:library` | Catalogue, sorting, download, style selection, saved projects |
+| `:feature:editor` | Canvas, Widgets, Background, Styles, Install; Project and Inspector |
 
-Android APIs stop at `:core:data`, `:core:delivery` and the UI modules. Binary
-parsing, protocol framing, CRC calculation, descriptor generation and install
-packet encoding stay pure Kotlin and are JVM-tested.
+Model and format use Android library build plugins but keep their implementations
+framework-free and JVM-tested. Android APIs stop at data, delivery and UI modules;
+framing, checksums, descriptors and install packet encoding remain pure Kotlin.
+
+```text
+Library UI → LibraryViewModel → FaceCatalogRepository → catalogue / PackageCache
+                            → WatchFaceRepository → private project
+Editor UI → EditorViewModel → WatchFaceRepository → lossless format core
+                          → Fit3DirectInstaller → discovery → Bluetooth SPP
+App menu → AppUpdater → GitHubReleaseFeed / UpdateInstaller
+```
 
 ## State ownership
 
-- Compose renders immutable state and emits user intent.
-- ViewModels own interaction state and coroutine lifecycles.
-- `WatchFaceRepository` owns the original and edited container snapshots.
-- Every committed edit produces a new reparsed snapshot.
-- Every successful commit updates the private project BIN; imported-widget projects
-  atomically commit the BIN and required provenance together in a checkpoint. A failed
-  commit rolls the in-memory session back — container, audit, selected style and origins.
-- `Fit3DirectInstaller` owns the delivery state machine.
-- Transfer bytes are copied and identity-frozen before delivery begins.
-
-Each catalogue selection creates a unique editor navigation destination, so a
-previous face's ViewModel state can never be reused for a new repository session.
+Compose renders immutable state and emits intent. ViewModels own interactions and
+coroutine lifecycles; `WatchFaceRepository` owns original/edited containers. A unique
+editor navigation destination per opened face prevents reuse of another session's
+ViewModel. Committed edits produce reparsed snapshots; the delivery controller owns
+its own state machine and freezes a copy of the validated bytes before transfer.
 
 ## Invariants
 
-These six hold everywhere and are the reason a malformed container cannot reach
-the watch. They are the list a change has to preserve:
+1. Repository edit commits roll back container, audit, active style, selected variant,
+   import origins and removed widgets when snapshot/persistence fails. Reset is a
+   separate path with its own persistence handling, not a bypass of validation.
+2. Structural edits reparse and revalidate before acceptance.
+3. `Session.validatedBytes()` is the only path to the watch: size, magic, errors,
+   blocking warnings, exact round trip and every style/AOD entry must pass.
+4. Downloads have distinct allowlists and ceilings: face packages 32 MiB, app APKs
+   64 MiB. Verify declared size and HTTPS host before request and after redirects.
+5. Writes stay private except optional archive export to a user-chosen document.
+   ZIP entry names never become filesystem paths; no storage permission is needed.
+6. The container ceiling is 4 MiB, checked while editing and again before sending.
+   [Editing contracts](bin-format.md#editing-contracts) own evidence and the separate
+   image-count rules for resize, background addition and import/delete.
 
-1. Every mutator commits through `WatchFaceRepositoryImpl.commit`, which rolls
-   back container, audit and selected style if the resulting snapshot throws.
-2. Structural edits reparse and revalidate before they are accepted.
-3. `Session.validatedBytes()` is fail-closed and is the **only** path to the
-   watch: magic, validation errors, blocking warnings, a byte-identical round
-   trip, and a re-walk of every style and AOD entry.
-4. Downloads are bounded, must match the declared size, and must resolve over
-   HTTPS to a host on an allowlist — checked both before the request and again on
-   the post-redirect URL. There are two, with different ceilings and different
-   allowlists: a face package at 32 MiB from the store hosts, and an app update at
-   64 MiB from GitHub. Neither limit is a measurement; the published APK is 36 MiB,
-   which is why the package ceiling could not simply be reused for it.
-5. Nothing is written outside app-private storage except a project archive, and only
-   to a document the reader chose in the system picker. The app holds no storage
-   permission and picks no path of its own.
-6. A container may not pass `WATCH_CONTAINER_BYTE_CEILING` — 4 MiB exactly.
-   `rebuild` refuses any growth past it and `validatedBytes()` refuses to send
-   one, because a container the watch ignores otherwise looks exactly like a
-   successful install. The limit is a measured firmware behaviour, not a format
-   rule; [editing.md](editing.md) records the hardware runs that closed it.
-
-The image-record count is a seventh rule of the same weight, but it is a format
-constraint rather than a pipeline one — see [editing.md](editing.md).
 ## The preview pipeline
 
 The canvas is reconstructed from the current container, not from the stock picture.
@@ -108,7 +85,7 @@ reveals underlying widgets intact, and records above it stay above it while it m
 Removing or resizing cannot leave pixels from a stock preview behind. A sprite guide
 can bound several differently sized frames; the chosen frame stays at its native size.
 
-This composition also supplies Validate, Install, the selected Styles row and explicit
+This composition also supplies Install, the selected Styles row and explicit
 face-picker thumbnail refresh. `preview.bin` and packaged style PNGs remain useful as
 **unedited references**, never as a source of editable widget pixels. Refreshing a
 thumbnail cannot feed its scaled pixels back into the scene. Original-container
@@ -117,7 +94,7 @@ but it is no longer a prerequisite for a widget to draw.
 
 The sample is 28 December 2024, 10:08:00, with illustrative health readings.
 Locale dictionaries follow supported phone languages with English fallback. Font
-substitution and unavailable content are disclosed on Canvas and Validate; this is a
+substitution and unavailable content are disclosed on Canvas and Install; this is a
 resource-based preview, not a pixel-exact emulator of the watch's GUI or live sensors.
 
 `CanvasIntegrityTest` exercises edit chains with the production text rasterizer;
@@ -127,7 +104,7 @@ alpha, z-order, clipping and fixed stroke width. Set `FITFACE_CANVAS_CONTACT_SHE
 to an output PNG path when running the resource corpus test to generate a stock/style/AOD
 comparison locally. The test never writes to the corpus.
 
-## Caches and storage
+## Persistence
 
 | Path | Holds |
 | --- | --- |
@@ -141,184 +118,190 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
 
-A package is re-downloaded only when its `versionCode` changes, and so is an update:
-a file already on disk at exactly the declared size is reused rather than fetched
-again, which is the difference between retrying a failed install and spending
-another 36 MiB.
+### Commits and file ownership
 
-A face may carry **more than one project**, and each one keeps its own `source.apk` —
-including one made by duplicating another, which copies the package, the edited container,
-the removed-widget records and the extracted style previews into a directory of its own. A
-duplicate costs the same disk as the project it came from and shares nothing with it: that
-is the point, and it is why it cannot be a row copy.
-The shared `catalog-cache/packages/` entry is what the second project is opened from,
-so starting one costs no network — but it does cost another full copy of the package
-beside it, because that copy is what `openProject` reads and the shared cache is
-evicted the moment a newer version lands. `PackageCache.hasPackage` is the check
-behind the face sheet's promise that nothing will be downloaded.
+`WatchFaceRepositoryImpl.commit` restores all session state if producing or saving
+an edit fails. Persistence differs by storage shape:
 
-The project row records the three facts that tell one project from its siblings: the
-name someone gave it, the style it was started on, and the store `versionCode` it was
-built from — which is what "the store has published a newer version of this face"
-compares against, with no network call. A row written before schema 5 whose
-`sourceUri` was not one of this app's keys keeps NULL for the parsed columns, and NULL
-means "say nothing", never "out of date".
+- **Native projects:** update the database pointer first, then atomically write
+  `edited.bin`, then `session.json`. This prevents a cancelled DAO call from leaving
+  a newer BIN behind an unchanged row. Missing edited files load as no edit;
+  `persistSessionState` failures propagate instead of silently losing restorable records.
+- **Imported-resource projects:** under `NonCancellable`, write a new immutable
+  `edit-<UUID>.checkpoint` containing BIN plus session, then swap the Room pointer.
+  Delete the new file if the swap fails; sweep the old checkpoint after success.
+  BIN and pristine donor provenance cannot commit independently.
+
+Project creation inserts a row to obtain its directory ID, then writes files and
+updates paths under `NonCancellable`. On failure remove files and call
+`projectDao.deleteById`, not `deleteProject` (the latter reacquires the held mutex).
+`EditPersistenceTest` and `WidgetImportRepositoryTest` cover failure/reopen paths.
+
+`writeAtomically` uses a unique UUID scratch file for **each writer**, with a sweep
+of scratch files older than an hour. A shared `.tmp` lets concurrent catalogue or
+package writes interleave and rename each other's data. `PackageCacheTest` pins the
+naming/sweep invariants; `loadCatalog` also has a Mutex to reuse the first refresh.
+
+A duplicate gets independent paths and copies source, edited data/checkpoint, session
+and previews. Clear `localApkPath`/`editedBinPath` until its new directory exists.
+`ProjectDuplicationTest` edits/deletes the original to detect accidental shared paths.
+
+### Project identity and catalogue versions
+
+- `openPackage` always creates a project; `openProject` resumes one. The face sheet
+  explicitly selects an existing project or creates another. Opening a store update
+  creates a new project and leaves the previous version untouched.
+- A name is stored, never derived from a current package label. `ProjectNaming`
+  re-stems only a name already taken, avoiding `Aurora 2 2`; a free `Aurora 2`
+  stays unchanged. Renamed/custom names persist.
+- `fit3-catalog://<product>/<version>/<style>` keys populate product/version/style
+  columns. Unknown legacy keys retain NULL, meaning “unknown”, not “outdated”.
+  Project outdated status compares recorded store version with cached catalogue data.
+- Room is version 5. Auto migrations 1→2→3 precede manual 3→4 and 4→5; the first
+  publicly released database was 4. The configured destructive downgrade fallback
+  would erase projects if 4 were renumbered to 1. Migration 4→5 removes the UNIQUE
+  source-key index; do not restore `findBySourceUri` reuse or a one-project-per-face rule.
+- The package cache is shared but each project owns its source copy: newer packages
+  evict older cache versions without breaking saved projects. `hasPackage` checks the
+  actual file before UI promises no download; a database row alone proves nothing.
+- The watch has one face per identity slot. Another project/custom face using that
+  identity replaces the slot; this code does not invent new firmware face IDs.
 
 ### A custom face
 
-**Start a custom face** on the Projects page makes a project that is face `00006`'s clock on
-an empty panel, to build on with the backgrounds and widgets the editor already has. It is
-**built on the phone, from the store's package, when it is asked for — never shipped.**
-`NOTICE.md` promises that no watch-face container, raster, font or preview is bundled in the
-app or committed here, and a template in `assets/` would be exactly that inside every
-published APK. So the card downloads Info_4 like any other face (or reads the cached copy,
-and says which before it is tapped), and `openTemplate` builds from that:
+`CustomFaceTemplate` builds on demand from the downloaded/cached Info_4 (`00006`)
+package; no template container or artwork is bundled. Recipe version 2:
 
-1. `CustomFaceTemplate.strip` keeps **one** style — Info_4's four differ only in which
-   readings they show, so without them the other three are copies with nothing to choose
-   between — through `StructuralEditor.keepFirstStyles`, which moves all three counts the
-   watch reads together: the `styleN.bin` entries, `setting.bin +0x34`, and `preview.bin`'s
-   frames. It then removes the two readings and their labels from that style through
-   `StructuralEditor.removeWidget` — the tray's ✕, highest index first — after checking the
-   style is the nine-record shape the recipe was written for. A newer Info_4 that is not is
-   refused with a sentence rather than stripped of the wrong things. `aod.bin` is already just
-   the clock and is not touched.
-2. The style's `preview.bin` frame and package preview PNG are redrawn from the stripped
-   composition, so neither the watch's face picker nor the Styles page shows a heart rate the
-   face no longer has, and the previews of the styles that went are dropped.
-3. `CustomFaceTemplate.pack` writes a package holding exactly the three member shapes
-   `Fit3Apk.parse` reads — the project archive's shape — and `createProject`, the same
-   row-then-files commit `openPackage` uses, saves it. From then on it is an ordinary project:
-   the stripped container is its *pristine*, so Reset returns to the empty panel.
+1. Verify the expected nine-record style shape, then `keepFirstStyles` retains one
+   style and updates `styleN.bin`, `setting.bin +0x34`, and `preview.bin` together.
+2. Remove the two readings and their labels, highest index first. Leave the clock
+   and AOD intact; unexpected producer shape refuses instead of stripping blindly.
+3. Redraw the remaining preview frame and package PNG from the stripped composition;
+   discard removed-style previews. Pack exactly the members `Fit3Apk.parse` reads.
+4. Save as an ordinary project. Its stripped container is pristine, so Reset returns
+   to the empty panel rather than Info_4's original readings.
 
-Its row has a `fit3-template://00006/v<recipe>/<uuid>` key and NULL `productId`,
-`packageVersionCode` and `styleId`. It is not a store download, and a store version would
-badge every custom face as outdated the day Info_4 updates. Export and import carry that
-provenance through verbatim, like any other.
+The source key is `fit3-template://00006/v<recipe>/<uuid>`; product/version/style
+columns stay NULL so a store update does not mark templates outdated. Archive export
+retains that provenance. Existing recipe-1 projects keep their four styles.
+One style is absent from the vendor census (minimum three); activation names the
+remaining style, but a physical-watch test of this shape is still outstanding.
+Custom faces occupy Info_4's watch slot, replacing Info_4 or a prior custom face.
 
-**One style is a shape no catalogue face has** — the fewest in the corpus is three — so a
-custom face is the one container this app sends whose style count no vendor face shares.
-The install command names the style to activate, which is what should keep a watch that last
-showed Info_4 on style 3 from holding a saved index past the end; that is the argument, and an
-install on a wrist is what settles it. `CustomFaceTemplate.VERSION` is `2` for this recipe; a
-project made by `1` kept all four styles and goes on working as it is.
+## The project archive
 
-A custom face **installs into Info_4's slot on the watch** — the container's name and face-id
-byte are Info_4's — so it replaces Info_4, and one custom face replaces another. The card
-says so before it is tapped. Templates on other slots would mean rewriting a face's identity
-fields, which no code here does and no watch has been shown to accept.
+A ZIP archive is a package the existing parser can read plus a `fitface/` sidecar:
 
-### The project archive
-
-Imported-widget projects use schema 2 and require their pristine donor artwork in
-`fitface/session.json`; ordinary projects still use schema 1. The vendor original remains
-unchanged, so Reset removes every import and restores the stock bytes.
-
-An imported widget is **not** identified by its global index, its type/source tuple or the
-donor package it came from — all three change or go away. `WidgetImportOrigins` stores an
-explicit origin id, the donor face, the target variant, the current indices and a compact
-pristine entry holding the imported record with its original rasters; removals and inserts
-renumber those indices explicitly, a removed import keeps its origin link, and a restored or
-duplicated one resolves the same pristine artwork. `WidgetPristine` hands the resize engine
-that mapping, so every resize of an imported widget starts from the donor's artwork rather
-than from the previous resize or a same-numbered native widget, and native original matching
-excludes imported indices entirely. Evicting the donor from the package cache has no effect
-on a saved import.
-
-A project carrying imports keeps its edit in an immutable app-private `edit-<UUID>.checkpoint`
-— one bounded JSON file holding both the edited container and its session state, written
-whole before a single database pointer swap commits it, so a failed write leaves the previous
-file and the in-memory state intact. The next successful edit removes the one before it;
-projects with no imports keep their existing storage shape. `WidgetImportRepositoryTest`
-covers the edit/reopen chains, apply-all collisions, saved-pointer relocation, archive, copy
-and reset independence, AOD isolation, stale tickets, missing or foreign provenance and
-rollback on a database failure.
-
-A project leaves the device as a zip that **is a watch-face package**: the members
-`Fit3Apk.parse` reads, under exactly the names the package gave them, plus a `fitface/`
-sidecar no package has.
-
-```
-assets/SM-R390_00046_256x402.bin   the pristine container, byte for byte
-assets/bandface_info.json          the face's name and its sampler id
-assets/SM-R390_00046_2_0.png       the default style previews
-fitface/project.json               name, face, store version, selected style
-fitface/edited.bin                 the current container, when there is an edit
-fitface/session.json               the removed-widget records
+```text
+assets/SM-R390_00046_256x402.bin  pristine container
+assets/bandface_info.json       face name and sampler ID
+assets/SM-R390_00046_2_0.png     default style previews
+fitface/project.json            name, face, store version, selected style
+fitface/edited.bin              optional edited container
+fitface/session.json            removed records and imported-resource provenance
 ```
 
-Because the parser cannot tell the two apart, an import stores the archive **as the
-project's `source.apk`** unaltered, and everything below the repository runs unmodified —
-opening, duplicating, extracting style previews, resolving the pristine container a resize
-resamples from, building the install payload. A tidier layout would have meant a second
-reader, and a second reader is a second copy of the pointer rules in
-[bin-format.md](bin-format.md).
+`Fit3Apk.readsMember` is the single predicate shared by reader and exporter. When
+parse adds a member, do not independently list it in `ProjectArchive`: the predicate
+must keep both in sync. `ProjectArchiveTest` compares all parsed fields across the
+corpus, not just BIN bytes (missing names/PNGs can otherwise go unnoticed).
 
-The rule that keeps it true: **the archive holds exactly the members the parser reads.**
-`Fit3Apk.readsMember` is the one predicate both sides call, and a corpus sweep compares
-every field `Fit3Apk` reports out of a package with the same field out of its archive — a
-dropped `bandface_info.json` leaves the parse succeeding and the container intact, so a
-bytes-only round trip would not catch it.
+Import keeps the archive unmodified as `source.apk`, creates a new independently
+named project each time, and extracts previews immediately. Existing open/copy/pristine
+resize/install paths then work unchanged. DEX, resources, manifest, signatures and
+locale-specific preview copies are omitted. Recorded vendor exports shrink 333 MiB
+to 31.5 MiB; a 571-member package becomes five to eight archive members.
 
-Left out: the dex, the resources, the manifest, the signature block, the accessory JARs and
-the `assets/<locale>/` copies of the previews, which are localised artwork the preview
-pattern is anchored to exclude. Across the 99 container-carrying corpus packages, 333 MiB
-becomes 31.5 MiB — 571 members become five to eight.
-
-An import always creates a **new** project, named against the importing library rather than
-the exporting one, so the same archive imported twice gives two projects. Style previews are
-extracted at import rather than at the first open, or the row sits in the list with no
-thumbnail.
+Schema 1 handles ordinary projects; schema 2 carries imported artwork. Vendor
+pristine bytes remain unchanged; Reset removes imports. `WidgetImportOrigins` tracks
+an explicit origin ID, donor face, target variant, current indices and compact pristine
+entry with original rasters. Removal/insertion remaps indices; restore/duplicate
+retain origin links. Native matching excludes import indices. Donor cache eviction
+cannot affect a saved import, and resize always uses donor originals.
 
 ### What an import refuses
 
-An archive is a zip a stranger could have written, which is a different threat from a store
-package or a picked image. Everything is checked **before a row is written**, because a
-project someone spends an evening on must not turn out on the Install page to have never
-been sendable.
+Validate before inserting a row. File output uses fixed names under a fresh row ID,
+plus previews named from an integer captured by `\d{1,3}`; never extract ZIP names
+as paths. JVM hostility tests treat traversal names as inert; Android may reject
+those names earlier, but neither behaviour is the containment mechanism.
 
-The structural defence is that **no entry name ever becomes a filesystem path**. An import
-writes three fixed names into a directory named by a freshly-inserted row id, and the style
-previews are named from an integer a `\d{1,3}` capture produced. There is nothing for `../`
-to traverse and no symlink to follow, because nothing is extracted by name at all. Android's
-own `ZipInputStream` refuses a `..` segment before that even matters — the desktop JDK the
-format tests run on does not, so the JVM assertion is that such names are *inert* while on a
-device the file is refused as unreadable. Neither is relied on. The rest is depth behind it:
-
-| Refused | Because |
+| Refusal | Contract |
 | --- | --- |
-| a read past 16 MiB, or a sidecar inflating past it | a zip's declared size says nothing about what it becomes, and `OutOfMemoryError` is an `Error` the loop's `catch` would miss |
-| more than 1,024 entries | a file under the ceiling can declare ~220,000 empty ones |
-| a repeated `fitface/` member | which one is real is decided by whichever the reader takes; both answers are defensible and neither is in the file |
-| a manifest that is missing, unparseable, or of a **newer schema** | `ignoreUnknownKeys` would decode a newer one cleanly while dropping whatever the new field carried |
-| a container the app cannot open, through the download funnel | same failure, same wording |
-| an `edited.bin` that does not validate, or exceeds `WATCH_CONTAINER_BYTE_CEILING` | `validatedBytes()` would refuse to send it, and a container over the ceiling transfers, is accepted and leaves the old face up |
-| an `edited.bin` with foreign entry paths | schema 1 requires exact equality; schema 2 requires the original paths in order and validates explicitly bounded added font resources plus import provenance |
-| schema 2 missing or carrying inconsistent imported artwork | imported widgets must never silently resolve to unrelated native resize sources |
+| Read/inflation over 16 MiB | Enforce actual bounded reads, not ZIP-declared size |
+| More than 1,024 entries | Prevent tiny-file entry-count bombs |
+| Duplicate `fitface/` members | Refuse ambiguous manifests/session payloads |
+| Missing, invalid or newer manifest schema | Unknown-key decoding must not silently discard required future data |
+| Unopenable pristine container | Same validation/error funnel as package download |
+| Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
+| Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions |
+| Missing/inconsistent schema-2 origins | Never fall back to unrelated native artwork |
 
-Manifest strings are clamped rather than refused: they reach a database row and a list title,
-but a long name does not make an archive unusable. A `selectedStyle` that is not a style name
-reads as "no style was recorded".
+Clamp manifest strings; an invalid selected-style name becomes no saved selection.
+After validation, creation uses the row/files cleanup contract above. Failed import
+leaves no project. `ProjectArchiveHostilityTest` covers traversal, bombs, duplicates
+and schema boundaries; import repository tests cover provenance and rollback.
 
-A refusal leaves nothing behind — the row goes in first because its id names the directory,
-under `NonCancellable`, and any failure past that deletes both.
+Hidden developer controls govern visibility only: every ViewModel action re-checks
+the flag, while archive validation always runs. `DeveloperGate` stores a digest;
+never put its phrase into source, resources, comments or docs.
 
-### Why the style previews are files
+### Style preview files
 
-The Styles page and the projects list both have to show a watch face per row, and
-neither can afford to render one. A style's own artwork means decoding its raster
-section, and the projects list would have to do that for every project on the way
-into the screen — a whole library parsed to draw a column of thumbnails.
+Package PNGs (`assets/SM-R390_<face>_<group>_<style>.png`) avoid parsing every project
+to draw a list. `Fit3Apk.stylePreviews` anchors matching at `assets/` to exclude
+localized copies. They are unedited references; the selected Styles row uses the
+current composed preview. `00031` has no PNGs, a normal case with a face-number
+fallback, covered by `StylePreviewSweepTest`.
 
-The package answers it directly: it ships the vendor's render of every style as
-`assets/SM-R390_<face>_<group>_<style>.png`, at the panel's own 256 × 402. Those are
-copied out beside the project when it is opened, and the UI loads them through Coil
-like any other image file. `Fit3Apk.stylePreviews` keeps them even when the rest of
-the package's members are dropped.
+## Catalogue and diagnostics
 
-Two consequences worth keeping in mind. They are pictures of the **unedited** face,
-so the Styles page draws the selected style from the composed preview instead and
-leaves the others stock. And 1 of the 99 container-carrying catalogue faces (`00031`)
-ships none at all, so absence is a normal case: the Styles row says so and the
-projects list falls back to the face number. `StylePreviewSweepTest` holds both facts
-against the corpus.
+The catalogue cache has a seven-day TTL and is rendered before refreshing. Only
+result 1007 ends pagination; missing or other nonzero codes must throw so retries
+and stale-cache fallback work instead of caching a silently truncated list.
+`Fit3NoContainerException` → `isUneditablePackage` permanently marks `00254` Photos
+as uneditable; its recorded 601-file customization package contains no BIN.
+
+`CatalogLocale` repairs modern/legacy language codes (`in→id`, `iw→he`, `ji→yi`)
+and numeric regions (`419→MX`, `001→US`, `150→GB`) while retaining language. Android
+libcore can emit legacy language codes even when desktop Java does not. The store's
+whitelist is case-sensitive and cannot be enumerated: bare languages and some valid
+pairs (`qu_PE`) fail. `CatalogRetry` retries result 1005 once with `en_US`; do not
+remove this after normalization or use empty locale (with `cc=KOR`, it yields Korean
+names). Three-letter/unsupported languages such as `fil`, `tl`, `qu`, `gn` need the
+fallback. `screenShotResolution` distinguishes 256×402 samplers from 512×512 promo art.
+
+XML parsing disables external entities. Downloads validate identity and declared size,
+check HTTPS allowlists on both sides of redirects, and use `Call.cancel()` plus Job
+checks around blocking reads. Re-throw `CancellationException`, including through
+ViewModel `runCatching`; suppress late progress/errors after cancellation.
+
+`WatchFaceException.technicalDetail` reaches `DiagnosticsLog` through both UI funnels.
+Reports use an allowlist, never serialized state: exclude Android ID/`extuk`, Bluetooth
+addresses and bonded names, `csc/mcc/mnc`, picked URIs and signed URLs. Full request URLs
+must never be logged. `DiagnosticsRedaction` is a second defence, not the data policy.
+Persistent catalogue failures belong in `catalogFailure`; snackbar state is transient.
+
+## App updates
+
+| Concern | Contract |
+| --- | --- |
+| Feed | `/releases?per_page=10`, because releases are prereleases and `/releases/latest` excludes them |
+| Ordering | Compare `AppVersion` numeric dotted components, not strings or API order; skip unsupported suffix forms like `v0.2.0-rc1` |
+| Empty/changed feed | No usable release is an error/unknown result, never “up to date” |
+| Download | Separate 64 MiB GitHub-host allowlist; reuse matching-size offered APK; no total `callTimeout` on slow transfers |
+| Inspection | Package name, `longVersionCode` and SHA-256 of every readable signer; the feed itself has no version code |
+| Signer mismatch | Explain inability to update without deleting projects; unreadable certificate defers to the package manager |
+| Lifetime | Updater-owned scope survives navigation; progress changes per whole percent |
+| Cancel | Check Job in read loop and before progress; cancel Call, delete scratch, abandon install session, rethrow cancellation |
+| Permission | Re-read unknown-sources permission on resume and when returning from cancel; no network recheck required |
+| Cleanup | Retain only an offered release newer than installed, not the installed release's cached APK |
+
+`REQUEST_INSTALL_PACKAGES` is the only declaration in `:core:data`'s manifest.
+Install status uses a runtime receiver to avoid propagating a manifest component
+into test manifests. Below API 33 it is exported: use a fresh UUID action and verify
+session ID, since the system sender cannot hold an app-defined receiver permission.
+Use `FLAG_MUTABLE` from API 31. `STATUS_PENDING_USER_ACTION` is nonterminal; give
+its confirmation Intent to an Activity rather than starting it in the background.
+A successful self-update replaces the process. [Development](development.md#test-constraints-and-troubleshooting)
+records automated coverage and manual verification limits.

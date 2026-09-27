@@ -2,114 +2,78 @@
 
 [![APK downloads](https://img.shields.io/github/downloads/satvikgosai/fitface-studio/total?label=APK%20downloads)](https://github.com/satvikgosai/fitface-studio/releases)
 
-An Android app for browsing, editing and installing Fit3 (SM-R390) watch faces.
-
-Pick a face from the catalogue, change its background or move its widgets around,
-check the result, and send it straight to your watch over Bluetooth. Nothing is
-re-signed, re-packaged or installed as an app — the app edits the watch face's own
-binary and hands the watch exactly those bytes.
-
-The faces themselves are not in here. The app fetches each package from the device
-vendor's own store API at runtime, into its own private storage; no watch-face package,
-container or artwork is bundled with the app or redistributed by this repository.
-
-It is an independent, experimental, personal-use project. It is **not affiliated
-with, endorsed by, or connected to any device vendor**, and it will never be
-published to an app store. See [`NOTICE.md`](NOTICE.md) and [`LICENSE`](LICENSE).
-
-| | |
-| --- | --- |
 | Application ID | `dev.fitface.studio` |
+| --- | --- |
 | Version | `0.1.3` (code `19`) |
 | Android | 9.0 (SDK 28) or newer |
 
+An Android app for browsing, editing and installing Fit3 (SM-R390) watch faces.
+Pick a face, change its background or widgets, check the preview, and send it to
+your watch over Bluetooth. Edits change the face's binary container; nothing is
+re-signed or installed on the watch as an app.
+
+Independent, experimental and for personal use. Not affiliated with or endorsed
+by any device vendor. Face packages and artwork are fetched from the vendor's
+store, never bundled here.
+
 ## What it looks like
 
-| Browse the catalogue | Edit the real layout | Every record, listed |
-| --- | --- | --- |
-| <img src="docs/screenshots/catalogue.png" alt="The watch-face catalogue, a grid of face previews with search and sort" width="260"> | <img src="docs/screenshots/canvas.png" alt="The canvas with one widget selected, its outline highlighted and nudge controls below" width="260"> | <img src="docs/screenshots/widgets.png" alt="The widget list, each row showing the widget itself beside its type and coordinates" width="260"> |
+These emulator screenshots show an earlier build; some labels and controls have changed.
 
-| Styles, as pictures | Validate before install | Install over Bluetooth |
-| --- | --- | --- |
-| <img src="docs/screenshots/styles.png" alt="The styles page, each variant shown as a watch-face image" width="260"> | <img src="docs/screenshots/validate.png" alt="The validate page: reparsed container, structural checks all passing" width="260"> | <img src="docs/screenshots/install.png" alt="The install page: the face to be sent, and the four-step setup checklist" width="260"> |
+<table>
+  <tr>
+    <th>Browse the catalogue</th>
+    <th>Edit the real layout</th>
+    <th>Styles, as pictures</th>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/catalogue.png" alt="Catalogue of watch-face previews" width="260"></td>
+    <td align="center"><img src="docs/screenshots/canvas.png" alt="Canvas with a selected widget and movement controls" width="260"></td>
+    <td align="center"><img src="docs/screenshots/styles.png" alt="Styles page showing each variant as a watch-face preview" width="260"></td>
+  </tr>
+  <tr>
+    <th>Install over Bluetooth</th>
+    <th colspan="2">On a real SM-R390</th>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/install.png" alt="Install page with the face preview and connection checklist" width="260"></td>
+    <td colspan="2" align="center"><img src="docs/screenshots/on-watch.jpg" alt="An edited face sent over Bluetooth and rendering on an SM-R390 watch" width="540"></td>
+  </tr>
+</table>
 
-The rest of the app is in [`docs/screenshots/`](docs/screenshots/): the face sheet
-with its style picker, the inspector, the background replacement page, and the
-projects list.
-
-All ten of those are captured from an Android 16 emulator, so the watch is not
-present and the Send page is on step 3 of its checklist. The last step is the one
-an emulator cannot show:
-
-<img src="docs/screenshots/on-watch.jpg" alt="An SM-R390 showing a watch face sent to it by FitFace Studio: the date, the time in large green and blue digits, an emblem, and step, heart-rate and battery readings along the bottom" width="360">
-
-A face sent from the app over Bluetooth, rendering on a real SM-R390 — no ADB, no
-cable, nothing installed on the watch as an app.
-
-The watch-face artwork in every image above belongs to its publishers and appears
-only to show what the software does — see [`NOTICE.md`](NOTICE.md).
+The watch-face artwork belongs to its publishers and appears here to demonstrate
+the app. The watch photo shows a real Bluetooth install.
 
 ## What you can do
 
-**Browse.** Search and sort the Fit3 catalogue by newest, name or face number.
-Previews and the catalogue itself are cached on disk, so it opens instantly after
-the first launch.
+- Search and sort the catalogue, or reopen saved projects without downloading again.
+- Replace, tint or add a background where the face has room for it.
+- Move, resize, recolour, duplicate and remove supported widgets; restore removed
+  stock widgets and add widgets from other faces.
+- Edit the selected style, opt into matching widgets across styles, or edit the
+  always-on display separately.
+- Start a custom face with a clock on an empty panel. It uses the downloaded Info_4
+  face as its base and replaces that face's slot on the watch.
+- Review the preview and checks on **Install**, then send to a paired watch.
 
-**Edit.** Open a face and you get its real layout on a canvas:
+Edits save automatically to your project. The **EDITED** chip on Canvas identifies
+a changed face.
 
-- replace the background with any photo, positioned by pinch and drag, or tint it —
-  and on a face that never had one, add a background outright where the container
-  has room for it under the size the watch accepts;
-- drag a widget to move it, or hold a nudge button for one pixel at a time;
-- resize a widget where that is safe, in 5% steps of the size it shipped at — so
-  Smaller and Larger come back to the same place and the original is always
-  reachable — and be told why when it is not;
-- recolour widgets that store their own colour;
-- duplicate or remove a widget, with removals kept in a **Removed** list you can
-  restore from;
-- switch between the face's styles — each one shown as a picture rather than a
-  name, so you can see the colourway you are picking — and choose whether an edit
-  applies to the style you are on or to every style that has the same widget.
+The preview uses sample readings, not live watch data. Fonts can differ from the
+watch, and some content cannot be previewed.
 
-Each widget row shows the widget itself and what kind of record it is — Image,
-Sprite, Clock hand, Value, Rule, Composite, Arc or Bar — so you know what you are
-about to change. Clock hands render in the preview but have no fixed selection outline;
-select them from the list and use the arrows to move them.
+## Get the app
 
-**Check.** The **Install** page shows the face preview and its structural checks.
-Sample readings are not live watch data; fonts may differ and some watch content
-cannot be previewed. Sending stays locked until validation passes.
+You need a paired Fit3 with its companion app and stock plugin installed on your phone.
+Internet is needed for catalogue, package and app-update downloads.
 
-**Install.** Send the result to a paired, connected Fit3 over Bluetooth. No ADB,
-no root, no cable.
+Download the debug APK from [Releases](https://github.com/satvikgosai/fitface-studio/releases).
+Open it on your phone, allow installation from that browser or file manager if
+Android asks, and confirm installation. Check for updates from the app's menu.
+Updates must use the same signing key; uninstalling deletes saved projects.
 
-Optional explanations are under labelled details sections: preview behaviour, download
-policy, image resolution and file/connection information remain available on tap. Scope,
-warnings and recovery instructions stay visible. Widget import first offers **Review**;
-the final **Add** action saves it. After sending, **Request sent** means you should check
-the result on the watch and follow the reconnection instructions.
-
-**Start from nothing.** *Start a custom face* on the Projects page gives you a clock on an
-empty panel to build on — add a photo and widgets from other faces. It is made on your phone
-from a face the store serves (Info_4), so it takes that face's place on your watch.
-
-Downloads and every committed edit are saved automatically to a private project
-folder, so **Projects** reopens your work after the app is closed without
-downloading again — each project listed with the face it holds. Deleting a project
-deletes its private copy of the package and the edited file.
-
-## What you need
-
-- An Android phone running 9.0 or newer, with the watch's companion app and the
-  stock Fit3 plugin installed.
-- One Fit3 paired and connected.
-- An Internet connection, for the catalogue and package downloads.
-
-A debug APK is attached to each tag on the
-[releases page](https://github.com/satvikgosai/fitface-studio/releases).
-
-To build it yourself: Android Studio with its bundled JBR, Android SDK 36, and the
-checked-in Gradle wrapper.
+To build locally, install Android Studio and SDK 36, then use its bundled JBR
+(adjust this macOS installation path for your system):
 
 ```bash
 ./gradlew \
@@ -117,93 +81,54 @@ checked-in Gradle wrapper.
   :app:assembleDebug
 ```
 
-The APK lands in `app/build/outputs/apk/debug/`. Full build and test instructions
-are in [`docs/development.md`](docs/development.md).
-
-`:core:delivery` also needs two accessory SDK JARs that are **not** in this
-repository; the first build fetches them into `libs/` and verifies each against a
-pinned SHA-256. That is a convenience, not a licence — see
-[`libs/README.md`](libs/README.md).
+The APK is in `app/build/outputs/apk/debug/`. The first build fetches two uncommitted
+accessory SDK JARs; [Development](docs/development.md) covers setup and tests.
 
 ## Installing to the watch
 
-The **Install** page is a four-step checklist. Each step says what it does, and
-the page refuses to go on while anything is missing.
+Open the editor's **Install** page, review the preview and checks, then follow its
+four-step checklist:
 
-1. Connect the watch in its companion app.
-2. Grant FitFace Studio Nearby devices access.
-3. Discover the watch-face and OTA peers. This needs the watch **connected**, so
-   the stock plugin has to be running and holding it for this step.
-4. Let the plugin release the channel, because only one app may hold it, then
-   send. On Android 12 and later that is one switch: turn the plugin's **Nearby
-   devices** access off, and the app picks the change up on its own. Older phones
-   have no such switch, so the plugin has to be frozen instead — the checklist
-   says so where it applies, and
-   [`docs/direct-install.md`](docs/direct-install.md#android-11-and-earlier-freezing-the-plugin)
-   has the walkthrough.
+1. Connect the watch through its companion app.
+2. Grant FitFace Studio **Nearby devices** access when requested on Android 12 or newer.
+3. Discover both watch peers while the stock plugin is still connected.
+4. Release the plugin's Bluetooth channel, then send. On Android 12 or newer, turn
+   off the plugin's **Nearby devices** permission. For older phones, follow the
+   [plugin-freezing guide](docs/direct-install.md#android-11-and-earlier-freezing-the-plugin).
 
-Step 4 is the one people get stuck on: discovery needs the plugin, and the
-transfer needs it to let go. Peer handles stay cached once found, so a second
-install does not repeat the setup, and editing after an install re-arms the send
-button instead of stranding the page. When the transfer finishes, put the plugin
-back the way step 4 had you leave it, then reconnect the watch.
-
-If a send fails, the page offers **Reconnect the watch and discover again**
-beside **Try again**. A cached peer only lives as long as the connection it was
-found on, so anything that breaks after step 4 needs the watch connected again:
-that button puts you back on step 3 with the checklist and the shortcuts you
-need, without redoing the whole setup. Failures that can only mean a lost peer
-take you back there on their own.
+Discovery needs the plugin connected; transfer needs it released. **Request sent**
+means the request was delivered: check the result on the watch, restore the plugin
+and reconnect. If the connection changes after discovery, use **Reconnect the watch
+and discover again** before retrying.
 
 ### Watch someone do it
 
-VMG Channel recorded a walkthrough of the whole flow, from picking a face to it
-rendering on the watch:
+VMG Channel's independent [video walkthrough](https://youtu.be/ecUBemqNc9U) shows
+the catalogue-to-watch flow. Follow the current app checklist if the video differs.
 
-[**How to Install Custom Watchfaces on Galaxy Fit 3 (FINALLY!)**](https://youtu.be/ecUBemqNc9U)
-
-[![Watch the walkthrough on YouTube](https://img.youtube.com/vi/ecUBemqNc9U/hqdefault.jpg)](https://youtu.be/ecUBemqNc9U)
-
-It is a third-party video, made independently of this project and not endorsed by
-it — the checklist in the app is the authority if the two ever disagree, since the
-steps above change with the app and a recording does not.
+[![Watch VMG Channel's walkthrough on YouTube](https://img.youtube.com/vi/ecUBemqNc9U/hqdefault.jpg)](https://youtu.be/ecUBemqNc9U)
 
 ## Scope and limits
 
-The catalogue-to-watch path works end to end. Against the live 100-face
-catalogue, 99 faces carry an editable container and all 99 parse, validate and
-open; the hundredth (`00254`, "Photos") is a customisation companion with no
-container at all and is labelled *Not editable* rather than failing at download.
-
-This is research-grade software for one watch family. A structurally valid file
-can still be rejected by different firmware, unavailable storage, battery state,
-or watch-side policy. Delivery, background replacement, adding a background,
-widget moves and widget resizes have all been confirmed on an SM-R390; two
-firmware limits found that way are enforced in the app — a container may not pass
-4 MiB, and artwork may not grow more than 128 px per side past what its face
-shipped. Resize now reaches every widget whose size the container actually holds,
-which is seven of the seventeen record types. Neither limit is documented anywhere,
-so treat both as measured rather than specified. The photo above is one of those runs: a face sent from the app,
-rendering on the watch.
+Faces without an editable container, such as “Photos”, show **Not editable**.
+Several editing operations are watch-tested, but not every widget type or firmware is.
+The app enforces the watch's 4 MiB container limit; detailed editing limits and
+hardware coverage are in the [format reference](docs/bin-format.md#editing-contracts).
 
 ## Documentation
 
-- [`docs/`](docs/) — how it works inside: architecture, the container format, the
-  editing model, the install protocol, and development setup.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — setup, tests, conventions, and what a
-  change has to preserve.
-- [`AGENTS.md`](AGENTS.md) — the traps that already bit this codebase.
-- [`SECURITY.md`](SECURITY.md) — what to report privately, and what is out of scope.
-- [`NOTICE.md`](NOTICE.md) — third-party components, vendor JARs, non-affiliation.
+See the [documentation index](docs/README.md) for architecture, format/editing,
+UI, delivery and development references. [Contributing](CONTRIBUTING.md) and
+[AGENTS](AGENTS.md) cover working conventions;
+[Changelog](CHANGELOG.md) records released user-facing changes.
 
-Related work: [galaxy-fit3-parser](https://github.com/Ahmadjerj/galaxy-fit3-parser)
-is an independent read-only Python parser for the same container format, and it
-renders previews of every style. Nothing here uses or derives from it — see
-[`docs/bin-format.md` §14](docs/bin-format.md#14-related-work) for what it covers
-and where it reaches further than this project's own derivation.
+Related independent work: [galaxy-fit3-parser](https://github.com/Ahmadjerj/galaxy-fit3-parser).
+The [format reference](docs/bin-format.md#14-related-work) describes its scope;
+this project's parser was independently derived.
 
 ## Legal
 
-Source is MIT — see [`LICENSE`](LICENSE). Non-affiliation, the third-party
-components, what this repository does and does not distribute, and the terms of use
-are all in [`NOTICE.md`](NOTICE.md). Read it before you use this on anything.
+Project source is licensed under [MIT](LICENSE). Vendor SDKs and watch-face content
+remain subject to their owners' terms; this project grants no rights in them.
+[NOTICE.md](NOTICE.md) covers non-affiliation, third-party components and terms of use.
+Use only faces you are authorised to modify on hardware you own. There is no warranty.

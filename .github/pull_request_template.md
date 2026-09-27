@@ -1,11 +1,11 @@
-## What this changes, and why
+## What this changes
 
 <!-- If it fixes a bug, say what the bug actually did — a reader should not have to
      guess which bug "the bug" was. -->
 
 ## Tests
 
-<!-- The command, the baseline and the corpus setup are in CONTRIBUTING.md. -->
+<!-- The command, the baseline and the corpus setup are in docs/development.md. -->
 
 Result:
 
@@ -13,7 +13,7 @@ Result:
 
 ## Checklist
 
-- [ ] Nothing untracked was added: no `libs/*.jar`, no `corpus/`, no `analysis/`, no
+- [ ] No local artifacts were added: no `libs/*.jar`, no `corpus/`, no `analysis/`, no
       `.bin` or `.apk`.
 - [ ] No vendor branding in UI copy.
 - [ ] New user-facing copy is in the module's `res/values/strings.xml`.
@@ -22,11 +22,11 @@ Result:
 
 ## If this touches `:core:format` or the editing rules
 
-- [ ] [`docs/editing.md`](docs/editing.md) and [`docs/bin-format.md`](docs/bin-format.md)
-      are still accurate, and any new rule records the evidence behind it.
-- [ ] The invariants in [`docs/architecture.md`](docs/architecture.md#invariants) still
-      hold, `CanvasIntegrityTest` passes, and no edit path changed the image-record
-      count or left a raster pointer stale.
+- [ ] [Format and editing contracts](../docs/bin-format.md#editing-contracts) remain
+      accurate; new rules name their corpus or hardware evidence.
+- [ ] [Architecture invariants](../docs/architecture.md#invariants) hold, relevant
+      `CanvasIntegrityTest` checks pass, and image-count/pointer changes follow the
+      specific operation's contract.
 
 ## Hardware
 

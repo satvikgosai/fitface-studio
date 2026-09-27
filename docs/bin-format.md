@@ -3,7 +3,7 @@
 How the SM-R390 watch-face container is laid out, derived from two files and then
 checked against the whole catalogue. This is the reference `:core:format` is
 written against; [architecture.md](architecture.md) covers how the app uses it,
-and [editing.md](editing.md) covers which edits are safe and why.
+and [editing contracts](#editing-contracts) define the permitted mutations.
 
 The derivation below analyses two specific files:
 
@@ -38,15 +38,15 @@ lists the other public work on this format.
 7. [Widget records](#7-widget-records)
 8. [Rasters](#8-rasters)
 9. [Theme mechanics](#9-theme-mechanics)
-10. [Plausible manipulations](#10-plausible-manipulations)
+10. [Editing contracts](#editing-contracts)
 11. [Fields this analysis established](#11-fields-this-analysis-established)
-12. [Fields this later analysis resolved, and what remains](#12--fields-this-later-analysis-resolved-and-what-remains)
+12. [Fields this later analysis resolved, and what remains](#12-fields-this-later-analysis-resolved-and-what-remains)
 13. [Reproducing this analysis](#13-reproducing-this-analysis)
 14. [Related work](#14-related-work)
 
 ---
 
-## 1 · Method and verification
+## 1 Method and verification
 
 The parse was re-derived from the raw bytes by a standalone analyzer that shares
 no code with the Android app, so agreement between the two is independent
@@ -72,9 +72,19 @@ tables), and the sum of those classes is required to equal the file size exactly
 Both files reconcile to zero. There is no slack anywhere in either container
 where undocumented data could hide.
 
-The **proven** / **supported** / **unknown** labels used throughout are defined in
-[README.md](README.md#honesty-about-evidence) and mean the same thing in every
-document here.
+### Evidence
+
+- **Proven**: an invariant tested against every matching record in the stated set,
+  or a value confirmed against an embedded preview.
+- **Supported**: consistent with available records, but too few distinct examples
+  to exclude coincidence.
+- **Unknown**: preserved verbatim without a proposed reading.
+- **Device-proven**: the named operation was observed on an SM-R390; it does not
+  imply all widget types, AOD or other firmware were tested.
+
+Code relies on established fields or fails closed. Keep scopes separate: the two
+hashed reference files, the 99 vendor containers (4,034 records / 7,716 rasters),
+the 101-container schema ledger, and any renderer-specific subset are different sets.
 
 Semantic readings of sequence IDs deserve particular caution. They are firmware
 constants; nothing in the file names them. The initial two-file derivation used
@@ -82,7 +92,7 @@ widget geometry and the rendered `preview.bin`, and a later pass over the whole
 catalogue confirmed which reading each ID supplies and which widget types accept
 it. A user-facing name is left absent where no available evidence contains one.
 
-## 2 · What these two files are
+## 2 What these two files are
 
 Both are OPPO-format containers for a 256 × 402 panel, holding four selectable
 visual styles plus a low-power always-on style.
@@ -113,7 +123,7 @@ actual member is `256x402` and every raster is stored 256 wide by 402 tall.
 describes `00046`, not the digital face it ships with. The JSON is a loose label,
 not a specification.
 
-## 3 · Byte budget
+## 3 Byte budget
 
 These containers are uncompressed framebuffers with a thin index bolted on.
 
@@ -143,7 +153,7 @@ Shannon entropy per 64 KiB block peaks at 2.53 bits/byte (`00046`) and 1.85
 (`00106`), against ~7.9 for compressed or encrypted data. Combined with the
 zero-residual class census, there is no hidden payload in either file.
 
-## 4 · Container layer
+## 4 Container layer
 
 ### Header — 32 bytes
 
@@ -198,7 +208,7 @@ Entry order is AOD → font bindings → glyph tables → `preview.bin` →
 `setting.bin` → `styleN.bin`. Tight packing is what makes the Tier-2 edits in
 §10 tractable: later offsets can be recomputed arithmetically.
 
-## 5 · Metadata entries
+## 5 Metadata entries
 
 ### `setting.bin` — 256 bytes, 61 non-zero
 
@@ -354,7 +364,7 @@ pseudo-string.
 Note `00046`'s `font_en.bin` group 0 is `"Monday "` — seven bytes including a
 trailing space, which is in the asset, not a parse artifact.
 
-## 6 · Style entries
+## 6 Style entries
 
 `aod.bin` and every `styleN.bin` share one structure.
 
@@ -388,7 +398,7 @@ equalities remain mandatory writer checks.
 **Every raster in every style entry is referenced by at least one widget.** There
 is no dead image data in either file and no hidden asset in the image sections.
 
-## 7 · Widget records
+## 7 Widget records
 
 A 24-byte common prefix followed by type-specific bytes. Most producer records
 are 4-byte aligned, but the loader advances by the low `u16` at `+0x0C` and the
@@ -418,8 +428,8 @@ The two initial faces contain sizes 40, 44, 48, 52, 56, 60, 76, 100 and 132.
 The full corpus adds 50, 64, 80 and 140. Every observed byte is accounted for
 by its type schema. Type census:
 
-> **Later correction, from a wider corpus.** `0x1C`/`0x1E` hold a true width and
-> height in *these two* files, but that does not generalise. Face `00079` stores
+> **Geometry is type-specific.** `0x1C`/`0x1E` are alignment fields on
+> Static/Hand and endpoints on Rule, not universal extents. Face `00079` stores
 > width 1 for digit sprites whose frames are 52 px wide, and `00022` stores height
 > 20 for frames that are 136 px tall. For any widget that addresses a raster, the
 > raster's own dimensions are authoritative and the stored extent may be a
@@ -532,7 +542,7 @@ every matching record in both files.
 
 Reading `+0x20` as `(pivot_y << 16) | pivot_x` and adding it to the record's
 `x,y` lands on `(128, 201)` — the exact centre of the 256 × 402 panel — for every
-Hand record in the corpus.
+Hand record in the two-file reference set (14/14).
 
 | Entry | Seq | x, y | `+0x20` | pivot | sum |
 | --- | ---: | --- | --- | --- | --- |
@@ -620,7 +630,7 @@ Two things make this field easy to get wrong, and both have been got wrong here:
   writer must leave those values alone rather than "fixing" them into references.
 
 The consequence for editing is in
-[`editing.md`](editing.md): a structural edit that renumbers records has to
+[editing contracts](#editing-contracts): a structural edit that renumbers records has to
 renumber these references with them, and a widget that others are positioned
 against cannot simply be removed.
 
@@ -670,7 +680,7 @@ through selector 8 (`%08d`) and falls back to `%d` at 9 or above. Pair source
 numbered-font byte and can create a hard-coded clickable 256×201 overlay whose
 destination is not customisable by the record.
 
-## 8 · Rasters
+## 8 Rasters
 
 A 12-byte header, raw row-major pixels, and a 4-byte trailer. There is no
 compression or filtering; format `0x0088` is palette-indexed.
@@ -726,7 +736,7 @@ RGB565 quantisation is lossy and irreversible — 8-bit channels are discarded t
 5/6/5. The extracted PNGs are exact reconstructions of what is *stored*, not of
 what was authored.
 
-## 9 · Theme mechanics
+## 9 Theme mechanics
 
 The two faces solve variants in completely different ways, and this determines
 what a safe edit looks like.
@@ -775,111 +785,308 @@ black plus the theme accent used for the divider line. Those four offsets plus
 the matching Badge and Pair words and the two-colour background are the entire
 theme palette — a complete recolour that changes no length and breaks no pointer.
 
-## 10 · Plausible manipulations
+## Editing contracts
 
-Ranked by how much of the file has to move. The governing constraint is from §4:
-payload offsets are absolute and the header CRC covers the directory.
+### Preservation and validation
 
-### The canonical checksum obligation, in order
+Preserve unknown bytes, original paths/order/gaps/trailers, raw record tails and
+unsupported fields. Parsed values are views over those bytes. Same-size edits patch
+allowlisted ranges; structural edits require classified index/pointer dependencies.
+Never rewrite arbitrary integers as guessed pointers.
+
+Canonical write order:
 
 ```text
-1. patch payload bytes
-2. recompute that entry's CRC-16          -> directory record +0x48
-3. if any length changed:
-     rewrite every later entry offset     -> directory record +0x40
-     rewrite header payload_size          -> header +0x08
-4. recompute header CRC-16 over 0x20..EOF -> header +0x10
-5. reparse and verify both style equations from §6
+patch payload → entry CRC-16 at directory +0x48
+if length changes: update later absolute offsets (+0x40), sizes and header +0x08
+recompute header CRC-16 over 0x20..EOF → header +0x10
+reparse, validate style equations, emit again byte-identically
 ```
 
-### Tier 1 — same length, no pointer touched
+The header CRC covers the directory even though the tested watch ignores CRCs on
+install. Whole-style relocation leaves section-relative pointers unchanged; changes
+inside the image section require the declared pointer map. Download identity, bounds,
+mutation selectors and schemas are checked before commit. Final delivery checks
+one-byte face/sampler IDs, canonical filename, copied payload size and SHA-256.
+Unusual bounded vendor joins remain warnings; edit errors block commit and delivery.
 
-One entry CRC plus the header CRC. Nothing moves. Structurally safe by
-construction.
+### The size ceiling
 
-| Manipulation | Where | Confidence |
-| --- | --- | --- |
-| Recolour text or accent | ARGB type-word of a `Pair`/`Badge`/`Comp` record; for `00106` the four offsets in §9 | device-proven |
-| Move a widget | `+0x18`/`+0x1A` int16 `x,y`; respect the anchor mode at `+0x20` — negative `x` only with mode 3 | device-proven |
-| Repaint a raster, same dimensions | pixel region; re-encode to the same `format` and byte count, keep the 4-byte trailer | device-proven |
-| Re-pivot a clock hand | `+0x20` as `(pivot_y<<16)\|pivot_x`; keep `x+pivot_x = 128` and `y+pivot_y = 201` or the hand orbits off-centre | schema-proven, untested |
-| Swap a static label | glyph-group index in the third `Pair` type-word; must name an existing group in *every* locale table | schema-proven, untested |
-| Retarget a raster reference | any type-word holding a section-relative offset; must equal the start of a real image record in the same style | schema-proven, untested |
-| Bump the face version | `setting.bin +0x30`; lowering it makes the companion app offer an update again | observed |
+`WATCH_CONTAINER_BYTE_CEILING` is **4 MiB exactly**, confirmed on an SM-R390 and
+enforced by `rebuild` and `Session.validatedBytes()`. This is a settled application
+constraint based on firmware behaviour, not a limit of the `u32` format fields.
+Oversized files can validate, transfer and be accepted while the old face remains.
 
-### Tier 2 — length changes, tight repack required
+Recorded background-addition runs (205,880 bytes per style):
 
-Both files are perfectly tight-packed, which is what makes this tractable.
-Style-internal length changes additionally shift every image-section offset after
-the edit point — `00046`'s `style3` is the vendor's own worked example.
+| Face | Styles added | Container bytes | Watch result |
+| --- | ---: | ---: | --- |
+| `00008` | 4 | 2,332,582 | new background renders |
+| `00016` | 3 | 3,776,058 | new background renders |
+| `00019` | 3 | 4,365,627 | ignored; previous face remains |
+| `00021` | 3 | 4,573,874 | ignored; previous face remains |
 
-| Manipulation | What must be rewritten | Risk |
-| --- | --- | --- |
-| Replace a raster at a different size or format | image header `width`/`height`/`format`/`data_size`; style `image_bytes`; every later section offset in every widget word; entry size; every later entry offset; header size; both CRCs | medium — proven for background and Sprite on `00106` |
-| Remove the final widget of a style | style `widget_count`, `widget_bytes`, `image_section_offset`; entry size; later entry offsets; CRCs. Section-relative offsets are unaffected because the image section moves as a block | medium — proven once on `00106` |
-| Append a duplicate widget | as above, plus a unique global index and any deliberate alignment-target reference | high — never device-tested |
-| Remove a non-final widget | as above, plus renumbering every later `+0x0E` and rewriting explicit Static/Hand `+0x1E` and Pair/Comp `+0x22` alignment targets that name a renumbered record | high — never device-tested |
-| Add or remove a directory entry | the directory grows or shrinks by 74 bytes, so *every* payload offset changes including the first | high — untested |
+All 99 vendor containers fit; largest `00072` is 4,149,034 bytes. The measured
+accept/reject interval is `4,149,034..4,365,626`; the app treats 4 MiB as settled.
+`00022` is 4,117,664 bytes, only 76,640 below the ceiling: this explains its old
+oversized-resize rejection, not a separate prohibition on restoring shipped artwork.
+Imports and raster growth can also cross the ceiling.
 
-### Tier 3 — not plausible from this file
+### Identity, layout and structural edits
 
-| Attempt | Why it cannot work |
+| Contract | Evidence / implementation |
 | --- | --- |
-| Add an arbitrary typeface | No font program exists in the container. A face may select only the firmware's own families and the sizes in §5. |
-| Add a new sensor or metric | Sequence IDs are firmware-defined. A value the watch does not publish renders as nothing; the file cannot introduce a data source. |
-| Change panel geometry | 256 × 402 is baked into every background raster, the Hand pivot arithmetic, the container name, `setting.bin`, and the filename the plugin matches on. |
-| Global search-and-replace on an integer | Type-words are not a uniform pointer array. The same 32-bit value can be an image offset, an ARGB colour, an angle, a frame count, a glyph index, or a mode. Only per-type, per-offset edits are sound. |
-| Recover source artwork | RGB565 quantisation is irreversible (§8). |
-| Reduce file size meaningfully | No compression stage, and no unreferenced raster in either file (§6). |
+| Panel geometry comes from the declared entry path, not image 0 | `panelSize`; `00022` starts with a 37×28 icon; `00108` styles 0–3 with a 204×204 dial |
+| Backgrounds are exactly widgets drawing panel-sized rasters | Multiple layers are legal (`00076`, `00089`); `backgroundImage` may be null |
+| Position is `origin + stored` | `WidgetLayout`, `drawLeft/drawTop`; write-back subtracts origin, never guesses from the sign |
+| Hand selection differs from rendering | `WidgetPlacement.HIDDEN` suppresses a false axis-aligned outline; hands still render and can be selected from the list |
+| Exact type schemas, not a generic minimum size | All 4,034 producer records have their type's exact size; a 40-byte Composite is not a valid 100-byte record |
+| Four alignment-reference fields only | Static/Hand `+0x1E`, Value/Composite `+0x22`, enabled by the adjacent code; see §7 |
+| Renumber real targets, preserve unresolved producer values | `remapAlignmentTarget`; refuse removal of a widget others reference; survivor checks compare referents, not integer values |
+| Original identity survives index changes | `originalWidgetSources` resolves through `payloadKey`/record indices, not raw byte offsets or `originalRecords[globalIndex]` |
+| Source IDs are not identities | Static source is zero in 678/681 records; Sprite `(type, source)` happens to be unique in 1,486/1,518, not universally |
+| Every declared raster pointer is relocated | Static `+0x20`, Sprite's exact frame-count words, Hand `words[1]`, Arc `words[4]` (30/30), LineBar `words[2]` (16/16) |
+| Empty widget tables are valid | Removing the last widget retains the image section; snapshot, restore, preview and installer accept zero widgets |
 
-### The three traps
+Sign-based anchoring misplaced 62 records on ten faces (`00015`, `00016`, `00018`,
+`00023`, `00027`, `00030`, `00051`, `00066`, `00089`, `00096`): 43 off-panel
+primitives, 14 Values and 5 centred Composites. `WidgetCensusTest` checks zero
+layout disagreements. Scanning arbitrary words as indices blocked 68% of removals
+and left 18/99 faces without a removable widget; named-field checks replace it.
 
-1. **The header CRC covers the directory.** Fixing an entry CRC without
-   recomputing the header CRC leaves a noncanonical file that the repository's
-   validator rejects, even though the watch ignores both on install.
-2. **Image references are section-relative, not absolute.** Moving a whole style
-   needs no widget edits at all; changing anything *inside* a style's image
-   section before the last raster needs all of them.
-3. **Four fields hold another widget's global index.** Static and Hand at
-   `+0x1E`, Pair and Comp at `+0x22`, live unless the code beside them is
-   `0xFFFF` — which no catalogue record sets. Renumbering records without
-   renumbering these leaves a widget measured from whichever record inherited the
-   number, and nothing about the resulting file looks wrong.
+Identity regression cases: on `00022`, remove/restore moves the seq-10 hour sprite
+to an index originally occupied by seq-37 battery; direct indexing erased the wrong
+rectangle and lost the sprite. Raw-pointer comparison lost the nine identical
+Statics on `00003` after image relocation. Leaving Static `+0x20` stale lost artwork
+on `00010`/`00061`. Extend `CanvasIntegrityTest` for such visual failures: structural
+validation alone cannot detect them.
 
-## 11 · Fields this analysis established
+`AodHandGeometryTest` checks rotation about `drawLeft/drawTop + pivot`, including
+fixed point, direction and pixel gaps. Rotating around top-left displaced `00046`'s
+hour by 8×76px and second hand by 8×120px. Use the stored `+0x24/+0x26` sweep.
+`ResizedWidgetLeavesNoGhostTest` covers stale pixels; `EmptyStyleTest` covers zero records.
 
-The container, directory, style, widget and image layers are described in full
-above. The rows below are the individual fields whose reading this work established
-or pinned to a specific verification count, gathered in one place because these are
-the findings the implementation actually relies on.
+Native removal preserves all rasters and saves record bytes for restore. Restore
+appends at the end (thus changes z-order), renumbering and relocating saved pointers
+as needed. Duplication appends rather than inserting mid-table. Unsupported operations
+include arbitrary construction, middle insertion, font replacement, unknown-pointer
+rewriting and universal cross-firmware conversion. Manual schema-level opportunities
+are not necessarily editor features: a hand pivot, existing glyph-group reference
+(valid in every locale), or declared raster pointer can be patched with schema checks,
+but their arbitrary retargeting has not been device-tested. `setting.bin +0x30`
+holds the face version; lowering it was observed to make the companion offer an update.
+A file cannot supply a new live data source or arbitrary font program, recover lost
+RGB565 precision, or safely change the panel identity/geometry. The two reference
+files contain no unreferenced raster or compression stage; shrinking artwork and
+bounded imported-resource deletion are separate editing mechanisms.
 
-| Field | What it holds, and what pins it |
+### Resizing a widget
+
+`WidgetSchema.ResizeModel` drives both capability and execution:
+
+| Mechanism | Types | 99-container records | Rule |
+| --- | --- | ---: | --- |
+| Raster resampling | Static, Sprite, Hand, image Arc, LineBar | 2,714 | Rewrite the shared pool in place |
+| Stored geometry | Vector Arc, Rule | 159 | Same-length field patch |
+| Font size | Value, Composite | 1,161 | Not offered |
+
+The recorded census accepts 2,478/4,034 records across all 99 faces; excluded are
+1,161 text records, 388 backgrounds and 7 nonuniform Sprite pools. The earlier
+Sprite-only gate accepted 859 and left 36 faces without a resize. The original
+RGB565+A-only resampler also excluded 620 Sprites (41%) unnecessarily.
+`WidgetResizeCensusTest`, `WidgetPlacementTest` and `ResizeLadderWalkTest` cover
+capability/commit agreement and multiple rungs in both directions.
+
+- **Keep image count for a resize.** Private appended copies of a resized Sprite's
+  frames produced valid files the watch ignored. The mechanism remains unresolved;
+  background addition and imports prove this is not a blanket ban on adding images.
+- **Resize the whole raster pool.** `rasterPool` closes over all referring widgets;
+  require a uniform supported signature, no background and no mixed widget types.
+  740/859 formerly resizable Sprites share frames, commonly four ways (`00022`
+  hour tens references frames 2–4; units 2–11). No observed pool mixes types.
+- **Scale each shared user's fields from its own pristine record.** 12/16 LineBars
+  share a raster three ways and 18/469 Hands share theirs. `00028` has 84×84 and
+  88×88 boxes on one pool; do not set neighbours to the selected widget's extent.
+- **Read pristine entry bytes at pristine offsets.** Structural edits can change
+  record offsets. `pristineFrameOrigins` resolves through widget identity; matching by image index or `(type, source)` loses origins after
+  background addition or on styles with duplicate Statics, chaining resampling loss.
+- **Always resample pristine pixels.** Imports use persisted donor origins; native
+  records use `originalWidgetSources`. Without pristine input, current extent is
+  the only available fallback, not evidence of shipped dimensions.
+- **Use the original-based ladder.** `widgetResizeLadder` uses 5% steps from 20–200%,
+  dropping out-of-bound rungs rather than independently clamping axes. Old off-ladder
+  sizes snap in the requested direction. Never multiply the current size: 60→52→58
+  drifts, and independent clamping turned 57×68 into 128×128.
+- **Bounds are maxima, not additions.** Per axis, `widgetResizeLimit` is
+  `max(128, shippedExtent)` for rasters and `max(512, shippedExtent)` for geometry.
+  The original rung remains reachable, subject to total size after other edits.
+  Returning to original dimensions restores original frame lengths and samples.
+- **Shrinking averages; growth interpolates.** `RasterResampler` uses area-weighted
+  colour on shrink and bilinear growth, weighted by alpha to avoid dark fringes.
+  Transparent output stores black; unchanged dimensions return unchanged samples.
+  Indexed8 retains nearest-neighbour indices because its palette is fixed.
+  `RasterResamplerTest` pins the sample and alpha behaviour.
+
+Type-specific geometry:
+
+| Type | Fields that follow size |
 | --- | --- |
-| Hand `+0x20` | `(pivot_y<<16)\|pivot_x`, verified 14/14 against the panel centre `(128, 201)`; first type-word is a 360° sweep constant |
-| Sprite `+0x20` | Frame count, verified 24/24; equals the length of the image-offset array in every record |
-| Pair `+0x20`/`+0x22` | Alignment code and the global index it is measured from; 1 = left inset and 3 = right inset with negative `x`, verified 9/9. `0xFFFF` disables it, and no catalogue record does |
-| Static/Hand `+0x1C`/`+0x1E` | The same pair at different offsets — **these are not a width and a height** |
-| Pair `+0x2C` | Locale-dictionary base index; `0xFFFF` selects numeric formatting instead. Confirmed against rendered labels |
-| Badge geometry | Start/end points plus thickness, confirmed numerically on the one available record, with the thickness word identified |
-| Comp | Four 12-byte format programs, followed by colour, rotation, font, spacing and dictionary-order fields |
-| Glyph descriptors | A **byte** count, not a character count |
-| Glyph group 9 | A field-order permutation (`"1234"`, Italian `"3214"`), not display text |
-| `setting.bin` `0x38`/`0x78` | Two 64-byte slots, each a lead byte plus a NUL-terminated name, byte-identical |
-| Style `+0x10` | Numbered binding count shifted left 8; exact across all 509 corpus styles/AOD files |
-| Font binding `+0x00..+0x47` | Per-watch-language family selector table; byte `+0x01` overrides current-language lookup when nonzero |
-| Sequence IDs 41, 48 | Position + label group give 41 = bpm and 48 = kcal in `00106` |
-| `style3` alpha cascade | The RGB565→RGB565+A background adds exactly 102,912 bytes and forces all three Hand offsets |
+| Static / Sprite | No authoritative stored extent; raster dimensions determine it |
+| Hand | Scale pristine pivot, compensate `x/y` to keep the rotation centre fixed; 448/469 pivots lie at artwork's horizontal centre |
+| Image Arc / LineBar | Scale raster by requested **box ratio**, not to box dimensions; native-size raster is centred in the box (`00108`: 204px ring in 256px box, matching a 256px raster inset 26px) |
+| LineBar | `+0x30` thickness equals height in all 16 records and scales with it; firmware uses it for corner radius |
+| Rule | Scale signed endpoint vector and thickness, preserving reversed/zero spans; use requested thickness-axis extent to avoid double rounding |
+| Vector Arc | Resize box, preserve independent `+0x40` stroke width; `00108` has one box with three thicknesses |
 
-**One case these two files cannot show.** Every one of the 109 widget records here is
-4-byte aligned with zero leftover tail, so nothing in this derivation exercises a
-record carrying a two-byte tail after its complete 32-bit words. The parser keeps a
-tail-preserving path regardless: absence across two containers is not evidence that
-no face has one, and a writer that dropped such a tail would corrupt it silently.
+52/84 Rules have reversed endpoints; 32 are horizontal. Leaving thickness unchanged
+stranded 56/84 off the ladder (`00049` on its second tap). Field-only resizes add no
+bytes or raster pointers. A 400×400 vendor arc also proves the panel is not their bound.
 
-Per-face totals, for reference: `00046` has 17 entries, 4 styles, 28 widget records
-and 24 rasters; `00106` has 19 entries, 4 styles, 81 widget records and 147 rasters.
+Text box size does not resize text: `00005` stores a Composite as 180×40 and 180×60
+but renders identical 129×39 text at (63,360). Only 32/1,161 box heights equal font
+size (median ratio 1.2). Font size lives at binding `+0x58`; 122/180 bindings serve
+one widget per style, 58 serve 2–5, and 32 are shared between numbered styles and
+AOD. Changing one needs a separate shared-resource model and supported-family sizes.
+The preview approximates ROM fonts with Android fonts; it does not justify box-only scaling.
 
-## 12 · Fields this later analysis resolved, and what remains
+### Adding or replacing backgrounds
+
+Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.
+Replacement/tint edits styles that have a background, skipping others and failing
+only if none does. `backgroundStyles` describes actual targets before image selection.
+RGB565+A replacement changes colour only: preserve the rounded-corner mask (656 of
+102,912 pixels on `00003`). Indexed replacement requantizes colour and opacity;
+`00002` style0 is the sole indexed raster in the 99-container catalogue.
+`BackgroundReplacementSweepTest` covers mask preservation and indexed replacement.
+
+`addBackgrounds` appends a panel-sized RGB565 raster and inserts its 40-byte Static
+at widget index 0, remapping named alignment references. Recorded producer evidence:
+
+| Observation | Count |
+| --- | ---: |
+| Background drawn by ordinal 0, 40-byte Static, raster pointer at `+0x20` | 348/348 style entries |
+| `x=y=w=h=0`, source 0 | 264/348 (remaining widths are 1) |
+| Record begins `01 00 00 00`, otherwise zero | 347/348 |
+| RGB565 background | 309/348 |
+| Four zero raster trailer bytes | 6,315/6,315 in this style-background audit |
+
+Append the raster, never insert at image 0: that preserves every existing relative
+offset including zero. Inserting first caused `00019`'s day-of-week Value to disappear
+on a watch while the date worked; both had zero `words[3..4]`. Static `words[0]`, Pair
+colour words and zero Comp fields can coincide with image offset zero without being
+pointers. `AddBackgroundTest` pins every original offset's referent.
+
+`backgroundStylesThatFit` selects as many missing backgrounds as fit, selected style
+first. Of 16 eligible faces, ten fit all styles; five fit some (`00007`, `00019`,
+`00021`, `00024`, `00104`); `00022` fits none. See the hardware table above.
+
+### Adding a widget from another face
+
+`WidgetImporter` appends a record plus its named resource closure, retaining donor
+position and live source. Nine producer types are supported: Static, Sprite, Hand,
+Value, Composite, vector Arc, Rule, image Arc and LineBar. Full-panel backgrounds
+use the background path. Other constructors have no producer samples.
+
+| Resource | Import contract |
+| --- | --- |
+| Rasters | Follow `WidgetSchema` pointers, including every frame. Preserve sharing within one import; separate imports get independent pools; duplicates share |
+| Alignment | Resolve donor geometry, rebase against panel with target `0xFFFF`, retain code for justification. Widget-count bound keeps that target unreachable |
+| Fonts | Reuse identical binding or append, at most ten; synchronize all variant font counts without changing their widgets/rasters |
+| Dictionaries | Preserve target prefix, append donor tables; missing locale uses corresponding English table or refuses. Rebase actual references, never Composite numeric presence flags |
+
+Refuse unknown alignment, unsupported dynamic indexing, incomplete resources,
+invalid UTF-8, mismatched panels, exhausted font/index space or size/provenance budget.
+Value source 116 is specifically refused: its constructor bypasses numbered fonts
+and can create an undescribable fixed clickable overlay. `WidgetImporterTest`
+covers supported types, locales, independent pools, pristine resize and refusals.
+
+Imports and later edits to imports stay variant-local even if apply-all is requested.
+Native sibling matching skips imported records. Origins and archive/checkpoint rules
+live in [Architecture](architecture.md#the-project-archive).
+
+A preview ticket binds session, donor, variant and target container **identity**.
+Only one pending ticket exists; preview clears the previous ticket, and each commit
+replaces the container. Batch import therefore previews then commits one widget at
+a time in one `WidgetImportViewModel.addPicks` run, not one cancellable run per item.
+Costs for a set are lower-bound estimates, not a fit guarantee. Stop on first failure;
+prior successful commits remain saved and the UI reports partial results. A review
+set composes donor layers in pick order; copied pixels and checked donor-position
+invariance make its z-order/placement match the successive commits.
+
+### Removing imported widgets
+
+`deleteWidget` permanently removes an imported record and its uniquely owned appended
+rasters; native removal remains restorable. A measured `00013` project retained 52
+unused rasters (1,370,656 bytes) after nine imported digits were removed by the old path.
+
+- Never delete an image below the pristine entry's image count.
+- Never delete an image referenced by another live widget or a saved removed record.
+- Preserve survivor image order, relocate declared pointers and saved records through
+  `relocateSavedWidget`, and assert identical artwork and non-pointer bytes.
+- Keep font resources (removing them renumbers others) and an import-origin table
+  entry while added resources remain, even when no imported widget is live. An empty
+  provenance table would make reopen reject the foreign resources.
+
+`ImportedWidgetDeletionTest` checks import/delete byte restoration and retained
+references. Hardware acceptance of a decreased image count is still unverified.
+
+### Applying an edit to every style
+
+Default: selected style only. Opt-in sibling edits use `StyleWidgetMatch`, strict
+on the selected variant and best effort where siblings carry the same widget.
+Matching uses the selected identity and unambiguous source/position fallback;
+`changedStyles` reports actual rewrites. AOD is never part of a numbered-style edit.
+
+Styles can differ: `00001` style0 has Values for sources 17/18 absent from style1.
+Requiring every sibling to match blocked 183/2,833 selectable widgets on 20 faces
+from moving, and 785 from structural edits on 43 faces. `EveryFaceRendersTest`
+sweeps these paths. Global index is a selector within a snapshot, not an original identity.
+
+### Editing the always-on display
+
+All 99 vendor containers carry `aod.bin`: 442 widgets, 991 rasters; 66 digital and
+33 analog faces. Only 32 have panel rasters (26 RGB565, 6 RGB565+A); 67 compose on
+black. It has the same entry grammar and editing rules as styles.
+
+`Session.editTargets` enforces isolation in both directions, tested byte-for-byte by
+`AodIsolationTest`. `AOD_ENTRY_NAME` belongs to `:core:model`. `selectedVariant`
+chooses what is shown/edited; `activeStyleName` selects the numbered style to install
+and persist. Reopen returns to that style; AOD selection is in-memory only.
+`EditorVariant`/`VariantKind` carry this distinction without UI string matching.
+AOD has no sampler, packaged style PNG or `preview.bin` frame. Refuse thumbnail
+refresh from AOD; `styleNames`/style counts exclude it. The shared current-resource
+renderer is described in [Architecture](architecture.md#the-preview-pipeline).
+
+### Hardware coverage and open cases
+
+Recorded SM-R390 successes include same-size background replacement, RGB565/RGB565+A
+marker and tint changes, Pair position/colour, type-aware background/Sprite relocation,
+non-final removal and append duplication on `00106`, added backgrounds, widget resize,
+widget import, and original/modified standalone-BIN installation.
+
+These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
+need particular attention; imported type/source combinations remain incompletely
+verified. No AOD edit (including added background), imported-image deletion, or the
+single-style custom-template recipe has been verified on a watch. Resource preview
+tests prove joins and edit invariants, not exact ROM fonts, antialiasing or live data.
+`AodCanvasSweepTest` covers all 99 AOD entries in software. Other firmware may
+read fields treated as no-effect here. Delivery recovery gaps
+are tracked in [Direct install](direct-install.md#unverified).
+
+## 11 Fields this analysis established
+
+The field tables in §§5–7 carry the readings and verification counts: metadata and
+font/dictionary joins, type-specific geometry, Hand pivots (14/14), Sprite frame
+counts (24/24), and alignment (nine reference Values, then 2,311 records across the
+catalogue). Theme byte differences and the alpha relocation cascade are in §9.
+
+The two reference files contain 109 widget records, all four-byte aligned with no
+opaque tail. That observation is limited to those files: the wider corpus includes
+50-byte LineBars. Preserve type-specific tails rather than rounding record length.
+Per-face totals: `00046` has 17 entries, four styles, 28 widgets and 24 rasters;
+`00106` has 19 entries, four styles, 81 widgets and 147 rasters.
+
+## 12 Fields this later analysis resolved, and what remains
 
 The later pass closes the old structural unknowns: style `+0x10`, the image
 trailer, setting `+0x30/+0x34/+0x35`, Comp's words, vector/image Arc, LineBar, and all
@@ -921,62 +1128,30 @@ unparsed byte:
 | Source 70 name | Numeric current/goal/update behaviour is known; Samsung's user-facing label is absent |
 | Compiled font selectors 4, 5, 7–12 | Exact pointer/size/fallback branches are known; friendly visual family names are absent |
 | Device acceptance | A structurally exact package still needs an SM-R390 install; the phone emulator cannot stand in for the watch |
-| Image-count policy | Hardware rejects a changed image-record count after syntactically valid parsing; the later policy check is not part of this file grammar |
+| Resize copy-on-write rejection | Private appended Sprite frames were ignored on hardware; background addition and import work. The exact distinction remains unresolved; resize keeps image count |
 
-## 13 · Reproducing this analysis
+## 13 Reproducing this analysis
 
-The two scripts that produced it are in [`tools/`](../tools/) — standard library
-only, and they take any container or package rather than the two faces this
-document happens to describe:
+[Tools](../tools/README.md) owns commands, output
+layout and corpus setup. The independent analyzer checks CRCs, exact reconstruction
+and zero-residual coverage on each run. Recorded vendor census: 99 containers,
+4,034 widget records and 7,716 rasters, all byte-identically rebuilt. Generated
+reports remain local; keep vendor, locale-rich and experimental evidence separate.
 
-```sh
-python3 tools/analyze_container.py corpus/packages --out out
-python3 tools/build_report.py out --output out/anatomy.html
-```
+## 14 Related work
 
-The report is the visual companion to this document — field diagrams, layout
-ribbons and the whole decoded asset gallery on one self-contained HTML page. What
-the scripts do, what they refuse to guess at, and where each output lands is in
-[`tools/README.md`](../tools/README.md).
+[Ahmadjerj/galaxy-fit3-parser](https://github.com/Ahmadjerj/galaxy-fit3-parser) is an
+independent read-only Python parser for the same container. The implementation
+reviewed here extracts RGB565/RGB565+A images and renders style/AOD previews using
+font bindings, locale groups and the common Static, Hand, Sprite, Pair, Badge, Comp,
+Arc and LineBar records. Arc/LineBar are absent from this document's initial two files.
 
-The analyzer shares no code with `:core:format`, so agreement between the two is
-independent corroboration rather than a tautology. Run over the whole live
-catalogue it reproduces the numbers this project relies on elsewhere: 99
-containers, 4,034 widget records, 7,716 rasters, every CRC matched and every file
-rebuilt byte-identically. The zero-residual class census in §1 is recomputed on
-every run and the exit status reflects it, so a regression in the parse cannot
-pass silently.
+No code, data or documentation from that project is used here. This derivation
+predates the reference and comes from raw bytes and the independent local analyzer.
+The parsers have not been compared on a shared corpus; the link is related work,
+not corroboration. Treat disagreements as open format questions.
 
-## 14 · Related work
-
-**[Ahmadjerj/galaxy-fit3-parser](https://github.com/Ahmadjerj/galaxy-fit3-parser)**
-— an independent, read-only Python parser for this same OPPO container: it walks
-the `.bin`, extracts the RGB565 and RGB565+A rasters, and reconstructs whole
-rendered previews, including the multi-style and AOD variants, the font bindings
-and the locale-aware glyph groups. It covers the commonly emitted Static, Hand,
-Sprite, Pair, Badge, Comp, Arc and LineBar records and, being a reader, never
-writes a container back.
-
-It is worth knowing about for two reasons. It independently reaches `Arc` and
-`LineBar`, which are absent from the two files used for the initial derivation.
-And it is the only other public implementation of this format this project is aware
-of, which makes it the obvious second opinion on anything labelled *supported*
-rather than *proven*.
-
-No code, data or documentation from it is used here, and nothing in this document
-is derived from it — the derivation above predates the reference and comes from the
-bytes and the [`tools/`](../tools/) analyzer. The two have not been run against each
-other, so this is a pointer, not a corroboration: treat any disagreement between
-them as an open question about the format rather than as a verdict on either one.
-
----
-
-**Scope.** The derivation above rests on two containers from one watch model.
-Structural conclusions are strong — they rest on arithmetic invariants that hold
-across every matching record and on byte-identical reconstruction, and the
-catalogue-wide sweep has since confirmed them. Semantic readings of
-firmware-defined IDs are inferences, however well corroborated by the embedded
-previews. One device result does not establish universal firmware compatibility.
-
-Not affiliated with or endorsed by Samsung or OPPO. Use only watch-face files you
-are authorized to inspect and modify.
+Structural evidence rests on exact arithmetic/reconstruction and the scoped corpus
+checks above; firmware-defined meanings need their own evidence. One hardware
+result does not establish universal compatibility. See [NOTICE](../NOTICE.md) for
+non-affiliation and terms; inspect and modify only files you are authorized to use.

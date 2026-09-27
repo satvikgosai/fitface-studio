@@ -3,8 +3,9 @@
 ## Toolchain
 
 Android Studio with its bundled JBR, Android SDK 36, and the checked-in Gradle
-wrapper. Newer system JDKs break Robolectric with `Unsupported class file major
-version`, so always pass the JBR explicitly.
+wrapper. Pass the JBR explicitly instead of relying on the system Java. Java 17
+is the compilation target; the bundled runtime can be newer (the recorded local
+verification used JBR 25.0.2). CI uses Temurin 17.
 
 ```bash
 JBR='/Applications/Android Studio.app/Contents/jbr/Contents/Home'
@@ -17,7 +18,7 @@ Studio install typically puts the JBR at `/opt/android-studio/jbr`.
 | --- | --- |
 | Application ID | `dev.fitface.studio` |
 | minSdk / target / compile | 28 / 36 / 36 |
-| Java | 17 |
+| Java bytecode target | 17 |
 
 `libs/` holds two accessory SDK JARs consumed only by `:core:delivery`. They are not
 committed, and the first build fetches and hash-verifies them, so that build needs
@@ -34,55 +35,6 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 The release variant enables R8 and resource shrinking. Release signing
 credentials are deliberately not stored in this repository.
 
-## Signing the debug build — maintainer only
-
-> This section describes repository secrets and the release workflow. It applies to
-> whoever owns the repository; a contributor cannot act on any of it and does not
-> need to read it. Nothing here affects a local build.
-
-Android identifies an installed app by application ID **and** signing certificate. An
-APK signed by a different key cannot update one already installed: the package manager
-refuses it, and the only way through is an uninstall — which deletes app-private
-storage, and with it every saved project.
-
-Locally this is invisible. AGP generates `~/.android/debug.keystore` the first time it
-is needed and that file persists, so every debug build from one machine shares a key
-and reinstalls cleanly. A CI runner starts with no such file and would generate a new
-throwaway key on every run, so no two builds could update each other.
-
-`app/build.gradle.kts` therefore lets the debug keystore be supplied explicitly. Each
-input reads `-P<property>` first, then the environment variable, and is ignored when
-blank:
-
-| Property | Environment | Default |
-| --- | --- | --- |
-| `fit3.debugKeystore` | `FIT3_DEBUG_KEYSTORE` | none — AGP's generated keystore |
-| `fit3.debugKeystorePassword` | `FIT3_DEBUG_KEYSTORE_PASSWORD` | `android` |
-| `fit3.debugKeyAlias` | `FIT3_DEBUG_KEY_ALIAS` | `androiddebugkey` |
-| `fit3.debugKeyPassword` | `FIT3_DEBUG_KEY_PASSWORD` | `android` |
-
-With none of them set — every local build — nothing changes.
-
-`.github/workflows/release.yml` restores a keystore from the
-`DEBUG_KEYSTORE_BASE64` repository secret and points `FIT3_DEBUG_KEYSTORE` at it. To
-populate that secret from the keystore already on a development machine, so that CI
-builds and local builds share one identity:
-
-```bash
-# macOS; on Linux use `base64 -w0 ~/.android/debug.keystore`
-gh secret set DEBUG_KEYSTORE_BASE64 --body "$(base64 -i ~/.android/debug.keystore)"
-```
-
-Set `DEBUG_KEYSTORE_PASSWORD`, `DEBUG_KEY_ALIAS` and `DEBUG_KEY_PASSWORD` as well only
-if the keystore does not use the Android debug defaults above. The workflow prints the
-restored key's SHA-256 fingerprint and fails if the secret is truncated or mis-encoded,
-so a signing problem surfaces before the build rather than as an opaque Gradle error.
-
-Without the secret the workflow still builds and publishes, with a warning; the APK is
-then signed with a throwaway key and cannot be installed over any other build. Note
-that this is a **debug** signing key and confers nothing: it is not a release key, and
-anyone holding it can produce an APK a device will accept as an update.
-
 ## Test
 
 ```bash
@@ -94,10 +46,11 @@ anyone holding it can produce an APK a device will accept as an update.
   :app:lintDebug
 ```
 
-Current corpus-backed baseline: **649 tests collected, 648 passed, 1 skipped,
+Last recorded corpus-backed verification (`3361dce`):
+**649 tests collected, 648 passed, 1 skipped,
 0 failures, 0 lint errors, 23 lint warnings.**
-Every warning is a dependency- or SDK-version notice in a build file, none in this
-code, so the count tracks whatever the ecosystem has published since.
+Those warnings were dependency/SDK notices. These are recorded results, not an
+assertion that a later checkout has already passed; run the command above.
 
 The skipped test is `IdentityTransferProtocolTest`, which needs recorded protocol
 fixtures. Tests that read the uncommitted corpus also skip when it is absent; a clean
@@ -147,13 +100,16 @@ Two system properties are resolved in the **root** `build.gradle.kts`:
 - `fit3.corpusRoot` — real APKs and BINs;
 - `fit3.fixtureRoot` — recorded protocol payloads.
 
-Each resolves `-P<name>=<path>`, then `FIT3_CORPUS_ROOT` / `FIT3_FIXTURE_ROOT`,
-then `corpus/` in the repository root (gitignored), then a sibling `../artifacts`
-and `..`.
+For each, a supplied `-P` property takes precedence over its corresponding
+`FIT3_CORPUS_ROOT` / `FIT3_FIXTURE_ROOT` environment variable. The first existing
+candidate is used: that configured path, then repository-local `corpus/`. Legacy
+fallbacks are `../artifacts` for corpus and `..` for fixtures; neither is needed
+for a clean checkout. A nonexistent explicit property does not retry the environment.
 
 ```bash
-./gradlew -Pfit3.corpusRoot=/path/to/containers \
-          -Pfit3.fixtureRoot=/path/to/payloads \
+./gradlew -Dorg.gradle.java.home="$JBR" \
+          -Pfit3.corpusRoot="$PWD/corpus" \
+          -Pfit3.fixtureRoot="$PWD/corpus" \
           :core:format:testDebugUnitTest :core:delivery:testDebugUnitTest
 ```
 
@@ -165,38 +121,9 @@ The expected layout is the one the store ships:
 <corpusRoot>/SM-R390_<id>.apk
 ```
 
-To populate it from the live catalogue, with the debug build installed on a
-connected device and the app opened once so it has synced:
-
-```bash
-python3 tools/fetch_corpus.py corpus
-```
-
-That downloads every catalogue package and extracts its container — 99 of the
-100 faces, the hundredth being `00254`, which ships no container. It works by
-driving a debug-only broadcast receiver that calls the app's own download path,
-because the store's package endpoint requires the stock plugin's signed request
-parameters. The receiver is compiled into the debug variant only.
-
-## Decoding a container by hand
-
-`tools/analyze_container.py` re-derives the container structure from raw bytes
-without sharing any code with `:core:format`, so it is both the way new format
-findings get established and an independent check on the parser the app uses.
-It takes `.bin` containers, the `.apk` packages they ship inside, or directories
-of either.
-
-```bash
-python3 tools/analyze_container.py corpus/packages --out out
-python3 tools/build_report.py out --output out/anatomy.html
-```
-
-That writes a structural model, every directory entry, and every decoded raster
-per face, then renders a self-contained HTML report over them. Over the full
-catalogue the model-only pass (`--skip-images`) takes about twenty seconds and
-exits non-zero if any container fails a CRC, coverage or reconstruction check —
-which makes it a usable corpus-wide regression check on the format itself.
-See [`tools/README.md`](../tools/README.md).
+To populate the corpus, follow [Tools: fetch the corpus](../tools/README.md#fetch-the-corpus).
+The [tools README](../tools/README.md) also owns analyzer/report commands, output
+layout and evidence-set boundaries.
 
 ## Manual verification
 
@@ -216,7 +143,82 @@ download it, and reach the editor with the expected face and sampler IDs. An
 Android 16 ARM64 emulator has verified 100 faces, 411 compatible styles, and the
 download/edit path for face `00112`.
 
-## Conventions
+## Test constraints and troubleshooting
 
-Naming, brand strings and where UI copy lives are in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md#conventions).
+- `Unsupported class file major version` indicates a Java/test-tool compatibility
+  mismatch. Use the documented JBR and check the actual runtime; do not assume its
+  version from the bytecode target. A stale daemon causing `Failed to exec spawn
+  helper` is fixed by `./gradlew --stop`.
+- Editor ViewModel tests use a test `Dispatchers.Main` and
+  `unitTests.isReturnDefaultValues` for Android logging. They deliberately avoid
+  Robolectric: the accessory SDK's pre-stackmap receiver bytecode fails JVM verification.
+- Native Robolectric tests pin geometry and `FitDetails` semantics, not device font
+  truncation. Dialog composition can fail to idle; verify scrolling on the emulator.
+- Real gestures are not driven by tests. Pure hit testing, clamping and drag-axis
+  helpers are covered; stale gesture inputs and accumulation still need UI checks.
+- The updater dialogs/state-to-UI mapping in `:app` have no automated UI coverage.
+  Decision tests cover versions, feed, allowlists and signing verdicts. Recorded
+  emulator checks covered offer/download, permission handoff, installer confirmation
+  and cancellation, network failure, and a 0.1.0 → 0.1.1 self-install preserving
+  projects. A real-device signing-key mismatch remains untested.
+- An emulator cannot verify watch rendering, channel handover or timeout recovery.
+  See [delivery gaps](direct-install.md#unverified) and
+  [format gaps](bin-format.md#hardware-coverage-and-open-cases).
+
+## Local working files
+
+`analysis/` is ignored. Use `prompts/` for task briefs, `notes/` for unresolved work,
+`research/` for firmware/format evidence, `experiments/` for test artifacts,
+`reviews/` for audits and verification, `captures/` for screenshots and reports,
+`assets/` for local design exports, and `archive/` for completed plans. Durable facts
+belong in the relevant tracked reference; do not add a tracked document per task.
+Keep corpus and SDK files in their documented locations. Machine settings, build
+caches, signing material and proprietary packages remain uncommitted.
+
+## Signing the debug build — maintainer only
+
+> This section describes repository secrets and the release workflow. It applies to
+> whoever owns the repository; a contributor cannot act on any of it and does not
+> need to read it. Nothing here affects a local build.
+
+An update must use the installed app's signing certificate. Uninstalling to change
+keys deletes saved projects. Local AGP builds reuse the machine's debug keystore;
+CI needs a stable key because its runners are ephemeral.
+
+`app/build.gradle.kts` lets the debug keystore be supplied explicitly. Each
+input reads `-P<property>` first, then the environment variable, and is ignored when
+blank:
+
+| Property | Environment | Default |
+| --- | --- | --- |
+| `fit3.debugKeystore` | `FIT3_DEBUG_KEYSTORE` | none — AGP's generated keystore |
+| `fit3.debugKeystorePassword` | `FIT3_DEBUG_KEYSTORE_PASSWORD` | `android` |
+| `fit3.debugKeyAlias` | `FIT3_DEBUG_KEY_ALIAS` | `androiddebugkey` |
+| `fit3.debugKeyPassword` | `FIT3_DEBUG_KEY_PASSWORD` | `android` |
+
+With none of them set — every local build — nothing changes.
+
+`.github/workflows/release.yml` restores a keystore from the
+`DEBUG_KEYSTORE_BASE64` repository secret and points `FIT3_DEBUG_KEYSTORE` at it. To
+populate that secret from the keystore already on a development machine, so that CI
+builds and local builds share one identity:
+
+```bash
+# macOS; on Linux use `base64 -w0 ~/.android/debug.keystore`
+gh secret set DEBUG_KEYSTORE_BASE64 --body "$(base64 -i ~/.android/debug.keystore)"
+```
+
+Set `DEBUG_KEYSTORE_PASSWORD`, `DEBUG_KEY_ALIAS` and `DEBUG_KEY_PASSWORD` as well only
+if the keystore does not use the Android debug defaults above. The workflow prints the
+restored key's SHA-256 fingerprint and fails if the secret is truncated or mis-encoded,
+so a signing problem surfaces before the build rather than as an opaque Gradle error.
+
+Without the secret the workflow still builds and publishes, with a warning; the APK is
+then signed with a throwaway key and cannot be installed over any other build. Note
+that this is a **debug** signing key and confers nothing: it is not a release key, and
+anyone holding it can produce an APK a device will accept as an update.
+
+The release workflow builds the debug APK; it does not run the test suite. A `v*`
+tag publishes a GitHub prerelease; a manual run uploads a build artifact retained
+for 90 days. Preserve the key across releases. See [CONTRIBUTING](../CONTRIBUTING.md)
+for review conventions; do not store secret values in repository or local notes.

@@ -27,24 +27,14 @@ agent construction to fail with a nested `NoClassDefFoundError`;
   then moved into place. A download that does not match its pinned SHA-256 is
   deleted and fails the build.
 
-```
-https://raw.githubusercontent.com/MiJey/TizenConsumerSAAgentV2/master/app/libs
-```
+The [mirror](https://raw.githubusercontent.com/MiJey/TizenConsumerSAAgentV2/master/app/libs)
+is unrelated to the vendor. Hash pinning verifies the expected bytes, not the
+right to use them. The mirror and hashes permit recovery without committing JARs.
 
-That mirror is an unrelated third-party repository, not a vendor distribution
-channel. It is used only because both files are there unmodified — the copies it
-serves are byte-for-byte identical to the hashes above. Pinning those hashes is
-what makes an untrusted mirror safe to build from; it is not an endorsement of it,
-and it says nothing about your right to use the files it serves.
-
-The mirror plus these hashes is the backup. The JARs can always be re-obtained and
-proven identical, which is why losing a local copy is not a problem worth solving
-by committing them.
-
-To fetch them without building anything else:
+To fetch separately, after setting `JBR` as in [Development](../docs/development.md#toolchain):
 
 ```bash
-./gradlew :core:delivery:fetchAccessorySdk
+./gradlew -Dorg.gradle.java.home="$JBR" :core:delivery:fetchAccessorySdk
 ```
 
 ## Licensing
