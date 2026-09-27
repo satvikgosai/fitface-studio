@@ -4,6 +4,53 @@ User-visible changes per version. APKs are on the
 [releases page](https://github.com/satvikgosai/fitface-studio/releases); technical references are in
 the [documentation index](docs/README.md).
 
+## Unreleased
+
+Fixed:
+
+- Widget previews, outlines and tap targets now respect edge and widget alignment.
+  Removing widgets or adding backgrounds preserves that alignment; removing a widget
+  others still depend on is blocked with an explanation.
+- Holding a nudge could lose steps while an edit saved, and dragging back to the last
+  saved position could leave an earlier move in place.
+- Removed widgets restore with the correct artwork after other widgets are resized.
+  Even an emptied style can have widgets restored or a background added without
+  resetting the project.
+- Editor navigation stays reachable in short landscape windows and with larger text.
+- The update dialog keeps its buttons in place between checking and downloading.
+- Cancelled downloads stop promptly, and an immediate retry no longer loses its file.
+- Transfer completion now says **Request sent**, rather than **Installed**. The result
+  still needs to be checked on the watch.
+
+Added:
+
+- A dedicated **Canvas** page with move, size, colour, duplicate and remove controls
+  below the face. Project options stay in the header, with **EDITED** visible there.
+- Select several widgets to move, duplicate or remove together. Moving keeps their
+  spacing; if a batch stops, the app reports how many changes were saved.
+- Add supported widgets from another face: choose one or several, review them on your
+  face, then add them to the selected style or always-on display. Partial imports report
+  what was saved and let you continue past a refused widget.
+- Imported widgets can be removed permanently, freeing unused artwork space. Removed
+  stock widgets remain available to restore.
+- **Start a custom face** with a clock on an empty panel, then add a background and
+  widgets. It uses Info_4's watch slot, replacing that face or the previous custom face.
+- Edit the **Always-on display** separately, including its supported widgets and
+  background. Edits to numbered styles leave it unchanged.
+- Widget edits now start with the selected style only. **Edit matching widgets in all
+  styles** lets you apply them to other numbered styles where the widget exists.
+- Resize supported images, clock hands, arcs, bars and lines as well as sprites, in
+  consistent 5% steps. Resized artwork has smoother edges.
+- Hold a nudge arrow to move progressively faster; a tap still moves one pixel.
+- Canvas previews draw the current artwork, supported text, clock hands and gauges
+  using sample readings. Fonts and some watch content can still differ.
+- Widgets name known readings such as steps, battery and heart rate, and identify more
+  widget types instead of labelling them **Other**.
+- Styles are labelled **Style 1**, **Style 2**, and so on throughout the app. The Styles
+  page also shows the current and proposed watch-picker thumbnail before updating it.
+- Preview review, checks, watch setup and transfer now share the **Install** page.
+  Optional explanations throughout the app open in labelled details sections.
+
 ## 0.1.3 (code `19`) — 2026-08-30
 
 Added:

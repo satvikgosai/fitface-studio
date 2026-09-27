@@ -187,5 +187,6 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
 - Changelog entries are per released version, newest first:
   `## <versionName> (code <versionCode>) — <tag date>`, under `Fixed:` / `Added:`.
   Write short user-visible changes. No refactors, tests, docs, version-bump bullets,
-  or bugs introduced and fixed within the same unreleased cycle. Initial release:
-  one line. Detailed causes and safeguards belong in the canonical reference.
+  hidden developer features, or bugs introduced and fixed within the same unreleased
+  cycle. Initial release: one line. Detailed causes and safeguards belong in the
+  canonical reference.

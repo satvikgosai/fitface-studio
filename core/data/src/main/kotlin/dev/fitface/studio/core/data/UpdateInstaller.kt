@@ -132,11 +132,18 @@ internal class UpdateInstaller @Inject constructor(
             setSize(file.length())
         }
         val sessionId = installer.createSession(params)
-        installer.openSession(sessionId).use { session ->
-            session.openWrite(SessionFileName, 0, file.length()).use { output ->
-                file.inputStream().use { input -> input.copyTo(output) }
-                session.fsync(output)
+        try {
+            installer.openSession(sessionId).use { session ->
+                session.openWrite(SessionFileName, 0, file.length()).use { output ->
+                    file.inputStream().use { input -> input.copyTo(output) }
+                    session.fsync(output)
+                }
             }
+        } catch (error: Throwable) {
+            // The caller receives the ID only after this method returns. If opening or
+            // copying the APK fails, it cannot abandon a session it never learned about.
+            runCatching { installer.abandonSession(sessionId) }
+            throw error
         }
         return sessionId
     }
