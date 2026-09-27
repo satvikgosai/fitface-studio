@@ -834,7 +834,6 @@ class LibraryViewModel @Inject constructor(
         const val TAG = "LibraryViewModel"
 
         const val uneditableMessage =
-            "This face is customised on the watch rather than shipped as an editable " +
-                "container, so FitFace Studio has nothing to open."
+            "This face is customised on the watch and cannot be edited here."
     }
 }

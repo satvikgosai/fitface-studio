@@ -350,6 +350,7 @@ fun FitTopBar(
     subtitle: String? = null,
     onBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    titleContentDescription: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
@@ -370,6 +371,9 @@ fun FitTopBar(
         Column(Modifier.weight(1f)) {
             Text(
                 title,
+                modifier = Modifier.semantics {
+                    titleContentDescription?.let { contentDescription = it }
+                },
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleMedium,

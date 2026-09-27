@@ -463,16 +463,16 @@ enum class WidgetPlacement {
  * position is still editable.
  */
 enum class WidgetCategory(val label: String, val detail: String) {
-    IMAGE("Image", "One static raster blitted at a fixed position."),
-    SPRITE("Sprite", "A table of frames the watch indexes with a live value."),
-    ANIMATION("Animation", "A frame sequence the watch plays on its own timer."),
+    IMAGE("Image", "A still image at a fixed position."),
+    SPRITE("Sprite", "Images that change with a live reading."),
+    ANIMATION("Animation", "An image sequence played by the watch."),
     // What it is, not why it has no outline: the panel above this one already says that,
     // in the support message, and the two together said "rotated about a pivot" twice on
     // one screen.
     HAND("Clock hand", "The hour, minute or second hand."),
-    VALUE("Value", "A live reading the watch draws with its own glyphs."),
-    RULE("Rule", "A straight line between two stored endpoints."),
-    COMPOSITE("Composite", "Several sub-fields laid out together, such as a date."),
+    VALUE("Value", "A live reading drawn with the watch’s font."),
+    RULE("Rule", "A straight line."),
+    COMPOSITE("Composite", "Text and readings combined, such as a date."),
     ARC("Image arc", "A curved gauge drawn from its own artwork."),
 
     /**

@@ -59,6 +59,33 @@ not add them back. The first build on a clean clone needs network to fetch them.
 No doc or build file may depend on a path outside this repository. `analysis/` is a
 local working area and is gitignored — findings that matter get written up in `docs/`.
 
+## UI copy and visible status
+
+* Keep copy short, plain and specific to the action. Show an instruction or fact once
+  per screen; keep widget type, selection and edit scope easy to find. Preserve necessary
+  information and accessibility descriptions when removing visible repetition.
+* Use the shared `FitDetails` component for optional download, preview, restore-order,
+  image, file and connection/transfer explanations. Keep it inside the scrolling content;
+  expanding it must not displace a sheet's pinned action. Its labelled header must remain
+  reachable by tap, keyboard and accessibility, with its expanded state announced.
+* Keep task instructions, edit scope, size limits, shared-artwork consequences, errors,
+  recovery, permission and data-loss warnings visible. Preserve legal and privacy text.
+* **Canvas shows the EDITED chip in its header whenever `snapshot.isDirty`. Do not move
+  it into Project, a menu or a details section.** Background keeps UNAPPLIED in its header
+  while an image is pending. Keep header actions icon-sized and the app menu last.
+* Widget import says **Review widget** / **Review N widgets** before the review and **Add**
+  for the action that saves. **Face size** means used bytes. Transfer keeps its phase and
+  progress visible; completion says **Request sent**, with instructions to check the watch
+  and restore its connection. Do not claim the face is installed based on transfer alone.
+* Keep resource IDs stable where practical and reuse identical copy through resources.
+  Update translations consistently when present. Copy changes must preserve editing,
+  navigation, storage, permissions, validation and transport behaviour.
+* Check UI changes on the running emulator, including affected states, narrow headers,
+  scrolling, large text and both themes when relevant. Keep existing projects intact.
+  Audit tables, copy inventories and session reports belong in ignored `analysis/`, not
+  new repository docs. Update existing docs for current behaviour and record durable rules
+  here; omit the session's approval history and rationale.
+
 ## Writing the changelog
 
 [`CHANGELOG.md`](CHANGELOG.md) is one entry per released version, newest first, headed

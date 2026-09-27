@@ -33,7 +33,7 @@
 
     <!-- The pasteable bug report, the first entry in that menu. -->
     <string name="ui_diagnostics_action">Report a problem</string>
-    <string name="ui_diagnostics_title">Report a problem</string>
+    <string name="ui_diagnostics_title">@string/ui_diagnostics_action</string>
     <!--
       Says what the report holds, and stops. It used to end by listing what it leaves out —
       device identifiers, the watch's Bluetooth address, the images you picked — which reads
@@ -50,14 +50,14 @@
       nowhere else to put either. The second string is the short form of NOTICE.md and is
       not optional; it names no vendor and no store, per the naming rule in CONTRIBUTING.md.
     -->
-    <string name="ui_about_title">About this app</string>
+    <string name="ui_about_title">@string/ui_app_menu_about</string>
     <!--
       Two sentences, and it is worth keeping them to two. The whole dialog has to fit the
       height a landscape phone leaves an AlertDialog — about eleven lines — and this
       paragraph is the biggest thing competing for it. The version and the link are the two
       things the dialog exists for, so prose is what gives way when something has to.
     -->
-    <string name="ui_about_what_it_is">Edits a Fit3 watch face on your phone and sends it to a paired watch. It changes only what is safe to change, and refuses to send anything that does not hold up.</string>
+    <string name="ui_about_what_it_is">Edit a watch face on your phone and send it to a paired watch. Every edit is checked before sending.</string>
     <!--
       One line on purpose. The long form is NOTICE.md, which the link below reaches, and a
       dialog is the wrong place to restate it — a wall of disclaimer stops being read at all,
@@ -82,18 +82,34 @@
       Android, which asks its own question and then replaces this app.
     -->
     <string name="ui_update_title">App update</string>
-    <string name="ui_update_checking">Looking for a newer version…</string>
-    <string name="ui_update_up_to_date">You are running the newest version.</string>
-    <string name="ui_update_available">Version %1$s is available to download (%2$s MB).</string>
-    <string name="ui_update_downloading">Downloading version %1$s. You can close this and it will keep going.</string>
+    <string name="ui_update_checking">Checking for updates…</string>
+    <string name="ui_update_up_to_date">You’re up to date.</string>
+    <string name="ui_update_available">Version %1$s available · %2$s MB</string>
+    <string name="ui_update_downloading">Downloading %1$s. This continues if you close the dialog.</string>
     <string name="ui_update_progress">%1$d%% of %2$s MB</string>
-    <string name="ui_update_ready">Version %1$s has been downloaded and checked. Installing it hands it to Android, which will ask you to confirm.</string>
-    <string name="ui_update_installing">Android is installing the update. This app will close if it accepts it.</string>
+    <string name="ui_update_ready">Version %1$s is downloaded and checked. Android will ask you to confirm installation.</string>
+    <string name="ui_update_installing">Android is installing the update. This app closes if installation succeeds.</string>
     <string name="ui_update_failed_fallback">The update could not be checked.</string>
     <string name="ui_update_installed">Installed: %1$s</string>
     <string name="ui_update_download">Download</string>
     <string name="ui_update_install">Install</string>
-    <string name="ui_update_cancel">Cancel</string>
-    <string name="ui_update_try_again">Try again</string>
+    <string name="ui_update_cancel">@string/ui_cancel</string>
+    <string name="ui_update_try_again">@string/ui_try_again</string>
     <string name="ui_update_allow_installs">Allow installs</string>
+    <string name="ui_cancel">Cancel</string>
+    <string name="ui_try_again">Try again</string>
+    <string name="ui_project_name">Project name</string>
+    <string name="ui_rename_project">Rename project</string>
+    <string name="ui_delete">Delete</string>
+    <string name="ui_delete_project_title">Delete this project?</string>
+    <string name="ui_delete_project_message">%1$s and every edit saved in it will be removed from this device. The watch face itself can be downloaded again.</string>
+    <string name="ui_project_duplicated">Duplicated as “%1$s”</string>
+    <string name="ui_not_editable">Not editable</string>
+    <string name="ui_always_on_display">Always-on display</string>
+    <string name="ui_widget_number">Widget #%1$d</string>
+    <string name="ui_clear_selection">Clear</string>
+    <string name="ui_details_expand">Expand %1$s</string>
+    <string name="ui_details_collapse">Collapse %1$s</string>
+    <string name="ui_details_expanded">Expanded</string>
+    <string name="ui_details_collapsed">Collapsed</string>
 </resources>

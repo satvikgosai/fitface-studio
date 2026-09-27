@@ -73,15 +73,21 @@ the first launch.
 
 Each widget row shows the widget itself and what kind of record it is — Image,
 Sprite, Clock hand, Value, Rule, Composite, Arc or Bar — so you know what you are
-about to change. Records the canvas cannot draw, like clock hands, are listed
-separately and explained rather than quietly mixed in.
+about to change. Clock hands render in the preview but have no fixed selection outline;
+select them from the list and use the arrows to move them.
 
-**Check.** The **Validate** page reparses the edited file and shows you what the
-watch will actually render, plus every structural check. Install stays locked
-until it is clean.
+**Check.** The **Install** page shows the face preview and its structural checks.
+Sample readings are not live watch data; fonts may differ and some watch content
+cannot be previewed. Sending stays locked until validation passes.
 
 **Install.** Send the result to a paired, connected Fit3 over Bluetooth. No ADB,
 no root, no cable.
+
+Optional explanations are under labelled details sections: preview behaviour, download
+policy, image resolution and file/connection information remain available on tap. Scope,
+warnings and recovery instructions stay visible. Widget import first offers **Review**;
+the final **Add** action saves it. After sending, **Request sent** means you should check
+the result on the watch and follow the reconnection instructions.
 
 **Start from nothing.** *Start a custom face* on the Projects page gives you a clock on an
 empty panel to build on — add a photo and widgets from other faces. It is made on your phone

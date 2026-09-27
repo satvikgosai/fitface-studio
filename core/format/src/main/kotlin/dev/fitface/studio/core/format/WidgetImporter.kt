@@ -23,11 +23,11 @@ object WidgetImporter {
     fun unavailableReason(entry: ContainerEntry, index: Int): String? {
         val record = FaceRecordParser.scanWidgets(entry).singleOrNull { it.globalIndex == index }
             ?: return "This widget is no longer present."
-        if (record.widgetType !in stockTypes) return "This widget type has no supported stock sample."
+        if (record.widgetType !in stockTypes) return "This widget type cannot be added safely yet."
         if (record.widgetType == 5 && record.sourceId == 116)
-            return "This time-zone widget creates a firmware-owned interactive overlay and cannot be imported safely."
+            return "The watch controls this time-zone widget, so it cannot be added safely."
         if (record.liveAlignment?.code?.let { it !in 0..3 } == true)
-            return "This widget uses an alignment that is not understood."
+            return "This widget’s positioning is not supported."
         val guide = FaceRecordParser.widgetGuides(entry).single { it.globalIndex == index }
         if (guide.placement == WidgetPlacement.BACKGROUND)
             return "Full-face backgrounds belong on the Background page."

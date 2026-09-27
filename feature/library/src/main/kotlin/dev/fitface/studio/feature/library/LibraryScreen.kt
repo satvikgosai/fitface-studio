@@ -80,6 +80,7 @@ import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitBadge
+import dev.fitface.studio.core.ui.FitDetails
 import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.AppMenuAction
@@ -614,11 +615,6 @@ private fun CatalogLoading() {
                 stringResource(R.string.library_loading_title),
                 style = MaterialTheme.typography.titleSmall,
             )
-            Text(
-                stringResource(R.string.library_loading_detail),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.fitText.secondary,
-            )
         }
     }
 }
@@ -797,10 +793,6 @@ private fun FaceDetailsSheet(
                     .padding(start = 20.dp, end = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                MicroLabel(
-                    stringResource(R.string.library_sheet_kind),
-                    color = MaterialTheme.colorScheme.primary,
-                )
                 Text(
                     face.name,
                     modifier = Modifier.padding(top = 8.dp),
@@ -865,11 +857,6 @@ private fun FaceDetailsSheet(
                         modifier = Modifier.padding(top = 20.dp),
                         color = MaterialTheme.colorScheme.outlineVariant,
                     )
-                    MicroLabel(
-                        stringResource(R.string.library_sheet_start_new),
-                        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                    )
                 }
                 MicroLabel(
                     stringResource(R.string.library_sheet_choose_style),
@@ -906,6 +893,17 @@ private fun FaceDetailsSheet(
                         formatBytes(face.packageSize),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Keep expanding reference inside the scroll, so the action stays reachable.
+                FitDetails(
+                    label = stringResource(R.string.library_download_details),
+                    modifier = Modifier.padding(top = 14.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.library_download_cache_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.fitText.secondary,
                     )
                 }
             }
@@ -961,19 +959,19 @@ private fun FaceDetailsSheet(
                         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     )
                 }
-                Text(
-                    stringResource(
-                        when {
-                            action == FaceAction.UPDATE -> R.string.library_update_note
-                            packageOnDevice && action != FaceAction.NOT_EDITABLE ->
-                                R.string.library_new_project_note
-                            else -> R.string.library_download_cache_note
-                        },
-                    ),
-                    modifier = Modifier.padding(top = 10.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.fitText.secondary,
-                )
+                val actionNote = when {
+                    action == FaceAction.UPDATE -> R.string.library_update_note
+                    packageOnDevice && action != FaceAction.NOT_EDITABLE -> R.string.library_new_project_note
+                    else -> null
+                }
+                actionNote?.let {
+                    Text(
+                        stringResource(it),
+                        modifier = Modifier.padding(top = 10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.fitText.secondary,
+                    )
+                }
             }
         }
     }
@@ -1512,7 +1510,7 @@ internal fun SheetProjectRow(
                 }
             }
             Text(
-                "${projectFaceLine(project)} · $age",
+                project.styleId?.let { "${styleLabel(it)} · $age" } ?: age,
                 modifier = Modifier.padding(top = 3.dp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

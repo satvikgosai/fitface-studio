@@ -286,6 +286,14 @@
   .size-value { font: 600 20px/24px var(--mono); margin-top: 9px; }
   .size-btns { display: flex; gap: 10px; margin-top: 12px; }
 
+  /* ---- optional reference: FitDetails ---- */
+  .fit-details { border: 1px solid var(--outline-variant); border-radius: 8px; background: var(--sc-low); }
+  .fit-details summary { min-height: 48px; padding: 14px; display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; font: 500 9.5px var(--mono); letter-spacing: 1.3px; color: var(--on-surface-var); }
+  .fit-details summary::-webkit-details-marker { display: none; }
+  .fit-details summary::after { content: "▾"; margin-left: auto; font: 400 13px var(--sans); }
+  .fit-details[open] summary::after { content: "▴"; }
+  .fit-details .details-body { padding: 0 14px 14px; font: 400 12px/18px var(--sans); color: var(--on-surface-var); }
+
   /* ---- glyph inventory ---- */
   .glyphs { display: flex; flex-wrap: wrap; gap: 8px; }
   .glyph-cell { width: 92px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 10px 8px; text-align: center; background: #101615; }
@@ -485,19 +493,27 @@
             <div class="bar-title">Black or white</div>
             <div class="bar-sub">face 00112 · style0</div>
           </div>
+          <span class="badge">EDITED</span>
           <div class="icon-btn">⋯</div>
           <div class="icon-btn">&#8801;</div>
         </div>
-        <div class="caption">FitBadge — something outstanding, from the one row that never scrolls</div>
+        <div class="caption">FitBadge — EDITED on Canvas; UNAPPLIED on Background, both in the top bar</div>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
           <span class="badge">EDITED</span>
           <span class="badge">UNAPPLIED</span>
         </div>
 
+        <div class="caption">FitDetails — tap or use the keyboard to open</div>
+        <details class="fit-details">
+          <summary>PREVIEW DETAILS</summary>
+          <div class="details-body">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</div>
+        </details>
+
         <div class="caption">FitIconButton — 38dp · default / warning-tinted</div>
         <div style="display:flex; gap:10px">
           <div class="icon-btn">&#8801;</div>
           <div class="icon-btn warn">&#8801;</div>
+          <span class="badge">EDITED</span>
           <div class="icon-btn">⋯</div>
           <div class="icon-btn">&lsaquo;</div>
         </div>
@@ -631,7 +647,7 @@
 
         <div class="caption">Sprite size card — readout plus the resize ladder</div>
         <div class="size-card">
-          <div class="micro">Size &middot; aspect ratio locked</div>
+          <div class="micro">Size &middot; proportions locked</div>
           <div class="size-value">40 &times; 62 px</div>
           <div class="size-btns">
             <div class="fit-btn secondary" style="flex:1">Smaller</div>
@@ -661,19 +677,27 @@
             <div class="bar-title">Black or white</div>
             <div class="bar-sub">face 00112 · style0</div>
           </div>
+          <span class="badge">EDITED</span>
           <div class="icon-btn">⋯</div>
           <div class="icon-btn">&#8801;</div>
         </div>
-        <div class="caption">FitBadge — something outstanding, from the one row that never scrolls</div>
+        <div class="caption">FitBadge — EDITED on Canvas; UNAPPLIED on Background, both in the top bar</div>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
           <span class="badge">EDITED</span>
           <span class="badge">UNAPPLIED</span>
         </div>
 
+        <div class="caption">FitDetails — tap or use the keyboard to open</div>
+        <details class="fit-details">
+          <summary>PREVIEW DETAILS</summary>
+          <div class="details-body">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</div>
+        </details>
+
         <div class="caption">FitIconButton — 38dp · default / warning-tinted</div>
         <div style="display:flex; gap:10px">
           <div class="icon-btn">&#8801;</div>
           <div class="icon-btn warn">&#8801;</div>
+          <span class="badge">EDITED</span>
           <div class="icon-btn">⋯</div>
           <div class="icon-btn">&lsaquo;</div>
         </div>
@@ -807,7 +831,7 @@
 
         <div class="caption">Sprite size card — readout plus the resize ladder</div>
         <div class="size-card">
-          <div class="micro">Size &middot; aspect ratio locked</div>
+          <div class="micro">Size &middot; proportions locked</div>
           <div class="size-value">40 &times; 62 px</div>
           <div class="size-btns">
             <div class="fit-btn secondary" style="flex:1">Smaller</div>
@@ -899,7 +923,7 @@
     <tr><td class="m">gaps</td><td class="m">12 each</td><td class="m">Arrangement.spacedBy</td></tr>
     <tr><td class="m">each action</td><td class="m">38</td><td class="m">≤ 44 is the tested budget</td></tr>
     <tr><td class="m"><strong>title column, one action</strong></td><td class="m"><strong>228</strong></td><td class="m">floor asserted at 200</td></tr>
-    <tr><td class="m"><strong>title column, Canvas worst case</strong></td><td class="m"><strong>152</strong></td><td class="m">badge + ⋯ + ≡ · floor asserted at 130</td></tr>
+    <tr><td class="m"><strong>title column, Canvas worst case</strong></td><td class="m"><strong>label-dependent</strong></td><td class="m">EDITED + ⋯ + ≡ · title-to-badge span has a tested floor of 110</td></tr>
   </table></div>
   <p class="note">
     Two rules follow, and both have been broken here before. <strong>An action is a
@@ -946,16 +970,16 @@
       <div class="ia-page">Widgets<span>→ Inspector (L3)</span></div>
       <div class="ia-page">Background<span>fit · zoom · apply</span></div>
       <div class="ia-page">Styles<span>variants as pictures</span></div>
-      <div class="ia-page">Validate<span>the gate → Install</span></div>
-      <div class="ia-page">Install<span>own page, own phases</span></div>
+      <div class="ia-page">Install<span>preview, checks, setup and transfer</span></div>
       <div class="ia-peek">Project<span>PAGE · off &#8943; · rename, duplicate, reset, delete</span></div>
     </div>
   </div>
   <p class="note" style="margin-top:20px">
-    <strong>Install is its own page</strong> because it has a four-step checklist, two
-    permission gates and a byte counter; it cannot share attention with a canvas.
-    <strong>Validate is a gate</strong> — the only route to Install — so a failed parse can
-    never reach Bluetooth, and every commit clears the flag that opens it.
+    <strong>Install combines the preview, checks, four-step setup and transfer.</strong>
+    Validation gates sending; every edit also clears the reviewed-preview flag.
+    Optional protocol details expand below the transfer controls. Warnings and recovery
+    instructions remain visible, and completion says Request sent rather than claiming
+    the watch installed the face.
   </p>
 </section>
 

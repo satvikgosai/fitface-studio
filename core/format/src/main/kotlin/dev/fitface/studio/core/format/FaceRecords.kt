@@ -652,9 +652,8 @@ object FaceRecordParser {
     private fun sharedPoolSuffix(pool: RasterPool?, target: WidgetRecord): String {
         val sharing = pool?.widgets?.count { it.ordinal != target.ordinal } ?: 0
         if (sharing == 0) return ""
-        return " Resizing it rewrites the artwork behind $sharing other " +
-            "widget${if (sharing == 1) "" else "s"} drawing from the same set, so " +
-            "${if (sharing == 1) "it resizes" else "they resize"} with it."
+        return " Resizing also resizes $sharing other " +
+            "widget${if (sharing == 1) " that shares" else "s that share"} this artwork."
     }
 
     /**
@@ -665,11 +664,9 @@ object FaceRecordParser {
     private fun resizeMessage(pool: RasterPool, target: WidgetRecord): String {
         val sharing = pool.widgets.count { it.ordinal != target.ordinal }
         return if (sharing == 0) {
-            "Drag to move; resize rewrites the artwork behind it"
+            "Move or resize this widget."
         } else {
-            "Drag to move. Resizing rewrites the ${pool.images.size} shared rasters behind " +
-                "this widget, so the $sharing other widget${if (sharing == 1) "" else "s"} " +
-                "drawing from the same set resize with it."
+            "Drag to move." + sharedPoolSuffix(pool, target)
         }
     }
 
@@ -975,18 +972,17 @@ object FaceRecordParser {
                 colorArgb = pairColor.takeIf { canEditPair },
                 supportMessage = when {
                     !place.isMovable ->
-                        "This widget is positioned in a way the editor cannot measure, so " +
-                            "moving it is disabled. Everything else about it is preserved."
+                        "This widget’s position cannot be measured safely, so moving is disabled. " +
+                            "Its other properties stay unchanged."
                     placement == WidgetPlacement.BACKGROUND ->
                         "Covers the whole face. Replace it from Background instead of dragging it."
                     // One sentence: the editor prints this under the controls *and*, for a
                     // widget with no outline, in the banner above them, so a paragraph was
                     // the same paragraph twice on one screen.
                     it.widgetType == WIDGET_HAND ->
-                        "The watch rotates this ${visualWidth}×$visualHeight artwork about a " +
-                            "pivot, so it has no outline to drag; nudge it instead." +
+                        "This hand rotates, so use the arrows to move it." +
                             (if (resizeKind == WidgetResizeKind.RASTER) {
-                                " Resizing scales the artwork and the pivot together."
+                                " Resizing scales its artwork and pivot together."
                             } else "") +
                             // A Hand is HIDDEN, so this arm used to swallow the pool
                             // warning for the one type that cannot show the result: 18 of
@@ -1000,19 +996,16 @@ object FaceRecordParser {
                                 it,
                             )
                     placement == WidgetPlacement.HIDDEN ->
-                        "This record draws no rectangle the editor can outline; nudge it instead."
-                    canEditPair -> "Drag to move; choose an opaque Value color below"
+                        "No selectable outline. Use the arrows to move it."
+                    canEditPair -> "Drag to move; choose a solid colour below."
                     resizeKind == WidgetResizeKind.RASTER && resizePool != null ->
                         resizeMessage(resizePool, it)
                     resizeKind == WidgetResizeKind.FIELDS ->
-                        "Drag to move; resize rewrites the size stored in the record, so " +
-                            "the watch redraws it and the container does not change size"
+                        "Move or resize this widget without increasing the file size."
                     resizeModel != null ->
-                        "Drag to move; this widget's artwork does not match the proven " +
-                            "resize schema"
+                        "You can move this widget, but its artwork cannot be resized safely."
                     it.widgetType == WIDGET_PAIR -> "Drag to move; Value color schema is opaque"
-                    else -> "Drag to move; ${WidgetCategory.forWidgetType(it.widgetType).label
-                        .lowercase()} internals are preserved verbatim"
+                    else -> "Drag to move. Other properties stay unchanged."
                 },
             )
         }

@@ -94,7 +94,7 @@ anyone holding it can produce an APK a device will accept as an update.
   :app:lintDebug
 ```
 
-Current corpus-backed baseline: **648 tests collected, 647 passed, 1 skipped,
+Current corpus-backed baseline: **649 tests collected, 648 passed, 1 skipped,
 0 failures, 0 lint errors, 23 lint warnings.**
 Every warning is a dependency- or SDK-version notice in a build file, none in this
 code, so the count tracks whatever the ecosystem has published since.
@@ -110,6 +110,10 @@ pixels, which makes a text-labelled button look tiny and a title column look eno
 Even in native mode Robolectric's metrics are not the device's — it measures the
 subtitle that clipped on a real phone as fitting — so it asserts layout geometry rather
 than whether text was ellipsized. See the class comment.
+
+`FitDetailsTest` checks that optional help opens by click, announces its expanded state,
+keeps its body reachable and restores that state after recreation. It complements the
+emulator checks of long explanations, large text and scrolling.
 
 `SemanticColorContrastTest` and `SmallTextContrastTest` need no Android runtime at all:
 `Color` is a value class and the WCAG formula is arithmetic, so the palette is pinned by

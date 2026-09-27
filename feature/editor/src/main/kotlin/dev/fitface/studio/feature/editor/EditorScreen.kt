@@ -141,6 +141,7 @@ import dev.fitface.studio.core.model.widgetSizePercent
 import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitBadge
+import dev.fitface.studio.core.ui.FitDetails
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
 import dev.fitface.studio.core.ui.FitChip
@@ -608,12 +609,6 @@ private fun EditorUnavailable(
                     modifier = Modifier.padding(top = 20.dp).size(22.dp),
                     strokeWidth = 2.dp,
                 )
-                Text(
-                    stringResource(R.string.editor_loading_detail),
-                    modifier = Modifier.padding(top = 12.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             } else {
                 Text(
                     stringResource(R.string.editor_session_ended_title),
@@ -753,18 +748,20 @@ private fun EditorHeader(
         EditorPage.Install -> stringResource(R.string.editor_subtitle_install)
         EditorPage.Project -> snapshot.sourceName
     }
-    // Order matters. The app menu is on every page while the badge and the overflow are
-    // Canvas-only, so it goes last: as the final child of the Row its right edge is pinned to
-    // the bar's padding and it stays put as you move between pages. Emitted first, it slid
-    // sideways whenever a neighbour appeared or vanished.
+    // The app menu goes last so its right edge stays put across pages.
     //
     // Two glyphs sit side by side on Canvas and they are deliberately different shapes: `⋯`
     // navigates to this face's Project page, `≡` opens the app-wide menu. Two ellipses would
     // read as one control with two behaviours.
-    FitTopBar(title = title, subtitle = subtitle, onBack = onBack) {
-        // One badge slot, whichever page has something outstanding to report. The bar is the
-        // only part of a page that does not scroll, which is why an unapplied background says
-        // so here: its commit buttons are the last children of a long scrolling column.
+    FitTopBar(
+        title = title,
+        subtitle = subtitle,
+        onBack = onBack,
+        titleContentDescription = if (page == EditorPage.Canvas && snapshot.isDirty) {
+            stringResource(R.string.editor_title_edited_a11y, title)
+        } else null,
+    ) {
+        // Keep edit status visible without opening Project or scrolling to Apply.
         if (page == EditorPage.Canvas && snapshot.isDirty) {
             FitBadge(
                 stringResource(R.string.editor_badge_edited),
@@ -2173,6 +2170,16 @@ private fun WidgetsWorkspace(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        FitDetails(
+                            label = stringResource(R.string.editor_restore_details),
+                            modifier = Modifier.padding(top = 8.dp),
+                        ) {
+                            Text(
+                                stringResource(R.string.editor_restore_explanation),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.fitText.secondary,
+                            )
+                        }
                     }
                     items(snapshot.removedWidgets, key = { "removed-${it.id}" }) { removed ->
                         RemovedWidgetRow(removed, enabled) { onRestore(removed.id) }
@@ -2182,11 +2189,6 @@ private fun WidgetsWorkspace(
             item {
                 SectionHeading(
                     stringResource(R.string.editor_widgets_on_canvas_title),
-                    stringResource(
-                        R.string.editor_widgets_on_canvas_detail,
-                        onCanvas.size,
-                        snapshot.widgets.size,
-                    ),
                 )
             }
             item {
@@ -2317,17 +2319,19 @@ private fun RemovedWidgetsToggle(count: Int, expanded: Boolean, onToggle: () -> 
 @Composable
 private fun SectionHeading(
     title: String,
-    detail: String,
+    detail: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.padding(bottom = 2.dp)) {
         MicroLabel(title)
-        Text(
-            detail,
-            modifier = Modifier.padding(top = 5.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
+        detail?.let {
+            Text(
+                it,
+                modifier = Modifier.padding(top = 5.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
     }
 }
 
@@ -2419,7 +2423,6 @@ private fun WidgetRow(
             Text(
                 stringResource(
                     R.string.editor_row_record,
-                    widget.category.label,
                     widget.readingLabel(),
                     widget.width,
                     widget.height,
@@ -2872,11 +2875,13 @@ private fun InspectorWorkspace(
                 !state.isWorking,
                 style = FitButtonStyle.Danger,
             )
-            Text(
-                stringResource(R.string.editor_destructive_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
+            FitDetails(label = stringResource(R.string.editor_duplicate_restore_details)) {
+                Text(
+                    stringResource(R.string.editor_destructive_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
         }
     }
 }
@@ -3100,16 +3105,6 @@ private fun BackgroundWorkspace(
                     stringResource(R.string.editor_bg_no_image_title),
                     style = MaterialTheme.typography.titleMedium,
                 )
-                Text(
-                    stringResource(
-                        R.string.editor_bg_no_image_detail,
-                        snapshot.preview.width,
-                        snapshot.preview.height,
-                    ),
-                    modifier = Modifier.padding(top = 7.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
             PartialBackgroundNotice(snapshot)
             FitButton(
@@ -3118,6 +3113,17 @@ private fun BackgroundWorkspace(
                 Modifier.fillMaxWidth(),
                 !state.isWorking,
             )
+            FitDetails(label = stringResource(R.string.editor_image_details)) {
+                Text(
+                    stringResource(
+                        R.string.editor_bg_no_image_detail,
+                        snapshot.preview.width,
+                        snapshot.preview.height,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             // A tint rewrites a background's palette or samples, so a face without one
             // has nothing for it to touch either.
             if (!adding) {
@@ -3241,11 +3247,6 @@ private fun AddBackgroundNotice(snapshot: EditorSnapshot) {
             .padding(16.dp),
     ) {
         MicroLabel(stringResource(R.string.editor_bg_adds_label))
-        Text(
-            stringResource(R.string.editor_bg_adds_title),
-            modifier = Modifier.padding(top = 9.dp),
-            style = MaterialTheme.typography.titleMedium,
-        )
         Text(
             if (snapshot.isAodSelected) {
                 stringResource(R.string.editor_bg_adds_aod)
@@ -3507,12 +3508,13 @@ private fun StylesWorkspace(
             }
         }
         item {
-            Text(
-                stringResource(R.string.editor_styles_footnote),
-                modifier = Modifier.padding(top = 4.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
+            FitDetails(label = stringResource(R.string.editor_styles_details)) {
+                Text(
+                    stringResource(R.string.editor_styles_footnote),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
         }
         // The face-picker thumbnail belongs here, not on the install page. It is a *style's*
         // picture — one frame of `preview.bin`, per numbered style, and the reason
@@ -3618,9 +3620,23 @@ private fun InstallWorkspace(
         // screen is what that cost. Putting them side by side instead only made the page
         // look like two pages.
         DeviceStatusRow(state.directInstall, snapshot, showFace)
+        val environment = state.directInstall.environment
+        if (environment.pluginLabel != null || environment.pluginVersionName != null) {
+            FitDetails(label = stringResource(R.string.editor_connection_details)) {
+                val plugin = environment.pluginLabel
+                    ?: stringResource(R.string.editor_device_plugin_installed)
+                Text(
+                    environment.pluginVersionName?.let {
+                        stringResource(R.string.editor_device_plugin_version, plugin, it)
+                    } ?: plugin,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
+        }
         // What the edit *is*, directly under the picture of it and above the steps for
         // sending it. Each header states its conclusion; opening one shows the working.
-        CollapsibleSection(
+        FitDetails(
             label = stringResource(R.string.editor_checks_heading),
             summary = if (valid) {
                 stringResource(R.string.editor_install_checks_summary, ValidationChecks.size)
@@ -3649,7 +3665,7 @@ private fun InstallWorkspace(
         // Always here, even with nothing to report. It is one of the three things this page
         // says about the edit, and a section that comes and goes with whether a commit has
         // happened yet is one nobody learns is there.
-        CollapsibleSection(
+        FitDetails(
             label = stringResource(R.string.editor_audit_heading),
             summary = snapshot.audit?.let { signedBytes(it.sizeDelta) }
                 ?: stringResource(R.string.editor_audit_none_summary),
@@ -3671,6 +3687,13 @@ private fun InstallWorkspace(
         // that picture cannot show has to be said here and not only on the canvas.
         if (snapshot.selectedVariantApproximate) {
             StatusBanner(FitStatus.Warning, stringResource(R.string.editor_aod_approximate))
+            FitDetails(label = stringResource(R.string.editor_preview_details)) {
+                Text(
+                    stringResource(R.string.editor_preview_explanation),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
         }
 
         if (valid) {
@@ -3703,59 +3726,6 @@ private fun InstallWorkspace(
             )
         }
 
-    }
-}
-
-/**
- * A fact about the edit, folded away behind its own summary.
- *
- * The install page carries everything the two pages before it carried, which is a long
- * scroll between the render at the top and the button at the bottom. The checks and the
- * audit are *reference*: each one's header states its conclusion, and opening it shows the
- * working. Warnings and failures are not sections — they stay in the column where they
- * cannot be folded away.
- */
-@Composable
-private fun CollapsibleSection(
-    label: String,
-    summary: String,
-    summaryColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    initiallyExpanded: Boolean = false,
-    body: @Composable ColumnScope.() -> Unit,
-) {
-    var expanded by rememberSaveable(label) { mutableStateOf(initiallyExpanded) }
-    // The glyph alone announces as a character, and the row's own text says what the
-    // section holds but not that tapping opens it.
-    val action = stringResource(
-        if (expanded) R.string.editor_install_collapse else R.string.editor_install_expand,
-        label,
-    )
-    Column(
-        Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small),
-    ) {
-        Row(
-            Modifier.fillMaxWidth()
-                .clickable(role = Role.Button) { expanded = !expanded }
-                .semantics { contentDescription = action }
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            MicroLabel(label, Modifier.weight(1f))
-            Text(summary, style = FitFaceType.numeric, color = summaryColor, maxLines = 1)
-            // `▾`/`▴` rather than `▼`/`▲`: the filled-triangle pair has an emoji
-            // presentation on some builds and would be the only colour glyph on the page.
-            Text(
-                if (expanded) "▴" else "▾",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (expanded) {
-            Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) { body() }
-        }
     }
 }
 
@@ -3896,17 +3866,25 @@ private fun ThumbnailCard(
                 )
             }
         }
-        Text(
-            when {
-                snapshot.isAodSelected -> stringResource(R.string.editor_thumbnail_aod, styleName)
-                snapshot.thumbnailRefreshed -> stringResource(R.string.editor_thumbnail_in_sync, styleName)
-                !snapshot.isDirty -> stringResource(R.string.editor_thumbnail_unedited)
-                snapshot.validationErrors.isNotEmpty() -> stringResource(R.string.editor_thumbnail_blocked)
-                else -> stringResource(R.string.editor_thumbnail_stale)
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (!snapshot.isAodSelected && snapshot.thumbnailRefreshed) {
+            FitDetails(label = stringResource(R.string.editor_thumbnail_details)) {
+                Text(
+                    stringResource(R.string.editor_thumbnail_in_sync, styleName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else if (snapshot.isAodSelected || snapshot.isDirty) {
+            Text(
+                when {
+                    snapshot.isAodSelected -> stringResource(R.string.editor_thumbnail_aod, styleName)
+                    snapshot.validationErrors.isNotEmpty() -> stringResource(R.string.editor_thumbnail_blocked)
+                    else -> stringResource(R.string.editor_thumbnail_stale)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (snapshot.canRefreshThumbnail) {
             FitButton(
                 stringResource(R.string.editor_thumbnail_update),
@@ -4025,13 +4003,7 @@ private fun ProjectWorkspace(
                 style = FitButtonStyle.Secondary,
             )
         }
-        Column(
-            Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                .padding(14.dp),
-        ) {
-            MicroLabel(stringResource(R.string.editor_container_heading))
+        FitDetails(label = stringResource(R.string.editor_container_heading)) {
             Text(
                 stringResource(
                     R.string.editor_container_detail,
@@ -4041,7 +4013,6 @@ private fun ProjectWorkspace(
                     snapshot.widgets.size,
                     snapshot.sourceName,
                 ),
-                modifier = Modifier.padding(top = 9.dp),
                 style = FitFaceType.numeric,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -4512,16 +4483,19 @@ private fun ColumnScope.WatchSection(
             StatusBanner(
                 FitStatus.Fail,
                 failure,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 label = stringResource(R.string.editor_install_stopped_label),
             )
         }
-        // The banner above already says this in full; showing both is noise — and
-        // it was, on every terminal failure: `DirectInstallState.failed` writes the
-        // same string to `failure` and to `message`, so an agent that would not
-        // initialize printed itself twice, once boxed and once bare underneath. The
-        // two fields differ only after a rewind, where `failure` is what went wrong
-        // and `message` is what to do next, and there both are worth showing.
-        if (delivery.message != stopped) {
+        // A failure is already in a banner, including after setup. A rewind's distinct
+        // recovery instruction still belongs here. During transfer, the phase/progress
+        // below are primary; the full protocol message remains in Transfer details.
+        val bannerMessage = if (delivery.setupComplete && delivery.phase == DirectInstallPhase.FAILED) {
+            delivery.failure ?: delivery.message
+        } else stopped
+        val transferHasStatus = delivery.setupComplete &&
+            (delivery.isActive || delivery.phase == DirectInstallPhase.COMPLETE)
+        if (!transferHasStatus && delivery.message != bannerMessage) {
             Text(
                 delivery.message,
                 style = MaterialTheme.typography.bodySmall,
@@ -4648,23 +4622,14 @@ private fun DeviceStatusRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            val plugin = if (state.environment.pluginInstalled) {
-                state.environment.pluginLabel
-                    ?: stringResource(R.string.editor_device_plugin_installed)
-            } else {
-                stringResource(R.string.editor_device_plugin_missing)
-            }
             Text(
-                state.environment.pluginVersionName?.let { version ->
-                    stringResource(R.string.editor_device_plugin_version, plugin, version)
-                } ?: plugin,
+                stringResource(
+                    if (state.environment.pluginInstalled) R.string.editor_device_plugin_installed
+                    else R.string.editor_device_plugin_missing,
+                ),
                 modifier = Modifier.padding(top = 3.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                // Two lines, because the plate beside it leaves a narrow column and a long
-                // label plus a build number does not fit on one. Bounded, because this is
-                // the only thing on the card that can grow without limit, and clipping it
-                // silently used to leave the line ending in a bare separator.
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -4761,17 +4726,15 @@ private fun SetupChecklist(
     val completed = steps.count { state.isStepDone(it.step) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StatusBanner(
-            FitStatus.Warning,
-            stringResource(
-                if (nearbySwitch) {
-                    R.string.editor_setup_banner
-                } else {
-                    R.string.editor_setup_banner_legacy
-                },
-            ),
-            label = stringResource(R.string.editor_setup_label),
-        )
+        FitDetails(label = stringResource(R.string.editor_setup_details)) {
+            Text(
+                stringResource(
+                    if (nearbySwitch) R.string.editor_setup_banner else R.string.editor_setup_banner_legacy,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
         Column(
             Modifier.fillMaxWidth()
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
@@ -4977,11 +4940,8 @@ private fun TransferPanel(
                         label = label,
                         detail = when {
                             phase == DirectInstallPhase.TRANSFERRING && active -> stringResource(
-                                R.string.editor_transfer_progress,
-                                state.acknowledgedWindows,
-                                state.totalWindows,
-                                state.acknowledgedBytes,
-                                state.totalBytes,
+                                R.string.editor_transfer_percent,
+                                (state.progress.coerceIn(0f, 1f) * 100).toInt(),
                             )
                             else -> null
                         },
@@ -5014,6 +4974,7 @@ private fun TransferPanel(
                             R.string.editor_transfer_done_legacy
                         },
                     ),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     label = stringResource(R.string.editor_transfer_done_label),
                 )
                 // Sending the same bytes again is legitimate — a watch can reject a
@@ -5030,7 +4991,11 @@ private fun TransferPanel(
                 )
             }
             state.phase == DirectInstallPhase.FAILED -> {
-                StatusBanner(FitStatus.Fail, state.failure ?: state.message)
+                StatusBanner(
+                    FitStatus.Fail,
+                    state.failure ?: state.message,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
                 // A failure used to leave the page with no action at all, so the only
                 // way forward was restarting the whole setup.
                 FitButton(
@@ -5058,7 +5023,8 @@ private fun TransferPanel(
                 FitButton(
                     stringResource(
                         R.string.editor_transfer_in_progress,
-                        state.phase.name.lowercase().replaceFirstChar(Char::uppercase),
+                        DirectInstallState.TransferPhases.firstOrNull { it.first == state.phase }?.second
+                            ?: state.message,
                     ),
                     {},
                     Modifier.fillMaxWidth(),
@@ -5109,6 +5075,9 @@ private fun PhaseRow(
         Column(Modifier.weight(1f).padding(bottom = if (last) 0.dp else 14.dp)) {
             Text(
                 label,
+                modifier = Modifier.semantics {
+                    if (active) liveRegion = LiveRegionMode.Polite
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (done || active) {
                     MaterialTheme.colorScheme.onSurface
@@ -5131,13 +5100,23 @@ private fun PhaseRow(
 @Composable
 private fun PayloadReadout(state: DirectInstallState) {
     if (state.sha256 == null && state.faceId == null) return
-    Column(
-        Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-            .padding(14.dp),
-    ) {
-        MicroLabel(stringResource(R.string.editor_payload_heading))
+    FitDetails(label = stringResource(R.string.editor_payload_heading)) {
+        Text(
+            state.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.fitText.secondary,
+        )
+        Text(
+            stringResource(
+                R.string.editor_transfer_progress,
+                state.acknowledgedWindows,
+                state.totalWindows,
+                state.acknowledgedBytes,
+                state.totalBytes,
+            ),
+            style = FitFaceType.numeric,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         val none = stringResource(R.string.editor_payload_none)
         Text(
             stringResource(

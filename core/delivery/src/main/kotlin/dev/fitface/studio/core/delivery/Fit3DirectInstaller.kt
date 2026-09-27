@@ -172,7 +172,7 @@ class Fit3DirectInstaller @Inject constructor(
             if (!advance(DeliveryEvent.INSTALL_REQUESTED) {
                     it.copy(
                         phase = DirectInstallPhase.INSTALLING,
-                        message = "Transfer verified. Sending the one-shot install command.",
+                        message = "Transfer checked. Sending the install request.",
                     )
                 }
             ) {
@@ -298,7 +298,7 @@ class Fit3DirectInstaller @Inject constructor(
         mutableState.update {
             it.copy(
                 phase = DirectInstallPhase.INITIALIZING,
-                message = "Initializing the two accessory agents…",
+                message = "Preparing the watch connection…",
             )
         }
         armWatchdog(DirectInstallPhase.INITIALIZING, PHASE_WATCHDOG_MS)
@@ -337,7 +337,7 @@ class Fit3DirectInstaller @Inject constructor(
                 fileName = payload.fileName,
                 sha256 = payload.sha256,
                 totalBytes = payload.size,
-                message = "Freezing and rechecking the validated BIN…",
+                message = "Checking the face file…",
             )
         }
         armWatchdog(DirectInstallPhase.VERIFYING, PHASE_WATCHDOG_MS)
@@ -372,7 +372,7 @@ class Fit3DirectInstaller @Inject constructor(
                 pluginNearbyReleaseAcknowledged = true,
                 phase = if (it.peersCached) DirectInstallPhase.READY else it.phase,
                 message = if (it.peersCached) {
-                    "Channel handoff acknowledged. Ready to send the validated face."
+                    "Channel handoff acknowledged. Ready to send."
                 } else {
                     it.message
                 },
@@ -660,22 +660,21 @@ class Fit3DirectInstaller @Inject constructor(
             }
             when {
                 !updated.peersCached ->
-                    updated.copy(message = "One peer cached; waiting for the other…")
+                    updated.copy(message = "Found one watch service; waiting for the other…")
                 // Re-discovery after a rewind clears the acknowledgement, so the
                 // handover is normally still outstanding here.
                 updated.pluginChannelReleased -> {
                     cancelWatchdog()
                     updated.copy(
                         phase = DirectInstallPhase.READY,
-                        message = "Ready to send the validated face.",
+                        message = "Ready to send.",
                     )
                 }
                 else -> {
                     cancelWatchdog()
                     updated.copy(
                         phase = DirectInstallPhase.PEERS_CACHED,
-                        message = "Both peers are cached and stay cached. Complete step 4 " +
-                            "to let the plugin release the channel.",
+                        message = "Watch found. Complete step 4 to free the connection.",
                     )
                 }
             }
@@ -857,11 +856,11 @@ class Fit3DirectInstaller @Inject constructor(
         // half of it. It used to name disconnecting the watch in the companion app, which
         // does not free the channel — see docs/direct-install.md.
         DirectInstallPhase.PEERS_CACHED ->
-            "Both peers cached. Complete step 4 to let the plugin release the channel."
+            "Watch found. Complete step 4 to free the connection."
         DirectInstallPhase.READY ->
-            "Ready to send the validated face."
+            "Ready to send."
         DirectInstallPhase.IDLE ->
-            "Connect the Fit3 in the companion app, then discover peers."
+            "Connect the watch in its companion app, then find it for transfer."
         else -> previous.message
     }
 

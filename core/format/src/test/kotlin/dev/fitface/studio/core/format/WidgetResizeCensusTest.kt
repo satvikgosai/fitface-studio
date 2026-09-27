@@ -248,7 +248,7 @@ class WidgetResizeCensusTest {
                     assertTrue(hand.supportMessage, "pivot" in hand.supportMessage)
                     assertTrue(
                         hand.supportMessage,
-                        "Resizing scales the artwork and the pivot" in hand.supportMessage,
+                        "Resizing scales its artwork and pivot" in hand.supportMessage,
                     )
                     // Not a tight budget — a hand whose artwork is shared adds a
                     // sentence saying which other widget resizes with it, and that is a

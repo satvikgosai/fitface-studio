@@ -1,7 +1,7 @@
 # The design system, and where it deliberately departs from the design
 
 [`design-system.html`](design-system.html) is the visual reference: open it in a
-browser and it renders the palette in both themes, the type scale, twenty components
+browser and it renders the palette in both themes, the type scale, shared components
 in their real states, the glyph inventory, the screen inventory, and the top bar's
 width budget. It is one self-contained file — no build step, no server, no network —
 so it works from a fresh clone.
@@ -66,6 +66,30 @@ cannot notice that a document went out of date.
   The app's three global actions — report a problem, about, check for update — live
   *inside* that menu rather than beside it, which is what keeps the count at one.
 
+## Optional explanations
+
+[`FitDetails`](../core/ui/src/main/kotlin/dev/fitface/studio/core/ui/FitDetails.kt)
+is the shared expandable section for occasional reference. It uses the existing raised
+surface, border, micro label and chevron. Its whole header is a button with a minimum
+48dp height, an expand/collapse action label and an announced state; tapping, keyboard
+activation and TalkBack all open the same content. The expanded state survives recreation.
+
+Use it for download policy, preview mechanics, restore order, image resolution, file
+metadata and connection/transfer details. Keep task instructions, scope, size limits,
+shared-artwork consequences, errors and recovery outside it. Long content belongs inside
+the page or sheet's scroll region: expanding Download details must not displace the face
+sheet's pinned action.
+
+Canvas keeps movement instructions beside the arrows and scope above them. Its **EDITED**
+badge stays visible in the header alongside two icon actions; the title's accessibility
+description also includes edited status. Background keeps **UNAPPLIED** in its header
+while an image is pending.
+
+During transfer, the phase and percentage are visible while protocol messages, window
+counts and payload identifiers live in Transfer details. Completion says **Request sent**:
+delivery confirms the request, and the reader must still check the watch and restore the
+plugin connection. No phase transitions or delivery checks depend on these labels.
+
 ## The menus
 
 The experimental widget importer is a full-screen child flow opened from Widgets,
@@ -73,6 +97,9 @@ not a sixth rail destination. It uses `FitTopBar`, `FitButton`, `FitChip` and
 `StatusBanner`, with a scrolling body and persistent in-flow errors. Donor rows use
 resource-rendered widget artwork; the review outlines the addition on the target canvas.
 There is no Projects tab in this picker and no new colour or typography token.
+The selection action says **Review widget** (or **Review N widgets**); only the review's
+**Add** button saves an import. **Face size** labels used bytes, and batch review retains
+the minimum-estimate and partial-save consequences.
 
 There are two: `AppMenuAction` in both top bars, and the overflow on a project row. They
 share `FitDropdownMenu` and `FitMenuEntry` so that they are one thing with two anchors —

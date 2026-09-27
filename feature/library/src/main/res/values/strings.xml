@@ -12,16 +12,16 @@
     <string name="library_brand">FitFace Studio</string>
     <string name="library_title_watch_faces">Watch faces</string>
     <string name="library_title_projects">Your projects</string>
-    <string name="library_subtitle_watch_faces">Pick a Fit3 face, download its package, then edit and install it.</string>
-    <string name="library_subtitle_projects">Continue an edit saved privately on this device.</string>
+    <string name="library_subtitle_watch_faces">Choose a face to download, edit and install.</string>
+    <string name="library_subtitle_projects">Continue your saved edits on this device.</string>
     <string name="library_action_refresh">REFRESH</string>
     <string name="library_action_syncing">SYNCING</string>
-    <string name="library_tab_watch_faces">Watch faces</string>
+    <string name="library_tab_watch_faces">@string/library_title_watch_faces</string>
     <string name="library_tab_projects">Projects %1$d</string>
 
     <!-- Catalogue grid -->
     <string name="library_catalogue_a11y">Watch face catalogue</string>
-    <string name="library_search_placeholder">Search faces or ID</string>
+    <string name="library_search_placeholder">Search faces or number</string>
     <string name="library_search_clear">Clear the search</string>
     <string name="library_sort_label">Sort</string>
     <!-- Sort chips, shared by both library pages so switching tabs does not reword them.
@@ -48,14 +48,14 @@
     <string name="library_source_live">Live catalogue</string>
     <string name="library_face_and_style_count">%1$d faces · %2$d styles</string>
     <string name="library_no_matches_title">No matching faces</string>
-    <string name="library_no_matches_detail">Try a name or numeric face ID.</string>
+    <string name="library_no_matches_detail">Try a face name or number.</string>
     <string name="library_loading_a11y">Loading the watch face catalogue</string>
     <string name="library_loading_title">Loading watch faces…</string>
     <string name="library_loading_detail">requesting faces and style previews</string>
     <string name="library_unavailable_title">Catalogue unavailable</string>
     <!-- Only used when nothing recorded a reason; the real one is shown in its place. -->
-    <string name="library_unavailable_detail">No faces were returned. Request the catalogue again, and if it keeps happening use More options in the header to report it.</string>
-    <string name="library_try_again">Try again</string>
+    <string name="library_unavailable_detail">No faces returned. Try again, or use More options → Report a problem.</string>
+    <string name="library_try_again">@string/ui_try_again</string>
     <!-- Labels the header menu and its report entry after a crash, so the offer finds the person. -->
     <string name="library_previous_crash">Report crash</string>
 
@@ -79,8 +79,8 @@
     <string name="library_sheet_face_version">face %1$s · version %2$s</string>
     <!-- The style name is `:core:ui`'s `styleLabel`, the same one the editor shows. -->
     <string name="library_sheet_preview_a11y">Selected preview for %1$s, %2$s</string>
-    <string name="library_sheet_choose_style">Choose starting style</string>
-    <string name="library_sheet_package">Package</string>
+    <string name="library_sheet_choose_style">Starting style</string>
+    <string name="library_sheet_package">Download size</string>
     <string name="library_sheet_error_label">FAILED</string>
     <string name="library_sheet_uneditable_label">N/A</string>
     <string name="library_download">Download &amp; edit</string>
@@ -88,19 +88,19 @@
     <!-- The package is already on disk; only the copy beside the project and the parse
          are left, and saying "downloading" over a caption promising none would be a lie. -->
     <string name="library_open_in_progress">Opening…</string>
-    <string name="library_download_not_editable">Not editable</string>
-    <string name="library_download_cache_note">Packages are cached on this device and only re-downloaded when the store publishes a new version.</string>
+    <string name="library_download_not_editable">@string/ui_not_editable</string>
+    <string name="library_download_cache_note">Downloads stay on this device and are downloaded again only when the store publishes a new version.</string>
     <!-- The face sheet, once this face already has projects of its own. -->
-    <string name="library_sheet_your_projects">Your projects on this face</string>
+    <string name="library_sheet_your_projects">Your projects</string>
     <string name="library_sheet_start_new">Start something new</string>
-    <string name="library_new_project">Start a new project</string>
+    <string name="library_new_project">New project</string>
     <!-- The package is cached but no project was ever kept from it, so there is nothing to
          download and no sibling for "new" to be new beside. -->
     <string name="library_open_edit">Open &amp; edit</string>
-    <string name="library_new_project_note">This face is already on your device, so nothing will be downloaded.</string>
+    <string name="library_new_project_note">Already on this device. No download needed.</string>
     <!-- version name -->
     <string name="library_update_to">Update to %1$s</string>
-    <string name="library_update_note">Starts a new project on the newer version. The projects you already have are left exactly as they are — an edit cannot be carried across a version change.</string>
+    <string name="library_update_note">Creates a new project with the newer face. Existing projects stay unchanged; their edits cannot carry over.</string>
     <string name="library_project_outdated">OUTDATED</string>
     <!-- project name, style, how long ago it was edited -->
     <string name="library_sheet_project_a11y">Open %1$s, %2$s, edited %3$s</string>
@@ -121,13 +121,13 @@
     <string name="library_projects_saved">Saved automatically</string>
     <string name="library_projects_local_count">%1$d local</string>
     <string name="library_projects_empty_title">No projects yet</string>
-    <string name="library_projects_empty_detail">Download a face from Watch faces. Your original package and every committed edit will be kept privately here.</string>
+    <string name="library_projects_empty_detail">Download a watch face to start. The original and your applied edits are saved privately on this device.</string>
     <string name="library_browse">Browse watch faces</string>
     <string name="library_project_face_line">face %1$s · %2$s</string>
     <string name="library_project_face_line_plain">face %1$s</string>
     <string name="library_projects_search_placeholder">Search your projects</string>
     <string name="library_projects_no_matches_title">No matching projects</string>
-    <string name="library_projects_no_matches_detail">Try a project name or a numeric face ID.</string>
+    <string name="library_projects_no_matches_detail">Try a project name or face number.</string>
     <!-- Two projects on one face are the same face to the watch, which keeps one per face. -->
     <!-- A custom face: one face's clock on an empty panel, made on the phone from the store's package. -->
     <string name="library_custom_face_title">Start a custom face</string>
@@ -139,10 +139,10 @@
     <string name="library_custom_face_unavailable">Not in the catalogue right now</string>
     <string name="library_custom_face_source_fallback">Info_4</string>
     <!-- The one fact about the watch this cannot change: it is built on another face's slot. -->
-    <string name="library_custom_face_slot">Built from %1$s, so on your watch it takes %1$s\'s place, and each custom face replaces the last one installed.</string>
+    <string name="library_custom_face_slot">Uses %1$s’s slot on your watch. Installing a custom face replaces %1$s or the last custom face installed.</string>
     <string name="library_custom_face_downloading">Downloading %1$s… %2$d%%</string>
     <string name="library_custom_face_building">Building your custom face…</string>
-    <string name="library_projects_shared_face_note">More than one project shares a face. The watch keeps one face per slot, so installing one replaces the other on your wrist.</string>
+    <string name="library_projects_shared_face_note">Projects based on the same face share a watch slot. Installing one replaces the other on your watch.</string>
     <!-- project name -->
     <string name="library_project_more_a11y">More options for %1$s</string>
     <!-- The spinner that replaces a row's chevron while its project is being opened. This
@@ -150,9 +150,9 @@
     <string name="library_project_opening_a11y">Opening</string>
     <string name="library_project_rename">Rename</string>
     <string name="library_project_duplicate">Duplicate</string>
-    <string name="library_project_delete">Delete</string>
+    <string name="library_project_delete">@string/ui_delete</string>
     <!-- The name the copy was given; the list may be sorted so it landed out of sight. -->
-    <string name="library_project_duplicated">Duplicated as “%1$s”</string>
+    <string name="library_project_duplicated">@string/ui_project_duplicated</string>
     <!-- Export and import. One word each, like Rename/Duplicate/Delete beside them. -->
     <string name="library_action_import">IMPORT</string>
     <string name="library_project_export">Export</string>
@@ -160,18 +160,19 @@
     <string name="library_project_exported">Exported “%1$s” — %2$s</string>
     <!-- project name -->
     <string name="library_project_imported">Imported as “%1$s”</string>
-    <string name="library_rename_title">Rename project</string>
-    <string name="library_rename_label">Project name</string>
-    <string name="library_rename_confirm">Rename</string>
-    <string name="library_delete_title">Delete this project?</string>
+    <string name="library_rename_title">@string/ui_rename_project</string>
+    <string name="library_rename_label">@string/ui_project_name</string>
+    <string name="library_rename_confirm">@string/library_project_rename</string>
+    <string name="library_delete_title">@string/ui_delete_project_title</string>
     <!-- project name -->
-    <string name="library_delete_message">%1$s and every edit saved in it will be removed from this device. The watch face itself can be downloaded again.</string>
-    <string name="library_delete_confirm">Delete</string>
-    <string name="library_cancel">Cancel</string>
+    <string name="library_delete_message">@string/ui_delete_project_message</string>
+    <string name="library_delete_confirm">@string/ui_delete</string>
+    <string name="library_cancel">@string/ui_cancel</string>
 
     <!-- Package size -->
     <string name="library_size_unavailable">size unavailable</string>
     <string name="library_size_bytes">%1$d B</string>
     <string name="library_size_kib">%1$.1f KiB</string>
     <string name="library_size_mib">%1$.1f MiB</string>
+    <string name="library_download_details">Download details</string>
 </resources>
