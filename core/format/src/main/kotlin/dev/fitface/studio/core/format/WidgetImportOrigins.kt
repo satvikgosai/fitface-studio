@@ -34,6 +34,20 @@ data class WidgetImportOrigins(
         if (it.id == id) it.copy(indices = it.indices + index) else it
     })
 
+    /**
+     * Drops the artwork no live widget and no saved removal ([referenced]) still needs —
+     * what is left once an imported widget, and every duplicate of it, has been deleted.
+     *
+     * One is always kept. A table is what lets a container carry what an import added
+     * beside the widget — its font resources, its dictionary entries — and an empty one is
+     * refused: without it, reopening the project would find entries the original face
+     * never had and refuse the edit.
+     */
+    fun pruned(referenced: Set<String>): WidgetImportOrigins {
+        val needed = widgets.filter { it.indices.isNotEmpty() || it.id in referenced }
+        return copy(widgets = needed.ifEmpty { listOfNotNull(widgets.minByOrNull { it.baseline.length }) })
+    }
+
     /** Fail closed before opening an archive or committing provenance-dependent bytes. */
     fun validate(original: Fit3Container, current: Fit3Container) {
         require(originalSha256 == digest(original.toByteArray())) { "Imported artwork belongs to a different original face." }

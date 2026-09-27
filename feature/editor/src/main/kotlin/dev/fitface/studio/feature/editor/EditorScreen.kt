@@ -10,11 +10,13 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -26,8 +28,10 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxWithConstraintsScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,10 +51,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
@@ -75,12 +81,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -88,7 +100,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -117,6 +129,7 @@ import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.WidgetCategory
 import dev.fitface.studio.core.model.WidgetGuide
+import dev.fitface.studio.core.model.WidgetImageLayer
 import dev.fitface.studio.core.model.WidgetLayerComposer
 import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.WidgetResizeStepPercent
@@ -143,6 +156,8 @@ import dev.fitface.studio.core.ui.fitColors
 import dev.fitface.studio.core.ui.fitText
 import dev.fitface.studio.core.ui.styleLabel
 import java.io.File
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
@@ -218,6 +233,27 @@ fun EditorRoute(
         }
     }
 
+    // A set edit that stopped partway: said in words, because the face has visibly changed
+    // and a bare error over it would read as though nothing had.
+    val stopped = state.selectionStopped
+    val stoppedText = stopped?.let {
+        stringResource(
+            when (it.action) {
+                SelectionAction.DUPLICATE -> R.string.editor_selection_stopped_duplicate
+                SelectionAction.REMOVE -> R.string.editor_selection_stopped_remove
+            },
+            it.done, it.total, it.reason,
+        )
+    }
+    LaunchedEffect(stopped?.id) {
+        if (stopped == null || stoppedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(stoppedText, withDismissAction = true, duration = SnackbarDuration.Long)
+        } finally {
+            viewModel.clearSelectionStopped(stopped.id)
+        }
+    }
+
     state.diagnosticsReport?.let { report ->
         DiagnosticsDialog(report = report, onDismiss = viewModel::dismissDiagnostics)
     }
@@ -231,6 +267,13 @@ fun EditorRoute(
         onCheckForUpdate = onCheckForUpdate,
         onVariant = viewModel::selectVariant,
         onWidget = viewModel::selectWidget,
+        selection = SelectionActions(
+            onToggle = viewModel::toggleInSelection,
+            onClear = viewModel::clearSelection,
+            onNudge = viewModel::nudgeSelection,
+            onDuplicate = viewModel::duplicateSelection,
+            onRemove = viewModel::removeSelection,
+        ),
         onMoveWidget = viewModel::moveWidget,
         onNudgeWidget = viewModel::nudgeWidget,
         onRemoveWidget = viewModel::removeSelectedWidget,
@@ -288,11 +331,11 @@ private enum class EditorPage {
      * unreviewed preview did not open Install: it silently landed on Validate and marked
      * the preview reviewed, so the rail said one thing and the screen said another. The
      * gate that redirect implemented is a property of the layout now — the validated
-     * render is the second thing on this page and the send button is near the last — and
+     * render is the first thing on this page and the send button is near the last — and
      * `previewReviewed` still arms the button, so the mechanism survives without a page
      * that exists only to be passed through.
      */
-    Send,
+    Install,
     Project,
     ;
 
@@ -318,7 +361,7 @@ private enum class EditorPage {
      * is the bug, so Send gets a read-only render.
      */
     val canvasIsEditable: Boolean
-        get() = this != Send
+        get() = this != Install
 }
 
 @Composable
@@ -331,6 +374,7 @@ private fun EditorScreen(
     onCheckForUpdate: () -> Unit,
     onVariant: (EditorVariant) -> Unit,
     onWidget: (Int?) -> Unit,
+    selection: SelectionActions,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onRemoveWidget: () -> Unit,
@@ -378,14 +422,14 @@ private fun EditorScreen(
     val selected = snapshot?.widgets?.singleOrNull {
         it.globalIndex == state.selectedWidgetIndex
     }
-    // No redirect any more: Send is one page, so there is nowhere to be quietly sent
+    // No redirect any more: Install is one page, so there is nowhere to be quietly sent
     // instead. Arriving marks the preview reviewed, which is what arms the send button,
-    // and `SendWorkspace` re-marks it on every snapshot so an edit made on the page
+    // and `InstallWorkspace` re-marks it on every snapshot so an edit made on the page
     // cannot leave it inert.
     val navigate: (EditorPage) -> Unit = { target ->
         if (target != page) {
             page = target
-            if (target == EditorPage.Send) onPreviewReviewed()
+            if (target == EditorPage.Install) onPreviewReviewed()
         }
     }
     val goBack: () -> Unit = {
@@ -460,6 +504,7 @@ private fun EditorScreen(
                         onNavigate = navigate,
                         onVariant = onVariant,
                         onWidget = onWidget,
+                        selection = selection,
                         onMoveWidget = onMoveWidget,
                         onNudgeWidget = onNudgeWidget,
                         onRemoveWidget = onRemoveWidget,
@@ -659,7 +704,7 @@ private fun EditorHeader(
         )
         EditorPage.Background -> stringResource(R.string.editor_page_background)
         EditorPage.Styles -> stringResource(R.string.editor_page_styles)
-        EditorPage.Send -> stringResource(R.string.editor_page_send)
+        EditorPage.Install -> stringResource(R.string.editor_page_install)
         EditorPage.Project -> stringResource(R.string.editor_page_project)
     }
     val subtitle = when (page) {
@@ -705,7 +750,7 @@ private fun EditorHeader(
                 snapshot.styleNames.size,
             )
         }
-        EditorPage.Send -> stringResource(R.string.editor_subtitle_send)
+        EditorPage.Install -> stringResource(R.string.editor_subtitle_install)
         EditorPage.Project -> snapshot.sourceName
     }
     // Order matters. The app menu is on every page while the badge and the overflow are
@@ -753,7 +798,7 @@ private fun EditorRail(
     onNavigate: (EditorPage) -> Unit,
 ) {
     // The labels are the page titles, so the rail and the header cannot drift apart. The
-    // face is the exception and has a label of its own: its header is titled with the
+    // canvas is the exception and has a label of its own: its header is titled with the
     // project's name, which is the only thing on that screen telling two projects on one
     // face apart.
     //
@@ -761,11 +806,11 @@ private fun EditorRail(
     // here the only way back to it was the `‹` arrow — which everywhere else in this app
     // means "leave". Now `‹` means one thing again.
     val destinations = listOf(
-        Triple("▣", stringResource(R.string.editor_page_face), EditorPage.Canvas),
+        Triple("▣", stringResource(R.string.editor_page_canvas), EditorPage.Canvas),
         Triple("▦", stringResource(R.string.editor_page_widgets), EditorPage.Widgets),
         Triple("▧", stringResource(R.string.editor_page_background), EditorPage.Background),
         Triple("◫", stringResource(R.string.editor_page_styles), EditorPage.Styles),
-        Triple("⇧", stringResource(R.string.editor_page_send), EditorPage.Send),
+        Triple("⇧", stringResource(R.string.editor_page_install), EditorPage.Install),
     )
     check(destinations.size == RailDestinationCount) {
         // The budget below is a fifth of the bar. A sixth entry silently re-clips the
@@ -853,6 +898,21 @@ private fun RailItem(
  */
 private val RailLabel = FitFaceType.micro.copy(letterSpacing = 0.sp)
 
+/**
+ * The scope toggle's mark: a frame with a stack of rules in it, for "every style".
+ *
+ * `◫`, the rail's own Styles mark, was the first choice and read as a thin empty box among
+ * six solid ones. Picked off a rendered sampler like the rest of the tray — and note what
+ * was rejected and why: `☷` reads "many layers" best of all, and sits in Miscellaneous
+ * Symbols, the block `⚙` and `ℹ` fall out of into the emoji font on many builds. `≣` is
+ * clean but is three bars beside the app menu's `≡`, which is two glyphs one stroke apart
+ * doing unrelated things.
+ */
+private const val ScopeGlyph = "\u25A4"
+
+/** Between two buttons of the selection tray, on both of its rows. */
+private val ActionGap = 6.dp
+
 private val RailItemHorizontalPadding = 2.dp
 
 /** The gap between a rail item's glyph and its label. */
@@ -936,6 +996,7 @@ private fun EditorPageContent(
     onNavigate: (EditorPage) -> Unit,
     onVariant: (EditorVariant) -> Unit,
     onWidget: (Int?) -> Unit,
+    selection: SelectionActions,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onRemoveWidget: () -> Unit,
@@ -975,17 +1036,27 @@ private fun EditorPageContent(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
             onResizeWidget, onWidgetColor, onDuplicateWidget, onRemoveWidget, onApplyAll,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
-            modifier,
+            selection, modifier,
         )
         EditorPage.Widgets -> WidgetsWorkspace(
             snapshot = snapshot,
             selected = selected,
+            multiSelection = state.multiSelection,
             enabled = !state.isWorking,
             // The list is a picker and the face is the editor. It used to open the
             // inspector, which is the page of *facts* — so picking a widget from a list
             // put you two taps from moving it and showed you its type and sequence id
-            // instead. Every edit is on the face now, so that is where a pick lands.
-            onSelect = { onWidget(it.globalIndex); onNavigate(EditorPage.Canvas) },
+            // instead. Every edit is on the face now, so that is where a pick lands —
+            // unless a set is being built, when a tap changes the set and stays here, the
+            // way the import picker's list does.
+            onSelect = { widget ->
+                val building = state.multiSelection.isNotEmpty()
+                onWidget(widget.globalIndex)
+                if (!building) onNavigate(EditorPage.Canvas)
+            },
+            onHold = { selection.onToggle(it.globalIndex) },
+            onClearSet = selection.onClear,
+            onEditSet = { onNavigate(EditorPage.Canvas) },
             onRestore = onRestoreWidget,
             onImport = onImportWidget,
             modifier = modifier,
@@ -999,13 +1070,14 @@ private fun EditorPageContent(
             onChooseImage, onResetImagePlacement, onDiscardImage, onApplyImage, onTintCyan,
             onTintMagenta, modifier,
         )
-        EditorPage.Styles -> StylesWorkspace(snapshot, !state.isWorking, onVariant, modifier)
-        EditorPage.Send -> SendWorkspace(
+        EditorPage.Styles -> StylesWorkspace(
+            snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, modifier,
+        )
+        EditorPage.Install -> InstallWorkspace(
             snapshot = snapshot,
             state = state,
             showFace = !sideCanvasVisible,
             onReviewed = onPreviewReviewed,
-            onSyncThumbnail = onSyncThumbnail,
             onReset = onReset,
             onGrantNearby = onGrantNearby,
             onOpenCompanion = onOpenCompanion,
@@ -1049,8 +1121,12 @@ private fun CanvasWorkspace(
     onApplyAll: (Boolean) -> Unit,
     onOpenWidgets: () -> Unit,
     onInspect: () -> Unit,
+    selection: SelectionActions,
     modifier: Modifier = Modifier,
 ) {
+    val picks = state.multiSelection.mapNotNull { index ->
+        snapshot.widgets.firstOrNull { it.globalIndex == index }
+    }.takeIf { it.size >= 2 }.orEmpty()
     // Stacked, the face is only as tall as the hint and the selection panel leave it, and
     // a landscape phone leaves all three about 340dp: the face came out a third of its
     // portrait size, and tapping a widget — which is what adds the panel — shrank it to a
@@ -1062,7 +1138,7 @@ private fun CanvasWorkspace(
         val face: @Composable (Modifier) -> Unit = { faceModifier ->
             CanvasFace(
                 state, snapshot, selected, onWidget, onMoveWidget, onTransformImage,
-                faceModifier,
+                selection.onToggle, faceModifier,
             )
         }
         val actions: @Composable (WidgetGuide) -> Unit = { widget ->
@@ -1079,6 +1155,12 @@ private fun CanvasWorkspace(
                 onInspect = onInspect,
             )
         }
+        val tray: @Composable () -> Unit = {
+            when {
+                picks.isNotEmpty() -> SelectionSetBar(picks, state, snapshot, selection, onApplyAll)
+                selected != null -> actions(selected)
+            }
+        }
         if (canvasPageSplits(maxWidth, maxHeight)) {
             Row(Modifier.fillMaxSize()) {
                 face(Modifier.weight(1f).fillMaxHeight())
@@ -1087,15 +1169,15 @@ private fun CanvasWorkspace(
                         .verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    CanvasHint(state, selected, onOpenWidgets)
-                    selected?.let { actions(it) }
+                    CanvasHint(state, selected, picks.size, onOpenWidgets)
+                    tray()
                 }
             }
         } else {
             Column(Modifier.fillMaxSize()) {
                 face(Modifier.weight(1f).fillMaxWidth())
-                CanvasHint(state, selected, onOpenWidgets)
-                selected?.let { actions(it) }
+                CanvasHint(state, selected, picks.size, onOpenWidgets)
+                tray()
             }
         }
     }
@@ -1116,6 +1198,7 @@ private fun CanvasFace(
     onWidget: (Int?) -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onTransformImage: (Float, Float, Float) -> Unit,
+    onHoldWidget: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(
@@ -1134,6 +1217,9 @@ private fun CanvasFace(
             onMoveWidget = onMoveWidget,
             onTransformImage = onTransformImage,
             modifier = Modifier.width(fittedCanvasWidth(snapshot, CanvasMaxWidth)),
+            multiSelection = state.multiSelection,
+            pendingSetMove = state.pendingSetMove,
+            onHoldWidget = onHoldWidget,
         )
     }
 }
@@ -1142,6 +1228,8 @@ private fun CanvasFace(
 private fun CanvasHint(
     state: EditorUiState,
     selected: WidgetGuide?,
+    /** How many widgets are selected together, or zero. */
+    setSize: Int,
     onOpenWidgets: () -> Unit,
 ) {
     Column(
@@ -1151,15 +1239,16 @@ private fun CanvasHint(
         Text(
             stringResource(
                 when {
+                    setSize > 0 -> R.string.editor_canvas_hint_set
                     selected != null && selected.placement != WidgetPlacement.CANVAS &&
                         state.snapshot?.isAodSelected == true -> R.string.editor_canvas_nudge_aod
                     selected != null && selected.placement != WidgetPlacement.CANVAS &&
-                        state.applyWidgetEditsToAllStyles -> R.string.editor_canvas_nudge_all_styles
+                        state.editsReachOtherStyles -> R.string.editor_canvas_nudge_all_styles
                     selected != null && selected.placement != WidgetPlacement.CANVAS ->
                         R.string.editor_canvas_nudge_this_style
                     selected != null && state.snapshot?.isAodSelected == true ->
                         R.string.editor_canvas_hint_aod
-                    selected != null && state.applyWidgetEditsToAllStyles ->
+                    selected != null && state.editsReachOtherStyles ->
                         R.string.editor_canvas_hint_all_styles
                     selected != null -> R.string.editor_canvas_hint_this_style
                     // What the render leaves out, said where the reader is looking at it
@@ -1173,7 +1262,7 @@ private fun CanvasHint(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (selected == null) {
+        if (selected == null && setSize == 0) {
             TextButton(onClick = onOpenWidgets) {
                 Text(
                     stringResource(R.string.editor_canvas_pick_from_list),
@@ -1228,6 +1317,23 @@ private val CanvasMaxWidth = 288.dp
 /** The same, for the persistent canvas beside every page in the wide layout. */
 private val SidePaneCanvasMaxWidth = 260.dp
 
+/** The watch panel, 256×402, as a width-over-height ratio. */
+private const val PanelAspectRatio = 256f / 402f
+
+/**
+ * The plate on the install card, sized to the four lines of text beside it.
+ *
+ * At 104dp it stood 163dp tall against about 90dp of text and the card carried 50dp of
+ * nothing under the plugin line. Driving the height off the text instead (`IntrinsicSize`)
+ * did not fix it — the plate's own bitmap answers the intrinsic query, so it went on
+ * setting the height — and sizing the plate *down* to 90dp of text leaves it barely wider
+ * than the 44dp stamp this replaced. 80dp is the compromise: 126dp tall against ~90dp of
+ * text, with the column centred so what is left reads as the card's padding rather than as
+ * a hole under the last line.
+ */
+private val InstallPlateWidth = 80.dp
+private val InstallPlateHeight = InstallPlateWidth / PanelAspectRatio
+
 /**
  * Everything a widget edit is, under the face that is being edited.
  *
@@ -1260,7 +1366,6 @@ private fun SelectionActionBar(
     onInspect: () -> Unit,
 ) {
     var showColors by remember(widget.globalIndex) { mutableStateOf(false) }
-    var showMore by remember(widget.globalIndex) { mutableStateOf(false) }
     var confirmRemoval by rememberSaveable(widget.globalIndex) { mutableStateOf(false) }
     if (confirmRemoval) {
         RemoveWidgetDialog(
@@ -1313,7 +1418,7 @@ private fun SelectionActionBar(
         ) {
             NudgeDirection.entries.forEach { direction ->
                 RepeatingNudgeButton(
-                    label = direction.glyph,
+                    direction = direction,
                     enabled = widget.canEditPosition && enabled,
                     modifier = Modifier.weight(1f),
                     onStep = { pixels ->
@@ -1326,46 +1431,56 @@ private fun SelectionActionBar(
                 )
             }
         }
+        // One row, every button taking an equal share of it — the same shape as the nudge
+        // row above, so the tray reads as one control surface rather than a cluster with a
+        // hole in it. It used to pin `⋯` to the right with a spacer, which left the empty
+        // space in the middle of the only row on this card that could have used the width.
+        //
+        // The two resize buttons are adjacent. They were a button, the size, and a button,
+        // which put the pair that do one job at opposite ends and printed a figure the
+        // header above already prints; dropping that readout is what bought the room for
+        // duplicate and remove, which were a tap deeper for no reason.
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            horizontalArrangement = Arrangement.spacedBy(ActionGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // `−` `+` `⧉` `✕` — picked off a rendered sampler rather than a character
+            // table, because a glyph this app cannot draw is a blank button. Two that read
+            // well on paper were rejected there: `❐` fell back to a plain square, losing
+            // the "two sheets" that says duplicate, and `␡` came out as tiny DEL letters.
             FitIconButton(
-                glyph = "⊖",
+                glyph = "−",
                 contentDescription = stringResource(R.string.editor_action_smaller_a11y),
                 onClick = { onResize(false) },
+                modifier = Modifier.weight(1f),
                 enabled = enabled && widget.canResize &&
                     nextWidgetSize(widget, grow = false) != null,
             )
-            // The size between the two buttons that change it, so resizing no longer needs
-            // the inspector's separate readout to know what it did. Mono, because the
-            // buttons either side of it change the figure and a proportional digit changes
-            // width with its value.
-            Text(
-                stringResource(R.string.editor_size_value, widget.width, widget.height),
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.Center,
-                style = FitFaceType.numeric,
-                color = if (widget.canResize) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    MaterialTheme.fitText.tertiary
-                },
-                maxLines = 1,
-            )
             FitIconButton(
-                glyph = "⊕",
+                glyph = "+",
                 contentDescription = stringResource(R.string.editor_action_larger_a11y),
                 onClick = { onResize(true) },
+                modifier = Modifier.weight(1f),
                 enabled = enabled && widget.canResize &&
                     nextWidgetSize(widget, grow = true) != null,
             )
-            Box(
-                Modifier.width(1.dp).height(24.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant),
+            FitIconButton(
+                glyph = "⧉",
+                contentDescription = stringResource(R.string.editor_duplicate),
+                onClick = onDuplicate,
+                modifier = Modifier.weight(1f),
+                enabled = enabled,
             )
-            Box {
+            FitIconButton(
+                glyph = "✕",
+                contentDescription = stringResource(R.string.editor_remove_widget),
+                onClick = { confirmRemoval = true },
+                modifier = Modifier.weight(1f),
+                enabled = enabled,
+                tint = MaterialTheme.colorScheme.error,
+            )
+            Box(Modifier.weight(1f)) {
                 // Always present, even with nothing to set. A control that vanishes when it
                 // cannot act leaves the reader to guess whether this widget has no colour or
                 // the app has no such feature; the menu says which.
@@ -1374,6 +1489,7 @@ private fun SelectionActionBar(
                     contentDescription = stringResource(R.string.editor_action_color_a11y),
                     enabled = enabled,
                     onClick = { showColors = true },
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 FitDropdownMenu(showColors, { showColors = false }) {
                     val current = widget.colorArgb
@@ -1397,51 +1513,43 @@ private fun SelectionActionBar(
                     }
                 }
             }
-            // Last, so its right edge is pinned to the padding: an action that is always
-            // there must not slide sideways when a neighbour's state changes.
-            Box {
+            // The scope toggle, which used to be a line of the overflow menu. `◫` is the
+            // rail's own glyph for Styles, which is exactly what this governs, and the tint
+            // is the state: primary when the edit reaches every style, inert when it does
+            // not. Disabled rather than hidden where it governs nothing — an always-on
+            // edit is never joined to a style and an imported widget carries its own scope
+            // — because a control that vanishes leaves the reader guessing which it was.
+            run {
+                val all = state.applyWidgetEditsToAllStyles
+                val scoped = !snapshot.isAodSelected && snapshot.styleNames.size > 1 &&
+                    widget.importedFromFaceId == null
                 FitIconButton(
-                    glyph = "⋯",
-                    contentDescription = stringResource(R.string.editor_action_more_a11y),
-                    onClick = { showMore = true },
-                    enabled = enabled,
+                    glyph = ScopeGlyph,
+                    contentDescription = stringResource(
+                        when {
+                            !scoped -> R.string.editor_action_scope_fixed_a11y
+                            all -> R.string.editor_action_scope_on_a11y
+                            else -> R.string.editor_action_scope_off_a11y
+                        },
+                        snapshot.styleNames.size,
+                    ),
+                    onClick = { onApplyAll(!all) },
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled && scoped,
+                    selected = all && scoped,
                 )
-                FitDropdownMenu(showMore, { showMore = false }) {
-                    FitMenuEntry(stringResource(R.string.editor_duplicate)) {
-                        showMore = false
-                        onDuplicate()
-                    }
-                    FitMenuEntry(
-                        stringResource(R.string.editor_remove_widget),
-                        tint = MaterialTheme.colorScheme.error,
-                    ) { showMore = false; confirmRemoval = true }
-                    // Omitted where it governs nothing: an always-on-display edit is never
-                    // joined to a style, and an imported widget carries its own scope. The
-                    // canvas hint below already says which of those is in force.
-                    if (!snapshot.isAodSelected && widget.importedFromFaceId == null) {
-                        val all = state.applyWidgetEditsToAllStyles
-                        FitMenuEntry(
-                            // Worded as what it is rather than as what the tap does: an
-                            // entry reading "Edit only Style 1" states the opposite of the
-                            // setting in force, which is the one thing this line exists to
-                            // report. The tick carries the state instead, and the canvas
-                            // hint underneath already spells out the consequence.
-                            label = checkedLabel(
-                                stringResource(
-                                    R.string.editor_action_scope,
-                                    snapshot.styleNames.size,
-                                ),
-                                all,
-                            ),
-                            tint = if (all) MaterialTheme.colorScheme.primary else null,
-                        ) { showMore = false; onApplyAll(!all) }
-                    }
-                    FitMenuEntry(stringResource(R.string.editor_action_record_details)) {
-                        showMore = false
-                        onInspect()
-                    }
-                }
             }
+            // Last, so its right edge is pinned to the card's padding: an action that is
+            // always present must not slide sideways when a neighbour's state changes.
+            // `›` rather than a second `⋯` — the canvas header already carries one, and
+            // two ellipses on one screen read as one control with two behaviours.
+            FitIconButton(
+                glyph = "›",
+                contentDescription = stringResource(R.string.editor_action_record_details),
+                onClick = onInspect,
+                modifier = Modifier.weight(1f),
+                enabled = enabled,
+            )
         }
         MicroLabel(
             stringResource(
@@ -1455,16 +1563,6 @@ private fun SelectionActionBar(
         )
     }
 }
-
-/**
- * A menu entry that is either on or off, with the tick in the label.
- *
- * `FitMenuEntry` is one string, and a `DropdownMenuItem`'s leading slot is not in this
- * design's vocabulary — so the state goes where the label is. The gap is an en space, which
- * keeps the unticked entries aligned with the ticked ones in a proportional face.
- */
-private fun checkedLabel(label: String, checked: Boolean) =
-    if (checked) "✓\u2002$label" else "\u2002\u2002$label"
 
 /**
  * The selected widget's colour, as a swatch rather than a tinted glyph.
@@ -1483,12 +1581,13 @@ private fun ColorSwatchButton(
     contentDescription: String,
     enabled: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val ring = MaterialTheme.colorScheme.outlineVariant
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(38.dp).semantics {
+        modifier = Modifier.size(38.dp).then(modifier).semantics {
             this.contentDescription = contentDescription
         },
         shape = MaterialTheme.shapes.small,
@@ -1502,6 +1601,16 @@ private fun ColorSwatchButton(
         )
     }
 }
+
+/**
+ * A menu entry that is either on or off, with the tick in the label.
+ *
+ * `FitMenuEntry` is one string, and a `DropdownMenuItem`'s leading slot is not in this
+ * design's vocabulary — so the state goes where the label is. The gap is an en space, which
+ * keeps the unticked entries aligned with the ticked ones in a proportional face.
+ */
+private fun checkedLabel(label: String, checked: Boolean) =
+    if (checked) "\u2713\u2002$label" else "\u2002\u2002$label"
 
 /** The four colours a Pair's record can carry, in the order the inspector lists them. */
 private val WidgetColors = listOf(
@@ -1526,12 +1635,24 @@ private fun RemoveWidgetDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val importedFrom = widget.importedFromFaceId
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.editor_remove_title, widget.globalIndex)) },
+        title = {
+            Text(
+                stringResource(
+                    if (importedFrom != null) R.string.editor_delete_title else R.string.editor_remove_title,
+                    widget.globalIndex,
+                ),
+            )
+        },
         text = {
             Text(
-                if (state.applyWidgetEditsToAllStyles && !snapshot.isAodSelected) {
+                if (importedFrom != null) {
+                    // It is not coming back from a list, so the dialog says so, and says
+                    // where it can be had again.
+                    stringResource(R.string.editor_delete_body_imported, importedFrom)
+                } else if (state.editsReachOtherStyles) {
                     stringResource(R.string.editor_remove_body_all_styles)
                 } else {
                     stringResource(
@@ -1543,7 +1664,11 @@ private fun RemoveWidgetDialog(
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.editor_remove_confirm))
+                Text(
+                    stringResource(
+                        if (importedFrom != null) R.string.editor_delete_confirm else R.string.editor_remove_confirm,
+                    ),
+                )
             }
         },
         dismissButton = {
@@ -1552,12 +1677,283 @@ private fun RemoveWidgetDialog(
     )
 }
 
-private enum class NudgeDirection(val glyph: String, val deltaX: Int, val deltaY: Int) {
-    LEFT("←", -1, 0),
-    UP("↑", 0, -1),
-    DOWN("↓", 0, 1),
-    RIGHT("→", 1, 0),
+/**
+ * Whether a widget edit reaches styles other than the one on the canvas: the switch is on,
+ * a numbered style is showing, and there is another one to reach.
+ *
+ * The flag alone is not the answer. On a face with one style — a custom face — it can be on
+ * and govern nothing, and a hint or a dialog that says "every style that has this widget"
+ * there is describing styles that do not exist.
+ */
+private val EditorUiState.editsReachOtherStyles: Boolean
+    get() = applyWidgetEditsToAllStyles &&
+        snapshot?.let { !it.isAodSelected && it.styleNames.size > 1 } == true
+
+/**
+ * The actions a set of widgets takes, bundled so they travel through the page plumbing as
+ * one argument rather than five more on every signature between the route and the tray.
+ */
+internal class SelectionActions(
+    val onToggle: (Int) -> Unit,
+    val onClear: () -> Unit,
+    val onNudge: (Int, Int) -> Unit,
+    val onDuplicate: () -> Unit,
+    val onRemove: () -> Unit,
+)
+
+/**
+ * The tray for several widgets at once.
+ *
+ * The single tray's shape, row for row, so the face above does not change size when a set
+ * starts: the same header line, the same four arrows, the same seven buttons. The ones a set
+ * cannot do — resize, colour, the record's details — are there and disabled, the rule every
+ * control on this tray follows, so the reader sees that a set cannot do them rather than
+ * wondering where they went.
+ *
+ * Every action is the single-widget one, run once per member: moves through the nudge
+ * queue, duplicates and removals through the repository's own calls.
+ */
+@Composable
+private fun SelectionSetBar(
+    picks: List<WidgetGuide>,
+    state: EditorUiState,
+    snapshot: EditorSnapshot,
+    selection: SelectionActions,
+    onApplyAll: (Boolean) -> Unit,
+) {
+    var confirmRemoval by rememberSaveable { mutableStateOf(false) }
+    if (confirmRemoval) {
+        RemoveSetDialog(
+            picks = picks,
+            state = state,
+            snapshot = snapshot,
+            onConfirm = { confirmRemoval = false; selection.onRemove() },
+            onDismiss = { confirmRemoval = false },
+        )
+    }
+    val enabled = !state.isWorking
+    val movable = picks.any { it.canEditPosition }
+    Column(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(Modifier.width(3.dp).height(24.dp).background(MaterialTheme.colorScheme.tertiary))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.editor_selection_set_title, picks.size),
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                )
+                Text(
+                    // In pick order, the numbers on the face: which widgets, not how big.
+                    picks.joinToString(" · ") { "#${it.globalIndex}" },
+                    color = MaterialTheme.colorScheme.primary,
+                    style = FitFaceType.numeric,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // A plain text action, so the header keeps the single tray's height.
+            Text(
+                stringResource(R.string.editor_selection_clear),
+                modifier = Modifier.clip(MaterialTheme.shapes.small)
+                    .clickable(enabled = enabled, onClick = selection.onClear)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            NudgeDirection.entries.forEach { direction ->
+                RepeatingNudgeButton(
+                    direction = direction,
+                    enabled = movable && enabled,
+                    modifier = Modifier.weight(1f),
+                    onStep = { pixels ->
+                        selection.onNudge(direction.deltaX * pixels, direction.deltaY * pixels)
+                    },
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(ActionGap),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FitIconButton(
+                glyph = "−",
+                contentDescription = stringResource(R.string.editor_action_smaller_a11y),
+                onClick = {},
+                modifier = Modifier.weight(1f),
+                enabled = false,
+            )
+            FitIconButton(
+                glyph = "+",
+                contentDescription = stringResource(R.string.editor_action_larger_a11y),
+                onClick = {},
+                modifier = Modifier.weight(1f),
+                enabled = false,
+            )
+            FitIconButton(
+                glyph = "⧉",
+                contentDescription = stringResource(R.string.editor_selection_duplicate_a11y, picks.size),
+                onClick = selection.onDuplicate,
+                modifier = Modifier.weight(1f),
+                enabled = enabled,
+            )
+            FitIconButton(
+                glyph = "✕",
+                contentDescription = stringResource(R.string.editor_selection_remove_a11y, picks.size),
+                onClick = { confirmRemoval = true },
+                modifier = Modifier.weight(1f),
+                enabled = enabled,
+                tint = MaterialTheme.colorScheme.error,
+            )
+            ColorSwatchButton(
+                color = null,
+                contentDescription = stringResource(R.string.editor_action_color_a11y),
+                enabled = false,
+                onClick = {},
+                modifier = Modifier.weight(1f),
+            )
+            run {
+                // It governs the stock members; an imported one keeps its own style either
+                // way, which is what the repository enforces per widget.
+                val all = state.applyWidgetEditsToAllStyles
+                val scoped = !snapshot.isAodSelected && snapshot.styleNames.size > 1 &&
+                    picks.any { it.importedFromFaceId == null }
+                FitIconButton(
+                    glyph = ScopeGlyph,
+                    contentDescription = stringResource(
+                        when {
+                            !scoped -> R.string.editor_action_scope_fixed_a11y
+                            all -> R.string.editor_action_scope_on_a11y
+                            else -> R.string.editor_action_scope_off_a11y
+                        },
+                        snapshot.styleNames.size,
+                    ),
+                    onClick = { onApplyAll(!all) },
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled && scoped,
+                    selected = all && scoped,
+                )
+            }
+            FitIconButton(
+                glyph = "›",
+                contentDescription = stringResource(R.string.editor_action_record_details),
+                onClick = {},
+                modifier = Modifier.weight(1f),
+                enabled = false,
+            )
+        }
+        MicroLabel(
+            stringResource(if (movable) R.string.editor_nudge_hint_set else R.string.editor_nudge_locked),
+            Modifier.align(Alignment.CenterHorizontally).padding(top = 9.dp),
+        )
+    }
 }
+
+/**
+ * Confirms removing a set, and says what becomes of each kind of member.
+ *
+ * The two kinds end differently now: a stock widget goes to the Removed list and can be
+ * put back, and one imported from another face is deleted with its artwork. A set can hold
+ * both, so the dialog counts each.
+ */
+@Composable
+private fun RemoveSetDialog(
+    picks: List<WidgetGuide>,
+    state: EditorUiState,
+    snapshot: EditorSnapshot,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val imported = picks.count { it.importedFromFaceId != null }
+    val stock = picks.size - imported
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.editor_remove_set_title, picks.size)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (stock > 0) {
+                    Text(
+                        if (state.editsReachOtherStyles) {
+                            pluralStringResource(R.plurals.editor_remove_set_stock_all, stock, stock)
+                        } else {
+                            pluralStringResource(R.plurals.editor_remove_set_stock_one, stock, stock,
+                                snapshot.selectedVariantLabel())
+                        },
+                    )
+                }
+                if (imported > 0) {
+                    Text(pluralStringResource(R.plurals.editor_remove_set_imported, imported, imported))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.editor_remove_confirm)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
+        },
+    )
+}
+
+/**
+ * [degrees] turns [NudgeArrow]'s right-pointing arrow to face the way the step moves.
+ */
+private enum class NudgeDirection(
+    val deltaX: Int,
+    val deltaY: Int,
+    val degrees: Float,
+    @StringRes val description: Int,
+) {
+    LEFT(-1, 0, 180f, R.string.editor_nudge_left_a11y),
+    UP(0, -1, 270f, R.string.editor_nudge_up_a11y),
+    DOWN(0, 1, 90f, R.string.editor_nudge_down_a11y),
+    RIGHT(1, 0, 0f, R.string.editor_nudge_right_a11y),
+}
+
+/**
+ * One arrow, turned to face [direction].
+ *
+ * The four used to be text — `←` `↑` `↓` `→` — and a font draws those as two pairs, not one
+ * shape four ways: the horizontal ones sit on the maths axis and the vertical ones span the
+ * cap height. On the emulator `←` and `→` rode 4px lower than `↑` and `↓`, all four sat
+ * below their buttons' centres, and a phone whose font takes them from a fallback can size
+ * the pairs differently as well. One path rotated about the middle of its own box is the
+ * same size in every direction and centred by construction.
+ */
+@Composable
+private fun NudgeArrow(direction: NudgeDirection) {
+    val color = LocalContentColor.current
+    Canvas(Modifier.size(NudgeArrowSize)) {
+        val stroke = NudgeArrowStroke.toPx()
+        val reach = size.minDimension / 2 - stroke / 2
+        val head = reach * .6f
+        val tip = Offset(center.x + reach, center.y)
+        val arrow = Path().apply {
+            moveTo(center.x - reach, center.y)
+            lineTo(tip.x, tip.y)
+            moveTo(tip.x - head, tip.y - head)
+            lineTo(tip.x, tip.y)
+            lineTo(tip.x - head, tip.y + head)
+        }
+        rotate(direction.degrees) {
+            drawPath(arrow, color, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+    }
+}
+
+private val NudgeArrowSize = 15.dp
+private val NudgeArrowStroke = 1.6.dp
 
 /**
  * Fires once on press and then keeps firing while the finger is down, so nudging a
@@ -1573,10 +1969,39 @@ private enum class NudgeDirection(val glyph: String, val deltaX: Int, val deltaY
  */
 @Composable
 private fun RepeatingNudgeButton(
+    direction: NudgeDirection,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onStep: (Int) -> Unit,
+) {
+    val description = stringResource(direction.description)
+    RepeatingButton(
+        enabled = enabled,
+        modifier = modifier.semantics { contentDescription = description },
+        onStep = onStep,
+    ) {
+        NudgeArrow(direction)
+    }
+}
+
+@Composable
+private fun RepeatingNudgeButton(
     label: String,
     enabled: Boolean,
     modifier: Modifier = Modifier,
     onStep: (Int) -> Unit,
+) {
+    RepeatingButton(enabled, modifier, onStep) {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+@Composable
+private fun RepeatingButton(
+    enabled: Boolean,
+    modifier: Modifier,
+    onStep: (Int) -> Unit,
+    content: @Composable RowScope.() -> Unit,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
@@ -1604,7 +2029,6 @@ private fun RepeatingNudgeButton(
     }
 
     FitButton(
-        text = label,
         onClick = {
             if (!steppedWhilePressed.value) step(1)
             steppedWhilePressed.value = false
@@ -1613,6 +2037,11 @@ private fun RepeatingNudgeButton(
         enabled = enabled,
         style = FitButtonStyle.Secondary,
         interactionSource = interactions,
+        // The tray takes its height out of the face above it, and four arrows at the full
+        // 46dp were the tallest thing in it. They are still ~70dp wide, so the target only
+        // shrinks on the axis that had room to spare.
+        compact = true,
+        content = content,
     )
 }
 
@@ -1682,6 +2111,7 @@ private fun CanvasSidePane(
                 onMoveWidget = onMoveWidget,
                 onTransformImage = onTransformImage,
                 modifier = Modifier.width(fittedCanvasWidth(snapshot, SidePaneCanvasMaxWidth)),
+                multiSelection = state.multiSelection.takeIf { editable }.orEmpty(),
             )
         }
         Text(
@@ -1697,82 +2127,155 @@ private fun CanvasSidePane(
 private fun WidgetsWorkspace(
     snapshot: EditorSnapshot,
     selected: WidgetGuide?,
+    /** The set, in pick order — numbered here as the canvas numbers it. */
+    multiSelection: List<Int>,
     enabled: Boolean,
     onSelect: (WidgetGuide) -> Unit,
+    /** Holding a row adds it to the set, as holding a widget on the canvas does. */
+    onHold: (WidgetGuide) -> Unit,
+    onClearSet: () -> Unit,
+    onEditSet: () -> Unit,
     onRestore: (Long) -> Unit,
     onImport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val onCanvas = snapshot.canvasWidgets
     val offCanvas = snapshot.offCanvasWidgets
+    val picks = multiSelection.mapNotNull { index -> snapshot.widgets.firstOrNull { it.globalIndex == index } }
+    fun order(widget: WidgetGuide) = multiSelection.indexOf(widget.globalIndex).takeIf { it >= 0 }
     // Removals used to be the third section of this list, below every widget on the face
     // and every widget off it — so putting one back meant scrolling past two dozen rows to
     // find out whether there was anything to put back at all. The count is at the top now
     // and opens in place.
     var showRemoved by rememberSaveable { mutableStateOf(false) }
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item {
-            FitButton(stringResource(R.string.widget_import_open), onImport, Modifier.fillMaxWidth(),
-                enabled = enabled, style = FitButtonStyle.Secondary)
-        }
-        if (snapshot.removedWidgets.isNotEmpty()) {
+    Column(modifier) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             item {
-                RemovedWidgetsToggle(
-                    count = snapshot.removedWidgets.size,
-                    expanded = showRemoved,
-                    onToggle = { showRemoved = !showRemoved },
-                )
+                FitButton(stringResource(R.string.widget_import_open), onImport, Modifier.fillMaxWidth(),
+                    enabled = enabled, style = FitButtonStyle.Secondary)
             }
-            if (showRemoved) {
+            if (snapshot.removedWidgets.isNotEmpty()) {
                 item {
-                    Text(
-                        stringResource(R.string.editor_widgets_removed_detail),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    RemovedWidgetsToggle(
+                        count = snapshot.removedWidgets.size,
+                        expanded = showRemoved,
+                        onToggle = { showRemoved = !showRemoved },
                     )
                 }
-                items(snapshot.removedWidgets, key = { "removed-${it.id}" }) { removed ->
-                    RemovedWidgetRow(removed, enabled) { onRestore(removed.id) }
+                if (showRemoved) {
+                    item {
+                        Text(
+                            stringResource(R.string.editor_widgets_removed_detail),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    items(snapshot.removedWidgets, key = { "removed-${it.id}" }) { removed ->
+                        RemovedWidgetRow(removed, enabled) { onRestore(removed.id) }
+                    }
                 }
             }
-        }
-        item {
-            SectionHeading(
-                stringResource(R.string.editor_widgets_on_canvas_title),
-                stringResource(
-                    R.string.editor_widgets_on_canvas_detail,
-                    onCanvas.size,
-                    snapshot.widgets.size,
-                ),
-            )
-        }
-        items(onCanvas, key = { "canvas-${it.globalIndex}" }) { widget ->
-            WidgetRow(widget, snapshot, selected?.globalIndex == widget.globalIndex) {
-                onSelect(widget)
-            }
-        }
-        if (offCanvas.isNotEmpty()) {
             item {
                 SectionHeading(
-                    stringResource(R.string.editor_widgets_off_canvas_title),
-                    stringResource(R.string.editor_widgets_off_canvas_detail),
-                    modifier = Modifier.padding(top = 14.dp),
+                    stringResource(R.string.editor_widgets_on_canvas_title),
+                    stringResource(
+                        R.string.editor_widgets_on_canvas_detail,
+                        onCanvas.size,
+                        snapshot.widgets.size,
+                    ),
                 )
             }
-            items(offCanvas, key = { "off-${it.globalIndex}" }) { widget ->
+            item {
+                Text(
+                    stringResource(
+                        if (picks.isEmpty()) R.string.editor_widgets_hint else R.string.editor_widgets_hint_set,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
+            items(onCanvas, key = { "canvas-${it.globalIndex}" }) { widget ->
                 WidgetRow(
                     widget = widget,
                     snapshot = snapshot,
-                    active = selected?.globalIndex == widget.globalIndex,
-                    dimmed = true,
+                    active = selected?.globalIndex == widget.globalIndex || order(widget) != null,
+                    pickOrder = order(widget),
+                    enabled = enabled,
+                    onHold = { onHold(widget) },
                 ) { onSelect(widget) }
             }
+            if (offCanvas.isNotEmpty()) {
+                item {
+                    SectionHeading(
+                        stringResource(R.string.editor_widgets_off_canvas_title),
+                        stringResource(R.string.editor_widgets_off_canvas_detail),
+                        modifier = Modifier.padding(top = 14.dp),
+                    )
+                }
+                items(offCanvas, key = { "off-${it.globalIndex}" }) { widget ->
+                    WidgetRow(
+                        widget = widget,
+                        snapshot = snapshot,
+                        active = selected?.globalIndex == widget.globalIndex || order(widget) != null,
+                        dimmed = true,
+                        pickOrder = order(widget),
+                        enabled = enabled,
+                        onHold = { onHold(widget) },
+                    ) { onSelect(widget) }
+                }
+            }
+            item { Box(Modifier.height(16.dp)) }
         }
-        item { Box(Modifier.height(16.dp)) }
+        // Pinned under the list, so the set and the way to act on it stay in view however
+        // far the list scrolls. The tray that moves, duplicates and removes a set is on the
+        // face; this says what is chosen and goes there.
+        if (picks.size >= 2) {
+            WidgetSetFooter(picks, enabled, onClearSet, onEditSet)
+        }
+    }
+}
+
+@Composable
+private fun WidgetSetFooter(
+    picks: List<WidgetGuide>,
+    enabled: Boolean,
+    onClear: () -> Unit,
+    onEdit: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.width(3.dp).height(24.dp).background(MaterialTheme.colorScheme.tertiary))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.editor_selection_set_title, picks.size),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    picks.joinToString(" · ") { "#${it.globalIndex}" },
+                    color = MaterialTheme.colorScheme.primary,
+                    style = FitFaceType.numeric,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                stringResource(R.string.editor_selection_clear),
+                modifier = Modifier.clip(MaterialTheme.shapes.small)
+                    .clickable(enabled = enabled, onClick = onClear)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        FitButton(stringResource(R.string.editor_widgets_set_edit), onEdit, Modifier.fillMaxWidth(), enabled = enabled)
     }
 }
 
@@ -1834,8 +2337,13 @@ private fun WidgetRow(
     snapshot: EditorSnapshot,
     active: Boolean,
     dimmed: Boolean = false,
+    /** Where this widget sits in the set, when it is in one. */
+    pickOrder: Int? = null,
+    enabled: Boolean = true,
+    onHold: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
+    val haptics = LocalHapticFeedback.current
     Row(
         modifier = Modifier.fillMaxWidth()
             .background(
@@ -1849,20 +2357,32 @@ private fun WidgetRow(
                 else MaterialTheme.colorScheme.outlineVariant,
                 MaterialTheme.shapes.small,
             )
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onClick,
+                onLongClick = onHold?.let { hold ->
+                    {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        hold()
+                    }
+                },
+            )
             .padding(13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        WidgetThumbnail(
-            snapshot = snapshot,
-            widget = widget,
-            accent = if (dimmed) {
-                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .3f)
-            } else {
-                MaterialTheme.colorScheme.primary
-            },
-        )
+        Box(contentAlignment = Alignment.TopStart) {
+            WidgetThumbnail(
+                snapshot = snapshot,
+                widget = widget,
+                accent = if (dimmed) {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .3f)
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+            )
+            pickOrder?.let { PickBadge(it + 1) }
+        }
         Column(Modifier.weight(1f)) {
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(
@@ -2295,6 +2815,13 @@ private fun InspectorWorkspace(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.fitText.secondary,
             )
+        } else if (snapshot.styleNames.size == 1) {
+            // A switch with nothing on its other side is a control that does nothing.
+            Text(
+                stringResource(R.string.editor_apply_all_single),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
         } else {
             Row(
                 Modifier.fillMaxWidth()
@@ -2482,9 +3009,9 @@ private val RecordsWithoutArtwork = setOf(
  * The buttons are **arrows**, not a minus and a plus. This control sits under a picture of
  * the face and moves the widget on it: "+" on the Y axis is only obviously *down* if you
  * already know the panel's origin is its top-left corner, which is a thing about the file
- * format rather than about the face. `←` and `↓` say which way the widget goes, and they
- * are the same glyphs as the canvas page's own nudge row, so the two controls read as the
- * same control in two places.
+ * format rather than about the face. The arrows say which way the widget goes, and they
+ * are the same [NudgeArrow]s as the canvas page's own nudge row, so the two controls read
+ * as the same control in two places.
  */
 @Composable
 private fun CoordinateControl(
@@ -2509,8 +3036,8 @@ private fun CoordinateControl(
             Text(value.toString(), style = FitFaceType.readout)
         }
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            RepeatingNudgeButton(decrease.glyph, enabled, Modifier.weight(1f), onMinus)
-            RepeatingNudgeButton(increase.glyph, enabled, Modifier.weight(1f), onPlus)
+            RepeatingNudgeButton(decrease, enabled, Modifier.weight(1f), onMinus)
+            RepeatingNudgeButton(increase, enabled, Modifier.weight(1f), onPlus)
         }
     }
 }
@@ -2824,7 +3351,7 @@ private fun PlacementControls(
         ) {
             NudgeDirection.entries.forEach { direction ->
                 RepeatingNudgeButton(
-                    label = direction.glyph,
+                    direction = direction,
                     enabled = enabled,
                     modifier = Modifier.weight(1f),
                     onStep = { pixels ->
@@ -2896,7 +3423,9 @@ private fun signedPixels(value: Float): String {
 private fun StylesWorkspace(
     snapshot: EditorSnapshot,
     enabled: Boolean,
+    working: Boolean,
     onVariant: (EditorVariant) -> Unit,
+    onSyncThumbnail: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -2980,9 +3509,22 @@ private fun StylesWorkspace(
         item {
             Text(
                 stringResource(R.string.editor_styles_footnote),
-                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+                modifier = Modifier.padding(top = 4.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.fitText.secondary,
+            )
+        }
+        // The face-picker thumbnail belongs here, not on the install page. It is a *style's*
+        // picture — one frame of `preview.bin`, per numbered style, and the reason
+        // `canRefreshThumbnail` refuses while the always-on display is on the canvas. It has
+        // nothing to do with sending anything to a watch, and folding it away behind a
+        // summary on a page about the transfer made it a thing nobody would ever open.
+        item {
+            ThumbnailCard(
+                snapshot = snapshot,
+                working = working,
+                onRefresh = onSyncThumbnail,
+                modifier = Modifier.padding(top = 10.dp, bottom = 16.dp),
             )
         }
     }
@@ -2999,11 +3541,12 @@ private fun FacePreview(
     contentDescription: String?,
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(9.dp),
+    borderColor: Color? = null,
 ) {
     val plate = modifier
         .clip(shape)
         .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+        .border(1.dp, borderColor ?: MaterialTheme.colorScheme.outlineVariant, shape)
     when {
         frame != null -> {
             val bitmap = frame.rememberBitmap()
@@ -3030,13 +3573,12 @@ private fun FacePreview(
 }
 
 @Composable
-private fun SendWorkspace(
+private fun InstallWorkspace(
     snapshot: EditorSnapshot,
     state: EditorUiState,
     /** False where the wide layout is already showing the same read-only face beside it. */
     showFace: Boolean,
     onReviewed: () -> Unit,
-    onSyncThumbnail: () -> Unit,
     onReset: () -> Unit,
     onGrantNearby: () -> Unit,
     onOpenCompanion: () -> Unit,
@@ -3051,111 +3593,87 @@ private fun SendWorkspace(
 ) {
     val valid = snapshot.validationErrors.isEmpty()
     // Sending is gated on having seen the validated render, and every commit clears that
-    // flag. The render is the second thing on this page, so arriving is reviewing — but
-    // an edit made *while here*, such as re-rendering the thumbnail, clears it again and
-    // would leave the send button inert. Keyed on the snapshot so every commit re-marks.
+    // flag. The render is the first thing on this page, so arriving is reviewing — but an
+    // edit made *while here* clears it again and would leave the send button inert.
+    // Keyed on the snapshot so every commit re-marks.
     LaunchedEffect(snapshot) { onReviewed() }
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        StatusBanner(
-            if (valid) FitStatus.Pass else FitStatus.Fail,
-            if (valid) {
-                stringResource(R.string.editor_validate_ok)
-            } else {
+        // A pass has no banner. "Container reparsed successfully. Entry bounds, records and
+        // CRCs are valid." is three lines saying what `CHECKS · 5 pass` says in two words,
+        // at the top of the one page that already carries a render, a checklist and a
+        // transfer. A failure keeps its banner, because a failure is the page.
+        if (!valid) {
+            StatusBanner(
+                FitStatus.Fail,
                 // Straight from :core:format, which has no resource table.
-                snapshot.validationErrors.joinToString()
-            },
-        )
-        if (showFace) {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                DirectWatchCanvas(
-                    snapshot = snapshot,
-                    editing = false,
-                    selectedGlobalIndex = null,
-                    pendingWidgetMove = null,
-                    pendingImage = null,
-                    placement = state.placement,
-                    enabled = false,
-                    onWidget = {},
-                    onMoveWidget = { _, _, _ -> },
-                    onTransformImage = { _, _, _ -> },
-                    modifier = Modifier.widthIn(max = 168.dp),
-                )
-            }
+                snapshot.validationErrors.joinToString(),
+            )
         }
-        val checks = listOf(
-            R.string.editor_check_entry_bounds,
-            R.string.editor_check_record_sizes,
-            R.string.editor_check_crc,
-            R.string.editor_check_payload_length,
-            R.string.editor_check_face_id,
-        )
-        SendSection(
+        // The watch and the face going to it, at the top, the shape this page has always
+        // had. The plate is large now because it is the only render on the page: the
+        // merge brought a second, bigger one with it and two pictures of one face on one
+        // screen is what that cost. Putting them side by side instead only made the page
+        // look like two pages.
+        DeviceStatusRow(state.directInstall, snapshot, showFace)
+        // What the edit *is*, directly under the picture of it and above the steps for
+        // sending it. Each header states its conclusion; opening one shows the working.
+        CollapsibleSection(
             label = stringResource(R.string.editor_checks_heading),
             summary = if (valid) {
-                stringResource(R.string.editor_send_checks_summary, checks.size)
+                stringResource(R.string.editor_install_checks_summary, ValidationChecks.size)
             } else {
-                stringResource(R.string.editor_send_checks_summary_failed)
+                stringResource(R.string.editor_install_checks_failed)
             },
             summaryColor = if (valid) {
                 MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.error
             },
-            // A failure is the one thing on this page nobody should have to open a
-            // section to read.
+            // A failure is the one thing on this page nobody should have to open a section
+            // to read.
             initiallyExpanded = !valid,
         ) {
             Column(
-                Modifier.fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small),
+                Modifier.fillMaxWidth().border(
+                    1.dp,
+                    MaterialTheme.colorScheme.outlineVariant,
+                    MaterialTheme.shapes.small,
+                ),
             ) {
-                checks.forEach { label -> ValidationCheck(stringResource(label), valid) }
+                ValidationChecks.forEach { ValidationCheck(stringResource(it), valid) }
             }
         }
-        // Warnings are never folded away. A collapsed section is something the reader
-        // chose not to read; a warning they never saw is one this page failed to give.
-        snapshot.validationWarnings.forEach { warning -> StatusBanner(FitStatus.Warning, warning) }
-        // This page presents the picture above as what is about to be installed, so what
-        // the picture cannot show has to be said here and not only on the canvas.
-        if (snapshot.selectedVariantApproximate) {
-            StatusBanner(FitStatus.Warning, stringResource(R.string.editor_aod_approximate))
-        }
-        snapshot.audit?.let { audit ->
-            SendSection(
-                label = stringResource(R.string.editor_audit_heading),
-                summary = "${if (audit.sizeDelta >= 0) "+" else ""}${audit.sizeDelta} B",
-            ) {
-                AuditDetail(snapshot, audit)
-            }
-        }
-        SendSection(
-            label = stringResource(R.string.editor_thumbnail_heading),
-            summary = stringResource(
-                if (snapshot.thumbnailRefreshed) {
-                    R.string.editor_thumbnail_in_sync_label
-                } else {
-                    R.string.editor_send_thumbnail_summary_stale
-                },
-            ),
-            summaryColor = if (snapshot.thumbnailRefreshed) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
+        // Always here, even with nothing to report. It is one of the three things this page
+        // says about the edit, and a section that comes and goes with whether a commit has
+        // happened yet is one nobody learns is there.
+        CollapsibleSection(
+            label = stringResource(R.string.editor_audit_heading),
+            summary = snapshot.audit?.let { signedBytes(it.sizeDelta) }
+                ?: stringResource(R.string.editor_audit_none_summary),
         ) {
-            ThumbnailDetail(snapshot, state.isWorking, onSyncThumbnail)
+            snapshot.audit?.let { AuditDetail(snapshot, it) } ?: Text(
+                stringResource(R.string.editor_audit_none),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-
         Box(
             Modifier.fillMaxWidth().height(1.dp)
                 .background(MaterialTheme.colorScheme.outlineVariant),
         )
+        // Warnings are never folded away. A collapsed section is something the reader
+        // chose not to read; a warning they never saw is one this page failed to give.
+        snapshot.validationWarnings.forEach { warning -> StatusBanner(FitStatus.Warning, warning) }
+        // This page presents the plate above as what is about to be installed, so what
+        // that picture cannot show has to be said here and not only on the canvas.
+        if (snapshot.selectedVariantApproximate) {
+            StatusBanner(FitStatus.Warning, stringResource(R.string.editor_aod_approximate))
+        }
 
         if (valid) {
-            MicroLabel(stringResource(R.string.editor_send_watch_heading))
             WatchSection(
                 state = state,
                 snapshot = snapshot,
@@ -3174,7 +3692,7 @@ private fun SendWorkspace(
             // No disabled transfer panel: an invalid container has nothing to send, and a
             // page full of inert controls says less than one sentence and the way out.
             Text(
-                stringResource(R.string.editor_send_blocked),
+                stringResource(R.string.editor_install_blocked),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -3184,20 +3702,21 @@ private fun SendWorkspace(
                 style = FitButtonStyle.Danger,
             )
         }
+
     }
 }
 
 /**
  * A fact about the edit, folded away behind its own summary.
  *
- * The send page carries everything the two pages before it carried, which is a long
- * scroll between the render at the top and the button at the bottom. The checks, the
- * audit and the thumbnail are all *reference*: each one's header states its conclusion,
- * and opening it shows the working. Warnings and failures are not sections — they stay
- * in the column where they cannot be folded away.
+ * The install page carries everything the two pages before it carried, which is a long
+ * scroll between the render at the top and the button at the bottom. The checks and the
+ * audit are *reference*: each one's header states its conclusion, and opening it shows the
+ * working. Warnings and failures are not sections — they stay in the column where they
+ * cannot be folded away.
  */
 @Composable
-private fun SendSection(
+private fun CollapsibleSection(
     label: String,
     summary: String,
     summaryColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3208,7 +3727,7 @@ private fun SendSection(
     // The glyph alone announces as a character, and the row's own text says what the
     // section holds but not that tapping opens it.
     val action = stringResource(
-        if (expanded) R.string.editor_send_collapse else R.string.editor_send_expand,
+        if (expanded) R.string.editor_install_collapse else R.string.editor_install_expand,
         label,
     )
     Column(
@@ -3237,6 +3756,32 @@ private fun SendSection(
         if (expanded) {
             Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) { body() }
         }
+    }
+}
+
+/** The five joins `Session.validate()` reports, in the order it reports them. */
+private val ValidationChecks = listOf(
+    R.string.editor_check_entry_bounds,
+    R.string.editor_check_record_sizes,
+    R.string.editor_check_crc,
+    R.string.editor_check_payload_length,
+    R.string.editor_check_face_id,
+)
+
+/**
+ * A size change, short enough for a folded section's summary slot.
+ *
+ * `+49,836 B` is nine characters, and the summary shares a 143dp line with the section's own
+ * label on a 320dp phone. Kibibytes for anything that would not fit, bytes below that —
+ * "+0.0 KB" for a twelve-byte edit reports a change as no change.
+ */
+private fun signedBytes(delta: Int): String {
+    val sign = if (delta >= 0) "+" else "−"
+    val size = abs(delta)
+    return if (size < 1024) {
+        "$sign$size B"
+    } else {
+        String.format(Locale.US, "%s%.1f KB", sign, size / 1024f)
     }
 }
 
@@ -3276,42 +3821,128 @@ private fun AuditDetail(snapshot: EditorSnapshot, audit: EditAuditSummary) {
  * The button disappears as soon as the thumbnail matches, because a repeat pass is
  * pure loss: the widget pixels come from the vendor's smaller `preview.bin` render,
  * and resampling them again softens the result every time.
+ */
+/**
+ * The face-picker thumbnail: the picture the watch's carousel shows for this style now, and
+ * — while **Update thumbnail** is on offer — the one it would show after.
  *
- * The card's own chrome is gone — [SendSection] is the card now, and a bordered box
- * inside a bordered box was two frames around one fact.
+ * Laid out as the style rows above it are, a plate at panel aspect and then a name and one
+ * line of state, because it is the same kind of thing: a picture of a style. Both plates are
+ * stored pixels rather than the canvas scaled by the display. "Now" is the `preview.bin`
+ * frame itself, and "After" is exactly what the update writes, box filter and RGB565
+ * included, so the pair is a promise the button keeps (`ThumbnailPreviewTest` holds it to
+ * the pixel).
  */
 @Composable
-private fun ThumbnailDetail(
+private fun ThumbnailCard(
     snapshot: EditorSnapshot,
     working: Boolean,
     onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Text(
-        when {
-            snapshot.isAodSelected -> stringResource(
-                R.string.editor_thumbnail_aod,
-                variantLabel(snapshot.activeStyleName),
+    val after = snapshot.pickerThumbnailAfter?.takeIf { snapshot.canRefreshThumbnail }
+    val styleName = variantLabel(snapshot.activeStyleName)
+    Column(
+        modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(13.dp),
+        ) {
+            ThumbnailPlate(
+                frame = snapshot.pickerThumbnail,
+                label = stringResource(R.string.editor_thumbnail_now),
+                description = stringResource(R.string.editor_thumbnail_now_a11y, styleName),
             )
-            snapshot.thumbnailRefreshed -> stringResource(
-                R.string.editor_thumbnail_in_sync,
-                variantLabel(snapshot.activeStyleName),
+            if (after != null) {
+                Text(
+                    "→",
+                    modifier = Modifier.padding(bottom = 18.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                ThumbnailPlate(
+                    frame = after,
+                    label = stringResource(R.string.editor_thumbnail_after),
+                    description = stringResource(R.string.editor_thumbnail_after_a11y),
+                    highlighted = true,
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.editor_thumbnail_heading),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    when {
+                        snapshot.isAodSelected ->
+                            stringResource(R.string.editor_thumbnail_state_aod, styleName)
+                        snapshot.thumbnailRefreshed -> stringResource(R.string.editor_thumbnail_state_in_sync)
+                        !snapshot.isDirty -> stringResource(R.string.editor_thumbnail_state_stock)
+                        snapshot.validationErrors.isNotEmpty() ->
+                            stringResource(R.string.editor_thumbnail_state_blocked)
+                        else -> stringResource(R.string.editor_thumbnail_state_stale)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (snapshot.thumbnailRefreshed) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.fitText.secondary
+                    },
+                )
+            }
+        }
+        Text(
+            when {
+                snapshot.isAodSelected -> stringResource(R.string.editor_thumbnail_aod, styleName)
+                snapshot.thumbnailRefreshed -> stringResource(R.string.editor_thumbnail_in_sync, styleName)
+                !snapshot.isDirty -> stringResource(R.string.editor_thumbnail_unedited)
+                snapshot.validationErrors.isNotEmpty() -> stringResource(R.string.editor_thumbnail_blocked)
+                else -> stringResource(R.string.editor_thumbnail_stale)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (snapshot.canRefreshThumbnail) {
+            FitButton(
+                stringResource(R.string.editor_thumbnail_update),
+                onRefresh,
+                Modifier.fillMaxWidth(),
+                !working,
+                loading = working,
+                style = FitButtonStyle.Secondary,
             )
-            !snapshot.isDirty -> stringResource(R.string.editor_thumbnail_unedited)
-            snapshot.validationErrors.isNotEmpty() ->
-                stringResource(R.string.editor_thumbnail_blocked)
-            else -> stringResource(R.string.editor_thumbnail_stale)
-        },
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (snapshot.canRefreshThumbnail) {
-        FitButton(
-            stringResource(R.string.editor_thumbnail_update),
-            onRefresh,
-            Modifier.fillMaxWidth().padding(top = 12.dp),
-            !working,
-            loading = working,
-            style = FitButtonStyle.Secondary,
+        }
+    }
+}
+
+/** One thumbnail at the style rows' plate size, with what it is under it. */
+@Composable
+private fun ThumbnailPlate(
+    frame: PreviewFrame?,
+    label: String,
+    description: String,
+    highlighted: Boolean = false,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        FacePreview(
+            frame = frame,
+            imagePath = null,
+            contentDescription = description,
+            modifier = Modifier.width(54.dp).height(85.dp),
+            // The selected style row's border, for the picture the button will produce.
+            borderColor = if (highlighted) MaterialTheme.colorScheme.primary else null,
+        )
+        MicroLabel(
+            label,
+            color = if (highlighted) MaterialTheme.colorScheme.primary else MaterialTheme.fitText.secondary,
         )
     }
 }
@@ -3472,6 +4103,15 @@ private fun DirectWatchCanvas(
     onMoveWidget: (Int, Int, Int) -> Unit,
     onTransformImage: (Float, Float, Float) -> Unit,
     modifier: Modifier = Modifier,
+    /** The set, in pick order; outlined and numbered the way the import picker numbers one. */
+    multiSelection: List<Int> = emptyList(),
+    /** Where each member of a set being nudged is headed; see `EditorUiState.pendingSetMove`. */
+    pendingSetMove: List<WidgetMovePreview> = emptyList(),
+    /**
+     * Holding a widget adds it to the set or takes it out. Null where this canvas does not
+     * build sets — only the Canvas page does, because only its tray acts on one.
+     */
+    onHoldWidget: ((Int) -> Unit)? = null,
 ) {
     val composedBitmap = snapshot.composedPreview.rememberBitmap()
     val overlayBitmap = snapshot.widgetOverlay.rememberBitmap()
@@ -3496,6 +4136,11 @@ private fun DirectWatchCanvas(
     // detector mid-gesture and cancels the drag in progress.
     val latestSnapshot by rememberUpdatedState(snapshot)
     val latestSelectedGlobalIndex by rememberUpdatedState(selectedGlobalIndex)
+    // The same reason as the two above: a set is picked and let go without any key changing.
+    val latestMultiSelection by rememberUpdatedState(multiSelection)
+    val latestOnHold by rememberUpdatedState(onHoldWidget)
+    val haptics = LocalHapticFeedback.current
+    val badgeMeasurer = rememberTextMeasurer()
     // Resolved here rather than inside `semantics`, which is not a composable scope.
     val canvasDescription = stringResource(
         R.string.editor_canvas_a11y,
@@ -3514,6 +4159,13 @@ private fun DirectWatchCanvas(
     DisposableEffect(dragLayer) {
         onDispose { dragLayer?.bitmaps?.forEach(Bitmap::recycle) }
     }
+    // A set being nudged is drawn from its members' targets, all at once, rather than from
+    // the snapshot, which only catches up one commit at a time.
+    val setTargets = pendingSetMove.associateBy { it.globalIndex }
+    val setLayers = snapshot.rememberSetMoveLayers(setTargets.keys)
+    DisposableEffect(setLayers) {
+        onDispose { setLayers?.bitmaps?.forEach(Bitmap::recycle) }
+    }
     val selectedGuideColor = MaterialTheme.colorScheme.tertiary
     val guideColor = MaterialTheme.colorScheme.primary
     val borderColor = if (editing) {
@@ -3526,7 +4178,7 @@ private fun DirectWatchCanvas(
         modifier = modifier.widthIn(max = 420.dp)
             .fillMaxWidth()
             .aspectRatio(snapshot.preview.width.toFloat() / snapshot.preview.height)
-            .clip(RoundedCornerShape(32.dp))
+            .clip(RoundedCornerShape(FaceOutlineCorner))
             .semantics {
                 contentDescription = canvasDescription
             }
@@ -3543,20 +4195,34 @@ private fun DirectWatchCanvas(
             }
             .pointerInput(snapshot.selectedVariant.basename, pendingImage?.uri, editing) {
                 if (pendingImage == null && editing) {
-                    detectTapGestures { position ->
-                        if (!latestEnabled) return@detectTapGestures
+                    fun hit(position: Offset): Int? {
                         val current = latestSnapshot
-                        onWidget(
-                            hitWidget(
-                                widgets = current.widgets,
-                                point = position,
-                                canvasWidth = size.width,
-                                canvasHeight = size.height,
-                                faceWidth = current.preview.width,
-                                faceHeight = current.preview.height,
-                                preferredGlobalIndex = latestSelectedGlobalIndex,
-                            )?.globalIndex,
-                        )
+                        return hitWidget(
+                            widgets = current.widgets,
+                            point = position,
+                            canvasWidth = size.width,
+                            canvasHeight = size.height,
+                            faceWidth = current.preview.width,
+                            faceHeight = current.preview.height,
+                            preferredGlobalIndex = latestSelectedGlobalIndex
+                                ?: latestMultiSelection.lastOrNull(),
+                        )?.globalIndex
+                    }
+                    detectTapGestures(
+                        // Holding a widget is how a set starts, and how one grows past a
+                        // single selection: it adds to what is selected instead of
+                        // replacing it. The buzz is the only sign the hold registered
+                        // before the outline changes.
+                        onLongPress = { position ->
+                            val hold = latestOnHold ?: return@detectTapGestures
+                            if (!latestEnabled) return@detectTapGestures
+                            val index = hit(position) ?: return@detectTapGestures
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            hold(index)
+                        },
+                    ) { position ->
+                        if (!latestEnabled) return@detectTapGestures
+                        onWidget(hit(position))
                     }
                 }
             }
@@ -3564,7 +4230,9 @@ private fun DirectWatchCanvas(
                 if (pendingImage == null && editing) {
                     detectDragGestures(
                         onDragStart = { position ->
-                            if (!latestEnabled) {
+                            // A set moves with the arrows, together. Dragging one member
+                            // would pull it out of the arrangement the set is for.
+                            if (!latestEnabled || latestMultiSelection.isNotEmpty()) {
                                 draggingIndex = -1
                                 return@detectDragGestures
                             }
@@ -3690,6 +4358,33 @@ private fun DirectWatchCanvas(
                     filterQuality = FilterQuality.High,
                 )
             }
+        } else if (setLayers != null) {
+            val scaleX = size.width / snapshot.preview.width
+            val scaleY = size.height / snapshot.preview.height
+            setLayers.slices.forEach { slice ->
+                when (slice) {
+                    is SetMoveSlice.Still -> drawImage(
+                        image = slice.image,
+                        dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                        filterQuality = FilterQuality.Low,
+                    )
+                    is SetMoveSlice.Moving -> {
+                        val target = setTargets[slice.globalIndex] ?: return@forEach
+                        drawImage(
+                            image = slice.image,
+                            dstOffset = IntOffset(
+                                ((target.displayX + slice.offsetX) * scaleX).roundToInt(),
+                                ((target.displayY + slice.offsetY) * scaleY).roundToInt(),
+                            ),
+                            dstSize = IntSize(
+                                (slice.width * scaleX).roundToInt().coerceAtLeast(1),
+                                (slice.height * scaleY).roundToInt().coerceAtLeast(1),
+                            ),
+                            filterQuality = FilterQuality.Low,
+                        )
+                    }
+                }
+            }
         } else {
             drawImage(
                 image = dragLayer?.base ?: composedBitmap,
@@ -3725,18 +4420,20 @@ private fun DirectWatchCanvas(
             val scaleY = size.height / snapshot.preview.height
             clipRect {
                 snapshot.canvasWidgets.forEach { widget ->
-                    val selected = widget.globalIndex == activeIndex
+                    val order = multiSelection.indexOf(widget.globalIndex)
+                    val selected = widget.globalIndex == activeIndex || order >= 0
                     // A drag tracks the stored coordinate, so the rectangle needs the
                     // same offset the resting position gets.
-                    val x = if (visualMoveIndex == widget.globalIndex) {
-                        visualMovePosition.x + widget.drawOffsetX
-                    } else {
-                        widget.drawLeft.toFloat()
+                    val setTarget = setTargets[widget.globalIndex]
+                    val x = when {
+                        setTarget != null -> setTarget.displayX + widget.drawOffsetX
+                        visualMoveIndex == widget.globalIndex -> visualMovePosition.x + widget.drawOffsetX
+                        else -> widget.drawLeft.toFloat()
                     }
-                    val y = if (visualMoveIndex == widget.globalIndex) {
-                        visualMovePosition.y + widget.drawOffsetY
-                    } else {
-                        widget.drawTop.toFloat()
+                    val y = when {
+                        setTarget != null -> setTarget.displayY + widget.drawOffsetY
+                        visualMoveIndex == widget.globalIndex -> visualMovePosition.y + widget.drawOffsetY
+                        else -> widget.drawTop.toFloat()
                     }
                     drawRect(
                         color = if (selected) selectedGuideColor else guideColor,
@@ -3744,6 +4441,10 @@ private fun DirectWatchCanvas(
                         size = Size(widget.width * scaleX, widget.height * scaleY),
                         style = Stroke(if (selected) 2.dp.toPx() else 1.dp.toPx()),
                     )
+                    if (order >= 0) {
+                        drawPickBadge(order + 1, Offset(x * scaleX, y * scaleY),
+                            selectedGuideColor, badgeMeasurer)
+                    }
                 }
             }
         }
@@ -3752,7 +4453,7 @@ private fun DirectWatchCanvas(
 }
 
 // ---------------------------------------------------------------------------
-// The watch half of the Send page
+// The watch half of the Install page
 // ---------------------------------------------------------------------------
 
 /**
@@ -3781,8 +4482,6 @@ private fun ColumnScope.WatchSection(
     onCanvas: () -> Unit,
 ) {
     val delivery = state.directInstall
-    DeviceStatusRow(delivery, snapshot)
-
     // A note, not a wall. This used to replace the whole checklist whenever a package
     // probe came up short, which is how a phone with the watch paired, connected and
     // holding a live accessory session was told direct install was unavailable — with
@@ -3861,71 +4560,93 @@ private fun ColumnScope.WatchSection(
 }
 
 /**
- * The watch, and the face that is about to be sent to it.
+ * Which badge the delivery state wears, and in what colour.
  *
- * The plate used to be empty. It cannot show what the watch is wearing right now —
- * nothing in the transport reports that — so it shows the payload instead, which is
- * the thing the page is actually about and is exactly what the canvas is holding.
+ * Resource and colour are chosen together. They used to be two `when`s, the second keyed on
+ * the badge's own display text — which quietly ties the colour to the wording, so renaming a
+ * badge or translating it would drop it back to the default.
  */
 @Composable
-private fun DeviceStatusRow(state: DirectInstallState, snapshot: EditorSnapshot) {
-    // Resource and colour are chosen together from the state. They used to be two `when`s,
-    // the second keyed on the badge's own display text — which quietly ties the colour to
-    // the wording, so renaming a badge or translating it would drop it back to the default.
-    val (badge, badgeColor) = when {
-        !state.environment.probed ->
-            R.string.editor_device_badge_checking to MaterialTheme.fitColors.warning
-        // Warning, not error. Nothing here stops the reader trying, and colouring an
-        // advisory as a failure is what made a working phone look broken.
-        state.environment.advisory != null ->
-            R.string.editor_device_badge_setup to MaterialTheme.fitColors.warning
-        state.peersCached ->
-            R.string.editor_device_badge_linked to MaterialTheme.colorScheme.primary
-        else -> R.string.editor_device_badge_setup to MaterialTheme.fitColors.warning
-    }
+private fun deliveryBadge(state: DirectInstallState): Pair<Int, Color> = when {
+    !state.environment.probed ->
+        R.string.editor_device_badge_checking to MaterialTheme.fitColors.warning
+    // Warning, not error. Nothing here stops the reader trying, and colouring an
+    // advisory as a failure is what made a working phone look broken.
+    state.environment.advisory != null ->
+        R.string.editor_device_badge_setup to MaterialTheme.fitColors.warning
+    state.peersCached ->
+        R.string.editor_device_badge_linked to MaterialTheme.colorScheme.primary
+    else -> R.string.editor_device_badge_setup to MaterialTheme.fitColors.warning
+}
+
+/**
+ * The watch, and the face that is about to be sent to it.
+ *
+ * @param showFace false where the wide layout is already keeping a canvas beside the whole
+ *   page, which would otherwise make this the second picture of one face on one screen.
+ */
+@Composable
+private fun DeviceStatusRow(
+    state: DirectInstallState,
+    snapshot: EditorSnapshot,
+    showFace: Boolean,
+) {
+    val (badge, badgeColor) = deliveryBadge(state)
     Row(
         Modifier.fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(13.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // This row says what installs, which is `activeStyleName` — never whatever
-        // `selectedVariant` the canvas happens to be showing. Looking at AOD must not
-        // make the Install page claim AOD is what is about to go to the watch: the
-        // sampler always names the last selected numbered style, AOD or not.
-        val activeIsOnCanvas = snapshot.selectedVariant.basename == snapshot.activeStyleName
-        FacePreview(
-            frame = snapshot.composedPreview.takeIf { activeIsOnCanvas },
-            imagePath = snapshot.stylePreviewPaths[snapshot.activeStyleName]
-                .takeIf { !activeIsOnCanvas },
-            contentDescription = stringResource(R.string.editor_device_face_a11y),
-            modifier = Modifier.width(44.dp).height(69.dp),
-            shape = RoundedCornerShape(7.dp),
-        )
+        if (showFace) {
+            // What installs is `activeStyleName`, never whatever variant the canvas happens
+            // to be showing: looking at the always-on display must not make this page claim
+            // the always-on display is what is about to go to the watch.
+            val activeIsOnCanvas = snapshot.selectedVariant.basename == snapshot.activeStyleName
+            FacePreview(
+                frame = snapshot.composedPreview.takeIf { activeIsOnCanvas },
+                imagePath = snapshot.stylePreviewPaths[snapshot.activeStyleName]
+                    .takeIf { !activeIsOnCanvas },
+                contentDescription = stringResource(R.string.editor_device_face_a11y),
+                modifier = Modifier.width(InstallPlateWidth).height(InstallPlateHeight),
+                shape = MaterialTheme.shapes.medium,
+            )
+        }
         Column(Modifier.weight(1f)) {
+            // The badge is its own line above the name rather than sharing one with it.
+            // Beside the plate a 320dp phone leaves this column about 150dp, and the name
+            // and the badge together want more than that — so the badge wrapped, rendering
+            // as "SETU / P" across the name it was meant to sit beside.
+            Text(
+                stringResource(badge),
+                modifier = Modifier
+                    .background(badgeColor.copy(alpha = .14f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
+                color = badgeColor,
+                style = FitFaceType.micro,
+                maxLines = 1,
+            )
             Text(
                 stringResource(R.string.editor_device_name),
+                modifier = Modifier.padding(top = 7.dp),
                 style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             val activeStyleLabel = variantLabel(snapshot.activeStyleName)
             Text(
                 snapshot.faceName?.let {
-                    stringResource(
-                        R.string.editor_device_face_named,
-                        it,
-                        activeStyleLabel,
-                    )
+                    stringResource(R.string.editor_device_face_named, it, activeStyleLabel)
                 } ?: stringResource(
                     R.string.editor_device_face_unnamed,
                     snapshot.faceId,
                     activeStyleLabel,
                 ),
+                modifier = Modifier.padding(top = 6.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
             val plugin = if (state.environment.pluginInstalled) {
                 state.environment.pluginLabel
@@ -3937,22 +4658,17 @@ private fun DeviceStatusRow(state: DirectInstallState, snapshot: EditorSnapshot)
                 state.environment.pluginVersionName?.let { version ->
                     stringResource(R.string.editor_device_plugin_version, plugin, version)
                 } ?: plugin,
+                modifier = Modifier.padding(top = 3.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                // A long plugin label plus its version does not fit beside the badge,
-                // and clipping it silently left the line ending in a bare separator.
+                // Two lines, because the plate beside it leaves a narrow column and a long
+                // label plus a build number does not fit on one. Bounded, because this is
+                // the only thing on the card that can grow without limit, and clipping it
+                // silently used to leave the line ending in a bare separator.
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(
-            stringResource(badge),
-            modifier = Modifier
-                .background(badgeColor.copy(alpha = .14f), RoundedCornerShape(4.dp))
-                .padding(horizontal = 7.dp, vertical = 4.dp),
-            color = badgeColor,
-            style = FitFaceType.micro,
-        )
     }
 }
 
@@ -4554,6 +5270,92 @@ private data class WidgetDragLayer(
     val height: Int,
     val bitmaps: List<Bitmap>,
 )
+
+/** One slice of the layer stack while a set is moving: layers that stay, or one that moves. */
+internal sealed interface SetMoveSegment {
+    data class Still(val layers: List<WidgetImageLayer>) : SetMoveSegment
+    data class Moving(val layer: WidgetImageLayer) : SetMoveSegment
+}
+
+/**
+ * The layer stack split for moving a set: runs of layers that stay put, and each layer of a
+ * moving widget on its own, in record order.
+ *
+ * The single-widget drag cuts the stack in two around the one widget — below it, above it —
+ * and a set is the same cut made at every member. Keeping record order is what keeps the
+ * z-order honest while they move: a member under a stationary widget stays under it, and
+ * one above stays above. It always opens with a still run, empty or not, because that run
+ * carries the black the face is drawn on. Pure so a test can hold it.
+ */
+internal fun setMoveSegments(layers: List<WidgetImageLayer>, moving: Set<Int>): List<SetMoveSegment> {
+    val segments = mutableListOf<SetMoveSegment>()
+    var still = mutableListOf<WidgetImageLayer>()
+    layers.forEach { layer ->
+        if (layer.globalIndex in moving) {
+            segments += SetMoveSegment.Still(still)
+            still = mutableListOf()
+            segments += SetMoveSegment.Moving(layer)
+        } else {
+            still += layer
+        }
+    }
+    if (still.isNotEmpty() || segments.isEmpty()) segments += SetMoveSegment.Still(still)
+    // Two members adjacent in the stack leave an empty run between them; only the first,
+    // which paints the black, is worth a bitmap.
+    return segments.filterIndexed { index, segment ->
+        index == 0 || segment !is SetMoveSegment.Still || segment.layers.isNotEmpty()
+    }
+}
+
+/** A set's stack, drawn: bitmaps for each still run and each moving layer. */
+private data class SetMoveLayers(
+    val slices: List<SetMoveSlice>,
+    val bitmaps: List<Bitmap>,
+)
+
+private sealed interface SetMoveSlice {
+    data class Still(val image: ImageBitmap) : SetMoveSlice
+    data class Moving(
+        val globalIndex: Int,
+        val image: ImageBitmap,
+        val offsetX: Int,
+        val offsetY: Int,
+        val width: Int,
+        val height: Int,
+    ) : SetMoveSlice
+}
+
+@Composable
+private fun EditorSnapshot.rememberSetMoveLayers(moving: Set<Int>): SetMoveLayers? =
+    remember(widgetImageLayers, widgets, preview.width, preview.height, moving) {
+        if (moving.isEmpty()) return@remember null
+        val guides = widgets.associateBy { it.globalIndex }
+        val bitmaps = mutableListOf<Bitmap>()
+        fun bitmap(frame: PreviewFrame) = Bitmap.createBitmap(
+            frame.argb, frame.width, frame.height, Bitmap.Config.ARGB_8888).also(bitmaps::add)
+        val slices = setMoveSegments(widgetImageLayers, moving).mapIndexedNotNull { index, segment ->
+            when (segment) {
+                is SetMoveSegment.Still -> SetMoveSlice.Still(
+                    bitmap(
+                        WidgetLayerComposer.compose(preview.width, preview.height, segment.layers,
+                            widgets, transparent = index != 0),
+                    ).asImageBitmap(),
+                )
+                is SetMoveSegment.Moving -> {
+                    val guide = guides[segment.layer.globalIndex] ?: return@mapIndexedNotNull null
+                    SetMoveSlice.Moving(
+                        globalIndex = segment.layer.globalIndex,
+                        image = bitmap(segment.layer.frame).asImageBitmap(),
+                        offsetX = guide.drawOffsetX + segment.layer.offsetX,
+                        offsetY = guide.drawOffsetY + segment.layer.offsetY,
+                        width = segment.layer.frame.width,
+                        height = segment.layer.frame.height,
+                    )
+                }
+            }
+        }
+        SetMoveLayers(slices, bitmaps)
+    }
 
 @Composable
 private fun EditorSnapshot.rememberWidgetDragLayer(globalIndex: Int): WidgetDragLayer? =

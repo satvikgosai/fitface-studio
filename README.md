@@ -83,6 +83,10 @@ until it is clean.
 **Install.** Send the result to a paired, connected Fit3 over Bluetooth. No ADB,
 no root, no cable.
 
+**Start from nothing.** *Start a custom face* on the Projects page gives you a clock on an
+empty panel to build on — add a photo and widgets from other faces. It is made on your phone
+from a face the store serves (Info_4), so it takes that face's place on your watch.
+
 Downloads and every committed edit are saved automatically to a private project
 folder, so **Projects** reopens your work after the app is closed without
 downloading again — each project listed with the face it holds. Deleting a project

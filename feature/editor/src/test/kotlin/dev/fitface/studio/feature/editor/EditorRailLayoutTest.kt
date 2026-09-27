@@ -22,7 +22,7 @@ import org.junit.Test
 class EditorRailLayoutTest {
 
     /** The English labels, in rail order. They are the page titles. */
-    private val labels = listOf("FACE", "WIDGETS", "BACKGROUND", "STYLES", "SEND")
+    private val labels = listOf("CANVAS", "WIDGETS", "BACKGROUND", "STYLES", "INSTALL")
 
     @Test
     fun everyRailLabelFitsTheNarrowestSupportedWindow() {

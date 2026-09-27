@@ -19,21 +19,44 @@ data class StructuralEdit(
      * [StructuralEditor.appendWidget] puts the widget back at the end of the table.
      */
     val removedRecords: Map<String, ByteArray> = emptyMap(),
+    /**
+     * For [StructuralEditor.deleteWidget], the image records deleted from each entry, as
+     * indices into the entry *before* the edit. Everything saved against that entry — a
+     * removed widget's record, waiting to be restored — has to be relocated past them, and
+     * this is how [StructuralEditor.relocateSavedWidget] knows which ones went.
+     */
+    val droppedImages: Map<String, Set<Int>> = emptyMap(),
 )
 
 /** Explicit provenance overrides index/record heuristics for widgets from another face. */
 data class WidgetPristine(val entry: ContainerEntry, val sources: Map<Int, Int>)
 
 object StructuralEditor {
-    /** Saved removals point at retained rasters; resize moves their offsets too. */
-    fun relocateSavedWidget(before: ContainerEntry, after: ContainerEntry, raw: ByteArray): ByteArray {
+    /**
+     * Saved removals point at retained rasters; resize moves their offsets too.
+     *
+     * [dropped] names the image records an edit deleted, as indices into [before]. Every
+     * other image keeps its order, so the saved record's pointers are carried to wherever
+     * the survivors landed — and a pointer at a dropped image is refused, because
+     * [deleteWidget] never drops artwork a saved removal still needs.
+     */
+    fun relocateSavedWidget(
+        before: ContainerEntry,
+        after: ContainerEntry,
+        raw: ByteArray,
+        dropped: Set<Int> = emptySet(),
+    ): ByteArray {
         val oldImages = FaceRecordParser.scanImages(before)
         val newImages = FaceRecordParser.scanImages(after)
         fun offsets(images: List<ImageRecord>) = images.map { it.recordOffset - images.first().recordOffset }
         val oldOffsets = offsets(oldImages)
         val newOffsets = offsets(newImages)
-        if (oldOffsets == newOffsets.take(oldOffsets.size)) return raw
-        if (newImages.size < oldImages.size) throw Fit3FormatException("Saved widget artwork was removed.")
+        if (dropped.isEmpty() && oldOffsets == newOffsets.take(oldOffsets.size)) return raw
+        if (newImages.size < oldImages.size - dropped.size) {
+            throw Fit3FormatException("Saved widget artwork was removed.")
+        }
+        // Where each surviving image sits now: its old position, less the dropped ones before it.
+        val landed = oldImages.indices.filter { it !in dropped }.withIndex().associate { (now, old) -> old to now }
         val header = StyleHeader.parse(before)
         val data = WidgetImporter.styleBytes(before.data, raw, 1,
             before.data.copyOfRange(header.storedImageOffset, before.data.size), header.fontBindingCount)
@@ -41,9 +64,238 @@ object StructuralEditor {
         val record = FaceRecordParser.scanWidgets(saved).single()
         val result = raw.copyOf()
         FaceRecordParser.imagePointerFields(record, FaceRecordParser.imagesByRelativeOffset(saved)).forEach { field ->
-            result.putU32(field.offset - record.recordOffset, newOffsets[field.image.index])
+            val now = landed[field.image.index]
+                ?: throw Fit3FormatException("Saved widget artwork was removed.")
+            result.putU32(field.offset - record.recordOffset, newOffsets[now])
         }
         return result
+    }
+
+    /** The image records a saved (removed) widget record points at, as indices into [entry]. */
+    internal fun savedWidgetImages(entry: ContainerEntry, raw: ByteArray): Set<Int> {
+        val header = StyleHeader.parse(entry)
+        val data = WidgetImporter.styleBytes(entry.data, raw, 1,
+            entry.data.copyOfRange(header.storedImageOffset, entry.data.size), header.fontBindingCount)
+        val saved = entry.copy(data = data, size = data.size)
+        val record = FaceRecordParser.scanWidgets(saved).single()
+        if (record.widgetType !in FaceRecordParser.POINTER_BEARING_TYPES) return emptySet()
+        return FaceRecordParser.imagePointerFields(record, FaceRecordParser.imagesByRelativeOffset(saved))
+            .map { it.image.index }.toSet()
+    }
+
+    /** Every image record some live widget in [entry] points at. */
+    private fun drawnImages(entry: ContainerEntry): Set<Int> {
+        val relative = FaceRecordParser.imagesByRelativeOffset(entry)
+        return FaceRecordParser.scanWidgets(entry)
+            .filter { it.widgetType in FaceRecordParser.POINTER_BEARING_TYPES }
+            .flatMap { FaceRecordParser.imagePointerFields(it, relative) }
+            .map { it.image.index }
+            .toSet()
+    }
+
+    /**
+     * Removes a widget **and the artwork only it drew** — for a widget that was never part
+     * of the face, one imported from another.
+     *
+     * [removeWidget] keeps a widget's rasters on purpose: its record goes to the Removed
+     * list, and Restore appends that record verbatim, pointing at those rasters by offset.
+     * An imported widget does not need that — it can be imported again — and keeping its
+     * artwork only stranded every byte it brought in, drawn by nothing, for good: one test
+     * project carried 1.3 MB of it.
+     *
+     * Which rasters go is two rules, and both fail closed:
+     *  * **never one the face shipped with.** [shippedImageCount] is the pristine entry's
+     *    count, and an import appends after it, so no delete here can take a style below
+     *    the image count it shipped with or move a shipped raster;
+     *  * **never one anything still points at** — a live widget (a duplicate of the one
+     *    deleted shares its rasters) or a saved removal in [retained].
+     */
+    fun deleteWidget(
+        source: Fit3Container,
+        entryBasename: String,
+        globalIndex: Int,
+        widgetType: Int,
+        sequenceId: Int,
+        x: Int,
+        y: Int,
+        shippedImageCount: Int,
+        retained: List<ByteArray> = emptyList(),
+    ): StructuralEdit {
+        val entry = source.entryByBasename(entryBasename)
+        val record = FaceRecordParser.scanWidgets(entry).firstOrNull { it.globalIndex == globalIndex }
+            ?: throw Fit3FormatException("$entryBasename: no widget $globalIndex to delete")
+        val drew = if (record.widgetType in FaceRecordParser.POINTER_BEARING_TYPES) {
+            FaceRecordParser.imagePointerFields(record, FaceRecordParser.imagesByRelativeOffset(entry))
+                .map { it.image.index }.toSet()
+        } else {
+            emptySet()
+        }
+        val removal = removeWidget(
+            source, listOf(entryBasename), globalIndex, widgetType, sequenceId, x, y,
+            requireFinal = false,
+        )
+        // `removeWidget` writes the image section back verbatim, so these indices still
+        // name the same rasters in its result.
+        val after = removal.container.entryByBasename(entryBasename)
+        val stillNeeded = drawnImages(after) + retained.flatMap { savedWidgetImages(after, it) }
+        val orphaned = drew.filter { it >= shippedImageCount && it !in stillNeeded }.toSet()
+        if (orphaned.isEmpty()) return removal
+        val purge = dropImages(removal.container, entryBasename, orphaned, shippedImageCount)
+        return purge.copy(
+            changedPayloadBytes = removal.changedPayloadBytes + purge.changedPayloadBytes,
+            changedStyles = removal.changedStyles,
+            sizeDelta = removal.sizeDelta + purge.sizeDelta,
+            removedRecords = removal.removedRecords,
+            droppedImages = mapOf(entryBasename to orphaned),
+        )
+    }
+
+    /**
+     * The container with only its first [count] numbered styles.
+     *
+     * Three things count the styles and all three move together, because every one of the 99
+     * catalogue containers has them agree: the `styleN.bin` entries themselves,
+     * `setting.bin +0x34` (the count the watch reads), and `preview.bin`'s frames — one per
+     * style at a fixed stride, which the face picker seeks by index. The *first* styles are
+     * kept, never a selection, so the numbering stays `style0` upward with no gap for the
+     * picker to index into. The default style (`+0x35`) goes to 0, the one style certain to be
+     * left. `aod.bin`, the font bindings and the dictionaries are shared by every style and
+     * are not touched.
+     *
+     * **No catalogue face has fewer than three styles**, so a container this produces with one
+     * is a shape the watch has not been shown to accept. The install command names the style
+     * to activate, so a watch holding a saved style index from before is not left pointing
+     * past the end — but that is the argument, not a hardware result.
+     */
+    fun keepFirstStyles(source: Fit3Container, count: Int): StructuralEdit {
+        requireValidAndTight(source)
+        val styles = FaceResources.selectableStyles(source)
+        if (count < 1 || count > styles.size) {
+            throw Fit3FormatException("cannot keep $count of ${styles.size} styles")
+        }
+        if (styles.map { it.basename } != styles.indices.map { "style$it.bin" }) {
+            throw Fit3FormatException("the styles are not numbered from style0 without a gap")
+        }
+        val setting = FaceResources.settingOrNull(source)
+            ?: throw Fit3FormatException("container has no setting.bin")
+        if (SettingRecord.parse(setting).styleCount != styles.size) {
+            throw Fit3FormatException("setting.bin does not count the styles present")
+        }
+        val preview = FaceResources.previewOrNull(source)
+            ?: throw Fit3FormatException("container has no preview.bin")
+        if (PreviewStream.recordCount(preview) != styles.size) {
+            throw Fit3FormatException("preview.bin does not hold one frame per style")
+        }
+        val replacements = linkedMapOf(
+            setting.index to setting.data.copyOf().also {
+                it[0x34] = count.toByte()
+                it[0x35] = 0
+            },
+            preview.index to preview.data.copyOfRange(0, count * PreviewStream.RECORD_STRIDE),
+        )
+        val removed = styles.drop(count).map { it.index }.toSet()
+        val before = crossResourceIssues(source).map { it.code }.toSet()
+        val edit = rebuild(source, replacements, removedEntries = removed)
+        val introduced = crossResourceIssues(edit.container).map { it.code }.toSet() - before
+        if (introduced.isNotEmpty()) {
+            throw Fit3FormatException("keeping $count styles introduced $introduced")
+        }
+        FaceResources.selectableStyles(edit.container).forEachIndexed { index, entry ->
+            check(entry.data.contentEquals(styles[index].data)) { "${entry.basename} changed" }
+        }
+        return edit
+    }
+
+    /**
+     * Deletes image records that nothing draws, and moves every pointer after them.
+     *
+     * The image section is rebuilt from the survivors in their original order, and every
+     * pointer is rewritten through [relocatePointers] — the same map every other relocation
+     * uses, so a field it knows about cannot be left behind and a word it does not know
+     * that lands on a moved raster refuses the edit. Afterwards every widget must be
+     * byte-identical apart from those pointers, and every pointer must name byte-identical
+     * artwork: the face draws exactly what it drew, from fewer bytes.
+     */
+    fun dropImages(
+        source: Fit3Container,
+        entryBasename: String,
+        imageIndices: Set<Int>,
+        shippedImageCount: Int,
+    ): StructuralEdit {
+        requireValidAndTight(source)
+        val entry = source.entryByBasename(entryBasename)
+        val widgets = FaceRecordParser.scanWidgets(entry)
+        val images = FaceRecordParser.scanImages(entry)
+        requireContiguousWidgets(entry, widgets, images)
+        val header = StyleHeader.parse(entry)
+        if (header.storedImageOffset + header.imageBytes != entry.data.size) {
+            throw Fit3FormatException("${entry.basename}: image section is not tightly packed")
+        }
+        if (imageIndices.isEmpty() || imageIndices.any { it !in images.indices }) {
+            throw Fit3FormatException("${entry.basename}: no such image records to delete")
+        }
+        if (imageIndices.any { it < shippedImageCount }) {
+            throw Fit3FormatException("${entry.basename}: refusing to delete artwork the face shipped with")
+        }
+        if (imageIndices.any { it in drawnImages(entry) }) {
+            throw Fit3FormatException("${entry.basename}: refusing to delete artwork a widget still draws")
+        }
+        val base = images.first().recordOffset
+        val relative = images.associateBy { (it.recordOffset - base).toLong() }
+        val mapping = mutableMapOf<Long, Long>()
+        val kept = ByteArrayOutputStream()
+        images.forEachIndexed { index, image ->
+            if (index in imageIndices) return@forEachIndexed
+            val end = images.getOrNull(index + 1)?.recordOffset ?: entry.data.size
+            mapping[(image.recordOffset - base).toLong()] = kept.size().toLong()
+            kept.write(entry.data, image.recordOffset, end - image.recordOffset)
+        }
+        val moved = relative.keys.filter { mapping[it] != it }.toSet()
+        val head = entry.data.copyOfRange(0, header.storedImageOffset)
+        relocatePointers(entry, head, widgets, relative, moved) { _, value ->
+            mapping[value] ?: throw Fit3FormatException("${entry.basename}: a pointer names deleted artwork")
+        }
+        val output = head + kept.toByteArray()
+        output.putU32(0x0C, kept.size())
+        val relocated = validateRelocatedEntry(entry, output)
+        requireSameDrawing(entry, relocated, images.size - imageIndices.size)
+        return rebuild(source, mapOf(entry.index to output))
+    }
+
+    /**
+     * After [dropImages]: the same widgets, byte for byte apart from their image pointers,
+     * each pointer naming the same artwork byte for byte, and exactly the expected number
+     * of image records left.
+     */
+    private fun requireSameDrawing(before: ContainerEntry, after: ContainerEntry, expectedImages: Int) {
+        val beforeImages = FaceRecordParser.imagesByRelativeOffset(before)
+        val afterImages = FaceRecordParser.imagesByRelativeOffset(after)
+        if (FaceRecordParser.scanImages(after).size != expectedImages) {
+            throw Fit3FormatException("${before.basename}: the wrong number of images were deleted")
+        }
+        fun artwork(entry: ContainerEntry, image: ImageRecord) =
+            entry.data.copyOfRange(image.recordOffset, image.pixelOffset + image.dataSize)
+        val old = FaceRecordParser.scanWidgets(before)
+        val new = FaceRecordParser.scanWidgets(after)
+        if (old.size != new.size) throw Fit3FormatException("${before.basename}: widget records went missing")
+        old.zip(new).forEach { (b, a) ->
+            val bRaw = before.data.copyOfRange(b.recordOffset, b.recordOffset + b.recordSize)
+            val aRaw = after.data.copyOfRange(a.recordOffset, a.recordOffset + a.recordSize)
+            if (b.widgetType in FaceRecordParser.POINTER_BEARING_TYPES) {
+                val bFields = FaceRecordParser.imagePointerFields(b, beforeImages)
+                val aFields = FaceRecordParser.imagePointerFields(a, afterImages)
+                if (bFields.map { it.offset - b.recordOffset } != aFields.map { it.offset - a.recordOffset } ||
+                    bFields.zip(aFields).any { (x, y) -> !artwork(before, x.image).contentEquals(artwork(after, y.image)) }
+                ) {
+                    throw Fit3FormatException("${before.basename}: widget ${b.globalIndex} no longer draws the same artwork")
+                }
+                bFields.forEach { bRaw.putU32(it.offset - b.recordOffset, 0) }
+                aFields.forEach { aRaw.putU32(it.offset - a.recordOffset, 0) }
+            }
+            if (!bRaw.contentEquals(aRaw)) {
+                throw Fit3FormatException("${before.basename}: widget ${b.globalIndex} changed beyond its pointers")
+            }
+        }
     }
 
     private const val StaticWidgetType = 1
@@ -54,7 +306,7 @@ object StructuralEditor {
     /** Below this, a Rule's stored thickness is not the number its extent came from. */
     private const val RULE_MINIMUM_THICKNESS = 2
 
-    /** Pixel formats [resampleRaster] can read, so the ones a resize may touch. */
+    /** Pixel formats [RasterResampler] can read, so the ones a resize may touch. */
     private val RESAMPLED_FORMATS = setOf(IMAGE_RGB565, IMAGE_RGB565_ALPHA, IMAGE_INDEXED8)
 
     /** 36 + one type-word, which is what all 348 corpus background Statics measure. */
@@ -1430,11 +1682,11 @@ object StructuralEditor {
         // An indexed raster's payload is a 1,024-byte BGRA palette followed by one index
         // per pixel. The palette is fixed-length and describes colours, not geometry, so
         // it is copied through untouched and only the sample plane is resampled — which
-        // is also why nearest neighbour is the only resampling that can be used here.
+        // is also why that one format is resampled by nearest neighbour.
         val palette = data.copyOfRange(from.pixelOffset, from.samplesOffset)
-        val resized = resampleRaster(
+        val resized = RasterResampler.resample(
             data.copyOfRange(from.samplesOffset, from.pixelOffset + from.pixelDataSize),
-            from.bytesPerPixel,
+            from.format,
             from.width,
             from.height,
             width,
@@ -1749,8 +2001,13 @@ object StructuralEditor {
         widgets: List<WidgetRecord>,
         images: List<ImageRecord>,
     ) {
-        if (widgets.isEmpty() || images.isEmpty()) {
-            throw Fit3FormatException("${entry.basename}: style needs widgets and images")
+        // An empty widget table is a real state, not a malformed one: removing the last
+        // widget is allowed, and refusing the append that follows is what made a style
+        // emptied by hand impossible to restore — "style needs widgets and images", on the
+        // one edit that exists to put a widget back. The image section is what the
+        // boundary check below is measured against, so that still has to be there.
+        if (images.isEmpty()) {
+            throw Fit3FormatException("${entry.basename}: style has no image section")
         }
         if (widgets.map { it.globalIndex } != widgets.indices.toList()) {
             throw Fit3FormatException("${entry.basename}: widget indices are not contiguous")
@@ -1853,48 +2110,6 @@ object StructuralEditor {
         }
     }
 
-    /**
-     * Nearest-neighbour resample of one raster's pixel samples, in whatever format the
-     * raster stores them in.
-     *
-     * [bytesPerPixel] is the only thing that differs between the three formats, which is
-     * why this takes it rather than naming one: 2 for `IMAGE_RGB565`, 3 for
-     * `IMAGE_RGB565_ALPHA`, 1 for an `IMAGE_INDEXED8` raster's sample plane. Hardcoding 3
-     * is what limited resize to RGB565+A frames and left **620 of the catalogue's 1,518
-     * Sprites** — 41% of them — refused for a reason that had nothing to do with the
-     * edit's safety: their frames are plain RGB565, and nothing else about them fails a
-     * check.
-     *
-     * Nearest neighbour is not a quality choice here, it is the only resampling that is
-     * *closed* over these formats. RGB565 carries 5/6/5 bits a channel and an indexed
-     * raster's samples are palette **indices**, so averaging two neighbours would invent a
-     * colour the palette does not contain. Copying whole samples is exact in every format
-     * and leaves the palette untouched, which is what makes one function enough.
-     */
-    private fun resampleRaster(
-        source: ByteArray,
-        bytesPerPixel: Int,
-        oldWidth: Int,
-        oldHeight: Int,
-        newWidth: Int,
-        newHeight: Int,
-    ): ByteArray {
-        if (source.size != oldWidth * oldHeight * bytesPerPixel) {
-            throw Fit3FormatException("raster payload does not match its dimensions")
-        }
-        val output = ByteArray(newWidth * newHeight * bytesPerPixel)
-        repeat(newHeight) { y ->
-            val sourceY = minOf(oldHeight - 1, y * oldHeight / newHeight)
-            repeat(newWidth) { x ->
-                val sourceX = minOf(oldWidth - 1, x * oldWidth / newWidth)
-                val oldOffset = (sourceY * oldWidth + sourceX) * bytesPerPixel
-                val newOffset = (y * newWidth + x) * bytesPerPixel
-                source.copyInto(output, newOffset, oldOffset, oldOffset + bytesPerPixel)
-            }
-        }
-        return output
-    }
-
     private fun selectedEntries(
         source: Fit3Container,
         names: List<String>,
@@ -1932,17 +2147,20 @@ object StructuralEditor {
         source: Fit3Container,
         replacements: Map<Int, ByteArray>,
         addedResources: Map<String, ByteArray> = emptyMap(),
+        /** Entries to leave out, by index. Only [keepFirstStyles] removes any. */
+        removedEntries: Set<Int> = emptySet(),
     ): StructuralEdit {
         val original = source.toByteArray()
         val header = original.copyOfRange(0, CONTAINER_HEADER_SIZE)
-        val directory = source.entries.map { it.rawRecord.copyOf() }.toMutableList()
+        val kept = source.entries.filter { it.index !in removedEntries }
+        val directory = kept.map { it.rawRecord.copyOf() }.toMutableList()
         val body = ByteArrayOutputStream()
-        var cursor = source.bodyOffset + addedResources.size * DIRECTORY_ENTRY_SIZE
-        source.entries.forEach { entry ->
+        var cursor = CONTAINER_HEADER_SIZE + (kept.size + addedResources.size) * DIRECTORY_ENTRY_SIZE
+        kept.forEachIndexed { position, entry ->
             val payload = replacements[entry.index] ?: entry.data
-            directory[entry.index].putU32(0x40, cursor)
-            directory[entry.index].putU32(0x44, payload.size)
-            directory[entry.index].putU16(0x48, Crc16.ccittFalse(payload))
+            directory[position].putU32(0x40, cursor)
+            directory[position].putU32(0x44, payload.size)
+            directory[position].putU16(0x48, Crc16.ccittFalse(payload))
             body.write(payload)
             cursor += payload.size
         }
@@ -2003,10 +2221,11 @@ object StructuralEditor {
         }
         return StructuralEdit(
             container = parsed,
-            changedPayloadBytes = changed + addedResources.values.sumOf { it.size },
+            changedPayloadBytes = changed + addedResources.values.sumOf { it.size } +
+                removedEntries.sumOf { source.entries[it].data.size },
             // The variants actually rewritten, not the ones the edit was offered:
             // a widget missing from a sibling style leaves that style untouched.
-            changedStyles = replacements.keys.map { source.entries[it].basename },
+            changedStyles = (replacements.keys + removedEntries).map { source.entries[it].basename },
             sizeDelta = assembled.size - original.size,
         )
     }

@@ -94,7 +94,7 @@ anyone holding it can produce an APK a device will accept as an update.
   :app:lintDebug
 ```
 
-Current corpus-backed baseline: **555 tests collected, 554 passed, 1 skipped,
+Current corpus-backed baseline: **648 tests collected, 647 passed, 1 skipped,
 0 failures, 0 lint errors, 23 lint warnings.**
 Every warning is a dependency- or SDK-version notice in a build file, none in this
 code, so the count tracks whatever the ecosystem has published since.

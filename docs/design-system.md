@@ -33,14 +33,26 @@ cannot notice that a document went out of date.
   ladder `#0A0E0E → #101615 → #18201F → #222B29`. Elevation is expressed as lighter
   surfaces plus a 1dp `outlineVariant` border, never as a shadow, exactly as drawn.
   There are no colour literals anywhere outside that file.
-* **The information architecture.** Five rail destinations — Face, Widgets, Background,
-  Styles, Send — with selection as an action bar under the canvas rather than a page, and
-  the Inspector demoted to *Record details*, reached from that bar. Two departures from
-  the drawing, both of them measured: the checks and the transfer are **one** page,
-  because the rail's Install entry already redirected to Validate whenever the preview was
-  unreviewed, so they were two entries describing one journey; and the canvas is a
-  destination of its own, because until it was, the only way back to the thing being
-  edited was the `‹` arrow, which everywhere else in this app means "leave".
+* **The information architecture.** Five rail destinations — Canvas, Widgets, Background,
+  Styles, Install — with selection as an action bar under the canvas rather than a page,
+  and the Inspector demoted to *Record details*, reached from that bar. Two departures
+  from the drawing, both of them measured: Validate and Install are **one** page, because
+  the Install entry already redirected to Validate whenever the preview was unreviewed, so
+  they were two entries describing one journey; and the canvas is a destination of its
+  own, because until it was, the only way back to the thing being edited was the `‹`
+  arrow, which everywhere else in this app means "leave".
+* **Every widget edit is one tap under the face.** Four nudge arrows on one row and seven
+  actions on the next — smaller, larger, duplicate, remove, colour, scope, record details —
+  in a tray of `FitIconButton`s over a `FitButton(compact = true)` nudge row. `compact`
+  exists for this tray and nowhere else, because its height comes out of the face above it.
+  The arrows are drawn (`NudgeArrow`, through `FitButton`'s content overload) rather than
+  typed: a font's `←→` and `↑↓` are two pairs with different metrics, and as text the
+  horizontal pair sat visibly lower than the vertical one.
+  Both rows fill their width, so the tray reads as one surface: `FitIconButton` applies its
+  own size *before* the caller's modifier for exactly that, so a dense row hands it a
+  `weight(1f)` and that wins on width while the height stays the design's 38dp. The tray
+  prints no size — the widget's header line two rows up already carries
+  `#2 · 67×88 · x 110 y 0`.
 * **Mono for quantities.** `labelMedium`, `labelSmall`, `FitFaceType.numeric`,
   `FitFaceType.micro` and `FitFaceType.readout` are monospace, and everything
   quantitative uses one of them. This is not decoration: a proportional digit changes
@@ -48,7 +60,9 @@ cannot notice that a document went out of date.
   `readout` exists because the Material ramp has no mono slot at 20sp, which is why
   the inspector's coordinates had fallen back to a proportional `headlineSmall`.
 * **One shape for a top-bar action.** `FitIconButton` is 38dp square with a 1dp
-  border, and the back button, the `⋯` overflow and the `≡` app menu are all it.
+  border, and the back button, the `⋯` overflow and the `≡` app menu are all it. It also
+  carries the design's only **toggled** icon: `selected = true` gives it `FitChip`'s filled
+  tint, primary border and primary glyph, which is what the editor's scope button wears.
   The app's three global actions — report a problem, about, check for update — live
   *inside* that menu rather than beside it, which is what keeps the count at one.
 

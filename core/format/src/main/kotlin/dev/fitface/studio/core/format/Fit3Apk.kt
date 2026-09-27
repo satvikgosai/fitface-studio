@@ -134,6 +134,10 @@ data class Fit3Apk(
                 name == FACE_METADATA_MEMBER ||
                 stylePreviewPattern.matches(name)
 
+        /** The style index a default style preview member names, or null for any other member. */
+        internal fun stylePreviewIndex(name: String): Int? =
+            stylePreviewPattern.matchEntire(name)?.groupValues?.get(1)?.toIntOrNull()
+
         /** Whether [name] is the container member — the one [parse] requires exactly one of. */
         fun isFaceBinary(name: String): Boolean = facePattern.containsMatchIn(name)
 

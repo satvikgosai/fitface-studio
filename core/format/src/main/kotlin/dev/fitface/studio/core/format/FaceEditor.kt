@@ -383,6 +383,40 @@ object FaceEditor {
         return finalize(source, output, listOf(entry), changed)
     }
 
+    /**
+     * The picture the watch's face picker holds for [styleIndex] now, or null where there is
+     * none this app can read — no `preview.bin`, no raster at that index, or one that is not
+     * plain RGB565, which is the only kind [replacePreviewThumbnail] writes.
+     */
+    fun previewThumbnail(source: Fit3Container, styleIndex: Int): PreviewFrame? {
+        val entry = source.entries.singleOrNull { it.basename == "preview.bin" } ?: return null
+        val raster = FaceRecordParser.scanImages(entry).getOrNull(styleIndex) ?: return null
+        if (raster.format != IMAGE_RGB565) return null
+        return FaceRecordParser.decodeImage(entry, raster)
+    }
+
+    /**
+     * Exactly the picture [replacePreviewThumbnail] would write for [composed], as the face
+     * picker will then show it: box-filtered to the raster's own size and quantised to
+     * RGB565 — so what the Styles page shows as "after" is the stored pixels, not the
+     * canvas scaled down by the display. Null where [previewThumbnail] is null.
+     */
+    fun renderedThumbnail(source: Fit3Container, styleIndex: Int, composed: PreviewFrame): PreviewFrame? {
+        val entry = source.entries.singleOrNull { it.basename == "preview.bin" } ?: return null
+        val raster = FaceRecordParser.scanImages(entry).getOrNull(styleIndex) ?: return null
+        if (raster.format != IMAGE_RGB565) return null
+        val scaled = boxFilter(composed, raster.width, raster.height)
+        return PreviewFrame(raster.width, raster.height, IntArray(scaled.size) { index ->
+            val color = scaled[index]
+            val rgb565 = encodeRgb565(color ushr 16 and 0xFF, color ushr 8 and 0xFF, color and 0xFF)
+            // The decoder's own expansion, so this is what reading the raster back gives.
+            val red = (((rgb565 ushr 11) and 0x1F) * 255 + 15) / 31
+            val green = (((rgb565 ushr 5) and 0x3F) * 255 + 31) / 63
+            val blue = ((rgb565 and 0x1F) * 255 + 15) / 31
+            (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
+        })
+    }
+
     /** Area-averaging downscale so thumbnails keep thin glyphs legible. */
     internal fun boxFilter(source: PreviewFrame, width: Int, height: Int): IntArray {
         if (width <= 0 || height <= 0) {

@@ -358,6 +358,13 @@ enum class ProjectSort {
 private fun <T> Comparator<T>.maybeReversed(reversed: Boolean): Comparator<T> =
     if (reversed) reversed() else this
 
+/**
+ * The face a custom face is built from — Info_4, whose clock carries alpha and whose other
+ * widgets are anchored to nothing, so stripping them leaves a clean canvas. A custom face
+ * installs into this face's slot on the watch, which the screen offering it has to say.
+ */
+const val CUSTOM_FACE_TEMPLATE_FACE_ID = "00006"
+
 class FacePackage(
     val sourceKey: String,
     val displayName: String,
@@ -887,6 +894,18 @@ data class EditorSnapshot(
     val validationWarnings: List<String>,
     val isDirty: Boolean,
     val thumbnailRefreshed: Boolean = false,
+    /**
+     * The face-picker thumbnail of [activeStyleName] as it is stored now: one frame of
+     * `preview.bin`, which is what the watch's carousel and the companion app show for
+     * this style. Null where the face has none this app can read.
+     */
+    val pickerThumbnail: PreviewFrame? = null,
+    /**
+     * Exactly what **Update thumbnail** would store instead — box-filtered and quantised
+     * the way the update writes it. Null wherever the update is not on offer, so a screen
+     * showing it is showing a promise the button keeps.
+     */
+    val pickerThumbnailAfter: PreviewFrame? = null,
     val audit: EditAuditSummary?,
 ) {
     /**
@@ -1089,6 +1108,17 @@ interface WatchFaceRepository {
     suspend fun setImageFit(value: ImageFit)
 
     suspend fun openPackage(download: FacePackage): EditorSnapshot
+
+    /**
+     * Starts a custom face from [download], which has to be the template's own face
+     * ([CUSTOM_FACE_TEMPLATE_FACE_ID]): stripped to its clock, given previews of what it now
+     * is, and saved as a new project called [name], numbered if that is taken.
+     *
+     * Made here, from the package the store served, rather than shipped: no watch-face
+     * content is bundled with this app.
+     */
+    suspend fun openTemplate(download: FacePackage, name: String): EditorSnapshot =
+        throw UnsupportedOperationException()
 
     suspend fun openProject(projectId: Long): EditorSnapshot
 

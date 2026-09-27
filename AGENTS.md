@@ -500,17 +500,42 @@ The four that catch people fastest:
   label promises "tap for 1 px" moving nothing. The click is the fallback, and a flag
   keeps the release of a longer press from adding a step the repeat already made.
 * **Sending is gated on `previewReviewed`, and every commit clears it.** Editing
-  on the Send page therefore has to re-mark it, or every send button goes inert —
-  `SendWorkspace`'s `LaunchedEffect(snapshot)` is what does it. The checks and the
-  transfer are **one page**: the rail's Install entry used to redirect to Validate
+  on the Install page therefore has to re-mark it, or every send button goes inert —
+  `InstallWorkspace`'s `LaunchedEffect(snapshot)` is what does it. The checks and the
+  transfer are **one page**, called Install: that entry used to redirect to Validate
   whenever the preview was unreviewed, so the rail said one thing and the screen said
-  another. The gate is the layout now — the validated render is the second thing on the
+  another. The gate is the layout now — the validated render is the first thing on the
   page, the send button is near the last — and the flag arms the button rather than
   choosing a destination. `Session.validatedBytes()` is still the only real gate.
+  The page keeps the shape the transfer always had — device card, setup checklist, transfer
+  — with the checks and the audit **folded in below it**, because the reader comes here to
+  send and the joins are reference. Three things are deliberately *not* on it. A passing
+  validation has no banner: "Container reparsed successfully…" is three lines saying what
+  `CHECKS · 5 pass` says in two words, and a failure keeps its banner because a failure is
+  the page. There is **one render**, the device card's plate, enlarged to be looked at —
+  the merge brought a second, bigger one, and two pictures of one face on one screen is what
+  that cost. (Side by side was tried instead and only made the page look like two pages.)
+  And the **face-picker thumbnail lives on Styles**, where it belongs: it is one frame of a
+  numbered style's `preview.bin`, which is why `canRefreshThumbnail` refuses while the
+  always-on display is on the canvas, and it has nothing to do with the transport.
+  Two layout rules in that card. The status badge is its own line **above** the device name,
+  not beside it: next to the plate a 320dp phone leaves the text column about 150dp, and the
+  name and the badge together want more, so the badge wrapped and rendered as `SETU / P`
+  across the name it was meant to sit beside. And **the plate is sized to the text**, not
+  the other way round — at 104dp it stood 163dp tall against about 90dp of text and the card
+  carried 50dp of nothing under the plugin line. Driving the height off the text with
+  `IntrinsicSize.Min` does **not** work and was tried: the plate's own bitmap answers the
+  intrinsic query, so it goes on setting the height. 80dp is the compromise the arithmetic
+  leaves — 126dp of plate against ~90dp of text, centred, so what remains reads as the
+  card's padding.
+  `CHECKS` and `AUDIT` sit directly under that card and above the setup steps: what the edit
+  *is*, under the picture of it, before the instructions for sending it. `AUDIT` is there
+  whether or not anything has been committed, saying so when it has not — a section that
+  comes and goes with whether a commit has happened yet is one nobody learns is there.
 * **A preview may leave a widget out. It may not invent one.** The AOD renderer's first
   pass painted a translucent coloured box over every Value and Composite rectangle,
   because those draw live text from firmware fonts this app does not have. That box is
-  pixels the watch will never draw, in the one picture the Send page presents as what
+  pixels the watch will never draw, in the one picture the Install page presents as what
   is about to be installed — and it went into `widgetOverlay` too, so dragging such a
   widget dragged a grey rectangle around. Nothing stands in for them now: the canvas
   outlines them, and `AodPreview.isApproximate` says in words what was left out. **And a
@@ -610,6 +635,20 @@ The four that catch people fastest:
   resource sits outside every entry. Do not "add resize" to a Value by writing its box: it
   moves nothing on the watch, and the composer would resample the vendor's text into the new
   rectangle and show scaled glyphs that will never be drawn.
+* **A shrink averages, and only a palette raster is resampled by copying samples.**
+  Nearest neighbour served every format on the reasoning that an average invents a colour
+  the format cannot hold, which is true of exactly one: an `IMAGE_INDEXED8` sample is a
+  palette index, and one raster in the catalogue is indexed. RGB565 has no palette, so an
+  averaged colour rounds to a valid 5/6/5 value, and what nearest neighbour cost every
+  other widget was its edge — a shrink kept one source pixel per new pixel and dropped the
+  rest, so the 95% rung deleted a row and a column in twenty and a shrunk digit came back
+  stepped. Face `00006`'s hour digits at 70% kept 1,228 anti-aliased edge pixels that way,
+  against 3,459 averaged. `RasterResampler` averages by area on a shrinking axis and
+  interpolates on a growing one. Two things in it are not optional. **Colour is weighted by
+  alpha**: all 15 million transparent pixels in the catalogue store black and edges store
+  straight colour, so an unweighted mean pulls black into every edge as a dark fringe. And
+  **an unchanged size returns the samples untouched**, which is what keeps restoring the
+  shipped extent byte-identical to the shipped face. `RasterResamplerTest` pins both.
 * **Every resize resamples the pristine container, never the current one.** Resampling
   is lossy, so chaining it destroys the artwork: 114×136 → 56×69 → 109×128 came back
   carrying only the detail that survived the small one. `resizeWidget` takes a
@@ -731,7 +770,7 @@ The four that catch people fastest:
   route that used to serve both, disconnecting the watch in the companion app, does not
   free the channel — it and a manual force stop were both tried on hardware.
 * **What is installed does not decide whether the channel opens — discovery does.** The
-  Send page's checklist used to AND three package names and replace itself with a dead
+  Install page's checklist used to AND three package names and replace itself with a dead
   end if any were absent, and every part of that was wrong. **The companion app has no
   single package name**: it ships as `com.samsung.android.app.watchmanager` on mainstream
   models and `…watchmanager2` on the entry-level ones (SM-A107M, SM-A115M), with the
@@ -795,7 +834,7 @@ The four that catch people fastest:
   none, so both screens must treat absence as normal. `StylePreviewSweepTest` and
   `StylePreviewProjectTest` pin this.
 * **The canvas has one mode.** It used to toggle between the editable layout and a
-  read-only "validated preview" — the same picture the Send page shows, so the
+  read-only "validated preview" — the same picture the Install page shows, so the
   toggle only ever took away the ability to select a widget. Both chips are gone and
   `EditorUiState` no longer carries `showLayout`; what survived is
   `markPreviewReviewed()`, because sending is still gated on having seen the render.
@@ -859,7 +898,7 @@ The four that catch people fastest:
   `preview.bin`'s frames and the extracted PNGs, and equals the style's own number only
   while a face numbers contiguously from zero. `AOD_ENTRY_NAME` moved down to `:core:model`
   for the same reason: `:feature:editor` cannot see `:core:format`, and it had a local copy
-  of the literal within a day of needing one. Two corollaries. The Send page's payload
+  of the literal within a day of needing one. Two corollaries. The Install page's payload
   block says **`sampler`**, not `style` — it is the raw protocol byte, counted from zero, so
   labelling it a style put "style 2" on screen beside "Style 3" for one face. And a screen
   that shows a variant name at all goes through `variantLabel`, including the
@@ -896,23 +935,51 @@ The four that catch people fastest:
   the six lived two screens away, behind `Inspect ›` and a scroll past a mini-canvas, two
   banners and a Position card — so making a widget larger cost three taps and a scroll, and
   removing one cost four taps and two scrolls, in the editor whose whole subject is editing
-  widgets. `SelectionActionBar` is the answer: move and resize are one tap, colour and the
-  destructive pair are one tap into a `FitDropdownMenu`, and the inspector survives behind
-  **Record details**. Four rules came out of building it. The widget list is a **picker** —
-  a row selects and lands on the face, never on the inspector, or picking a widget shows you
-  its type and sequence id when you wanted to move it. Both menus are `DropdownMenu`s rather
-  than a sheet for the reason the top bar's is, and every entry closes before it invokes.
-  A menu cannot show a chip's selected border, so the colour in force and the apply-to-all
-  state both carry a **tick in the label** — `checkedLabel`. And the colour control is a
-  drawn **swatch**, not a `●` tinted to the colour: face `00046`'s weekday label is
-  `FF000000`, which as a glyph is a black dot on a dark button, invisible for exactly the
-  colour a watch face is most likely to hold.
+  widgets. `SelectionActionBar` is the answer, and **every edit is one tap** on it now: four
+  nudge arrows on one row, and seven actions on the next — smaller, larger, duplicate,
+  remove, colour, scope, record details. The overflow menu that held the last two is gone,
+  because a menu for two entries is a tap spent on nothing.
+  Rules that came out of building it. The widget list is a **picker** — a row selects and
+  lands on the face, never on the inspector, or picking a widget shows you its type and
+  sequence id when you wanted to move it. Both rows **fill their width**: a tray with a
+  spacer in it has a hole in the only row that could have used the width, and
+  `FitIconButton` applies its own size *before* the caller's modifier so a dense row hands
+  it a `weight(1f)` and that wins on width while the height stays the design's 38dp. The
+  tray prints **no size**, because the widget's own header two rows up already carries
+  `#2 · 67×88 · x 110 y 0` and a figure printed twice can disagree with itself. The scope
+  button is the tray's one **toggle**, and it takes `FitIconButton(selected = true)` —
+  `FitChip`'s filled tint, primary border and primary glyph. A colour swap alone is not
+  enough for a toggle sitting in a row of momentary actions: tinted teal among six outlined
+  buttons it read as "this one is special", not as "this setting is on". It is **disabled
+  rather than hidden** where it governs nothing — an always-on edit is never joined to a
+  style and an imported widget carries its own scope, and a control that vanishes leaves
+  the reader guessing which of those it was. The colour menu is a
+  `FitDropdownMenu` whose entries close it before invoking, and it carries a **tick in the
+  label** (`checkedLabel`) because a menu cannot show a chip's selected border. And the
+  colour control itself is a drawn **swatch**, not a `●` tinted to the colour: face
+  `00046`'s weekday label is `FF000000`, which as a glyph is a black dot on a dark button —
+  invisible for exactly the colour a watch face is most likely to hold.
+  **The glyphs were chosen off a rendered sampler, not a character table.** A glyph this app
+  cannot draw is a blank button, and two that read perfectly well on paper failed on the
+  device: `❐` fell back to a plain square, losing the two sheets that say *duplicate*, and
+  `␡` came out as tiny DEL letters. Do the same before adding one. The scope mark went the
+  same way and is `▤`: `☷` reads "many layers" best of all and sits in Miscellaneous
+  Symbols, the block `⚙` and `ℹ` fall out of into the emoji font, and `≣` is three bars
+  beside the app menu's `≡` — two glyphs one stroke apart doing unrelated things.
+  **The nudge arrows are the one mark that is drawn, not typed** (`NudgeArrow`). A font's
+  `←` `→` and `↑` `↓` are two pairs with their own metrics, not one shape four ways: the
+  horizontal pair sits on the maths axis and the vertical pair spans the cap height, so on
+  the emulator `←` and `→` rode 4px below `↑` and `↓`, all four sat under their buttons'
+  centres, and a phone font that takes them from a fallback sizes the pairs apart as well.
+  One path rotated about its own box cannot differ in either. The buttons carry "Move left"
+  and so on as their `contentDescription`, because a drawn arrow gives a screen reader
+  nothing to read.
 * **The rail is a width budget on one axis and a height budget on the other, and it was
   over both.** `BACKGROUND` is ten characters, and at `FitFaceType.micro`'s 1.3sp tracking
   that is about 67dp against the 64dp a fifth of a 339dp phone leaves it — so it rendered as
   `BACKGROUN`, clipped mid-word, on every phone, with no ellipsis and nothing in any test.
   The vertical rail had the matching fault: five items at the bar's spacing are taller than
-  the ~260dp a landscape phone leaves, so `SEND` was simply off the bottom. `RailLabel`
+  the ~260dp a landscape phone leaves, so `INSTALL` was simply off the bottom. `RailLabel`
   drops the tracking, the vertical rail is tighter **and** scrolls, and
   `EditorRailLayoutTest` pins both in characters and dp — this module cannot measure a
   composable, so the arithmetic is the assertion, the way `SortChipLayoutTest` does it for
@@ -921,8 +988,128 @@ The four that catch people fastest:
   label there were five cut through the middle.
 * **A page that renders the face must not render it beside the one the wide layout is
   already showing.** `CanvasSidePane` keeps a canvas next to every page but Canvas, so the
-  Send page's own read-only render made two faces at two sizes on one screen. It takes
+  Install page's own read-only render made two faces at two sizes on one screen. It takes
   `showFace` now. Background's preview stays, because there it is the thing being dragged.
+* **Importing several widgets is a loop, and the loop is the only shape available.** The
+  repository holds exactly one pending import, `previewWidgetImport` clears it on entry, and
+  `importWidget` validates its ticket against the session, the donor and the target container
+  **by reference** — which every commit replaces. So pricing the second widget destroys the
+  first one's ticket, and "price them all, then commit them all" cannot be written. The set is
+  a ViewModel loop over the single path that is proven on hardware; **nothing in
+  `:core:format` or the repository changed to allow it**. One `run {}` for the whole batch,
+  never one per item — `run` cancels the call before it, so a loop of them would leave every
+  import but the last cancelled, with the earlier ones already committed.
+  What that costs: a set is quoted from `addedBytesEstimate`, a documented **floor**, so the
+  panel says "adds at least" and never promises a fit; there is **no rollback across
+  commits**, so a set that stops at the third leaves the first two saved and the report says
+  so in those words; and it stops at the first failure, because the ceiling, the
+  `WidgetImportOrigins` budget and the ten font bindings all only get tighter as it goes.
+  **Two bugs here were invisible to the ViewModel tests and obvious on a device, and they are
+  the same bug twice: work started by one pick must not obstruct the next.** The rows and the
+  donor canvas were disabled on `busy`, which is set while the first pick is being priced — so
+  the very next tap was swallowed and building a set of three was tap, wait, tap, wait. They
+  gate on `saving` now, which is only true during a commit. And `ImportNotices` is pinned above
+  the page, so flashing its progress strip for that same pricing shifted the whole list down by
+  its own height and back, landing the next tap on the row above the one under the finger.
+  Pricing is silent; the panel's own button shows it working.
+  **A set is reviewed the way one widget is, from a different picture.** One widget's "after"
+  is the repository's render of the edit, because the ticket is that edit; a set's cannot exist
+  before it is committed, so `composeImportSet` paints each pick's donor layer over the face in
+  pick order. That is exact only because `WidgetImporter` copies rasters byte for byte and
+  `check`s the drawn position is unchanged — take that `check` out and the review is a guess.
+  And **the panel under the donor face must not grow with the pick count**, because the face
+  takes whatever height it leaves: wrapping chips and a pricing refusal parked in the pinned
+  banner took five picks' face down to a dot. The chips scroll on one line, the message slot is
+  two lines whatever it says, and a refused pick is `pickError`, shown in the panel.
+* **Removing an imported widget deletes it, artwork and all; removing a stock one does not.**
+  A stock removal writes the image section back verbatim, because Restore appends the saved
+  record and it names its rasters by offset. For an imported widget that stranded every byte
+  the import brought — 1.3 MB on one test project — so `deleteWidget` drops the rasters only it
+  drew, through `dropImages`, and nothing goes under Removed. Three rules hold it, and each has
+  a test. **Never a raster the face shipped with** (an index below the pristine count is
+  refused). **Never one still pointed at** — a duplicate of an import shares its rasters, and a
+  removal waiting to be restored needs its own. **And saved removals must be relocated past the
+  gap** — `relocateSavedWidget` takes the dropped indices; it used to refuse any edit that
+  lowered the image count, which would have failed every commit on a project with anything
+  under Removed. Separately, the import table keeps one entry even with no import left: the
+  fonts and dictionary entries an import adds stay in the container, and without a table the
+  reopen check sees entries the original never had and refuses the project.
+* **Several widgets are edited one at a time, and nothing below the ViewModel knows a set
+  exists.** Holding a widget on the canvas adds it to `multiSelection` (carrying the single
+  selection in); a tap then toggles and bare canvas lets go — the import picker's gestures. A
+  set is never one widget: falling to one becomes the ordinary selection. Moves go through the
+  same per-widget nudge queue, at a **shared step** — as far as the most constrained member can
+  go, or a widget at the edge stops while the rest carry on and the arrangement shears.
+  Duplicate and remove loop over the single repository calls, and **removal goes highest index
+  first**: removing a widget renumbers only those after it, so every index still to go keeps
+  naming the widget it was picked as. Removing in pick order removes the wrong widgets without
+  an error, because a renumbered neighbour has a valid index. It stops at the first refusal and
+  keeps what committed — no rollback across commits — and `SelectionStop` says how far it got.
+  Dragging is off while a set is selected, because dragging one member pulls it out of the
+  arrangement, and the set's tray is the single tray row for row, with what a set cannot do
+  disabled, so the face does not resize when a set starts.
+  **The commits are one widget at a time; the picture must not be.** A commit is slower than a
+  held arrow repeats, and with only `pendingWidgetMove` to draw from, one member glided while
+  the rest jumped as their own commits landed — the set stuttered across the face and never
+  seemed to accelerate together. `pendingSetMove` holds every member's target, published once
+  per step, and the canvas draws the set from it: the layer stack cut at every member
+  (`setMoveSegments`), the single-widget drag's below/above split made at each one, so z-order
+  holds while they move.
+* **A custom face is built on the phone, from the store's package, and never shipped.** The
+  obvious design — strip face `00006` once and bundle the result as an asset — puts the
+  vendor's digit artwork and previews inside every APK the release workflow publishes, which
+  is the one thing `NOTICE.md` promises this project never does. So `openTemplate` builds it
+  at the reader's request from the Info_4 package the store serves them: `CustomFaceTemplate`
+  strips it through the tray's own `removeWidget`, refusing any shape it was not written for
+  (the store serves the newest version), and the style previews and `preview.bin` frames are
+  **redrawn**, or the picker would show readings the face no longer has. `openPackage` and
+  `openTemplate` share `createProject`, so the row-then-files commit and its rollback exist
+  once. The row's provenance is a `fit3-template://` key with NULL store columns: a store
+  version would badge every custom face "outdated" the day Info_4 updates and offer the stock
+  face in its place. And it installs into Info_4's slot, which the card says before the tap.
+  **It keeps one style**, because Info_4's four are copies of each other once their readings
+  are gone — and that makes it the one container this app sends with a style count **no
+  catalogue face has** (the fewest is three). `keepFirstStyles` moves all three counts the
+  watch reads together — the entries, `setting.bin +0x34`, the `preview.bin` frames — and
+  `rebuild` learned to drop entries for it; nothing else removes an entry, so the rule that an
+  edit never changes a project's entry list still holds: the template is the project's
+  pristine. A one-style face also means the scope toggle governs nothing, so it is disabled
+  there and nothing says "every style" (`editsReachOtherStyles`).
+* **Removing a style's last widget is allowed, so everything after it has to work on an empty
+  table.** The shared guard in `StructuralEditor` refused any style with no widgets, and
+  removal was the one edit that never hit it — so a face emptied by hand could not have a
+  single widget restored, answering "style0.bin: style needs widgets and images" in the
+  format layer's own words. Only the image section is required now, because the boundary
+  check measures against it. `EmptyStyleTest` restores an emptied style byte for byte, and
+  gives one a background and an import.
+* **An edit reaches one style unless asked otherwise.** `applyWidgetEditsToAllStyles` used to
+  start on, and every style carries its own copy of its artwork — so a larger widget or a
+  duplicate that brings frames spent its bytes once per style, four times the room under the
+  4 MiB ceiling on a four-style face, for styles the reader may never install. Widening is the
+  tray's scope toggle. Do not default it back on to save a tap: the cost is invisible until an
+  edit is refused for size, and by then it has already been paid three times.
+* **The Widgets page builds sets with the canvas's gestures.** Holding a row adds it to the
+  set (carrying a single selection in), and while a set exists a tap toggles and **stays on
+  the list** — the rule that a row lands on the face still holds for a single pick, and would
+  make building a set from the list a round trip per widget. Rows carry the same numbered
+  badge as the canvas and the import picker (`PickBadge`, one composable), and the set's bar
+  is pinned under the list so it stays in view however far it scrolls; the set's tray is on
+  the face, which is where the bar leads.
+* **Switching the donor's variant keeps the old face on screen until the new one arrives.**
+  `selectVariant` used to null `content`, so the page emptied for the fraction of a second a
+  variant takes to read, while the pinned progress strip flashed above it — every chip tap
+  read as the screen flickering, worse on a phone than on the emulator. `content` stays until
+  it is replaced, `variantLoading` refuses picks on it meanwhile (its indices are the other
+  variant's), and a load that runs past 300 ms shows a bar in a slot that is always reserved,
+  so nothing moves. The chips stay live rather than dimming for the load: a second tap
+  supersedes the first, and backing out of a switch puts the chip back on the face showing.
+  A screen recording is how this was checked — the recorder writes a frame on every change,
+  so a blank frame would be one of them.
+* **The face-picker thumbnail card shows two stored pictures, never the canvas scaled down.**
+  "Now" is the `preview.bin` frame itself and "After" is `FaceEditor.renderedThumbnail` — the
+  update's own box filter and RGB565 quantisation — and it exists only while the update is on
+  offer, so the pair is a promise the button keeps. `ThumbnailPreviewTest` reads the update back
+  and compares every pixel.
 * **The editor leaves the Inspector on a removal *count*, never on "no widget is selected".**
   The second rule reads better and is wrong: `page` is local Compose state and moves in the
   same frame as the tap, while the selection arrives through `collectAsStateWithLifecycle` a

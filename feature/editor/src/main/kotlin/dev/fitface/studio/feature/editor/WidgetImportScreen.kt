@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -15,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,23 +28,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -70,8 +84,18 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                         WidgetImportStage.FACES -> stringResource(R.string.widget_import_faces)
                         WidgetImportStage.WIDGETS -> state.selectedFace?.name
                             ?: stringResource(R.string.widget_import_widgets)
-                        WidgetImportStage.REVIEW -> state.preview?.widget?.let { importWidgetName(it) }
-                            ?: stringResource(R.string.widget_import_review)
+                        WidgetImportStage.REVIEW -> if (state.picks.size > 1) {
+                            stringResource(R.string.widget_import_review_set_title, state.picks.size)
+                        } else {
+                            state.preview?.widget?.let { importWidgetName(it) }
+                                ?: stringResource(R.string.widget_import_review)
+                        }
+                        WidgetImportStage.BATCH -> if (state.batchRunning) {
+                            stringResource(R.string.widget_import_batch_running, state.batch.size)
+                        } else {
+                            stringResource(R.string.widget_import_batch_done,
+                                state.batchAdded, state.batch.size)
+                        }
                     },
                     subtitle = when (state.stage) {
                         WidgetImportStage.FACES -> stringResource(R.string.widget_import_target,
@@ -92,6 +116,8 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                         DonorWidgetsPage(state, snapshot, viewModel, Modifier.weight(1f))
                     WidgetImportStage.REVIEW ->
                         ImportReviewPage(state, snapshot, viewModel, Modifier.weight(1f))
+                    WidgetImportStage.BATCH ->
+                        ImportBatchPage(state, viewModel, Modifier.weight(1f))
                 }
             }
         }
@@ -130,7 +156,16 @@ private fun ImportNotices(
         state.error?.let { error ->
             StatusBanner(FitStatus.Fail, error, Modifier.padding(top = 6.dp, end = 16.dp))
         }
-        if (state.busy) {
+        // Pricing a pick and switching variant are deliberately silent here. Both are fast,
+        // both are superseded by the next tap anyway, and this strip is pinned above the
+        // page — so flashing it in and out shifted everything under it down by its own
+        // height and back: a second tap aimed at a row landed on the one above it, and every
+        // variant chip made the screen flicker. The panel's button shows pricing working, and
+        // a variant switch keeps the face on screen with a bar in reserved space if it is
+        // slow; the strip is for the downloads and loads that have something to cancel.
+        val quietWork = state.stage == WidgetImportStage.WIDGETS && state.content != null &&
+            state.progress == null && !state.saving
+        if (state.busy && !quietWork) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -310,9 +345,13 @@ private fun DonorWidgetsPage(
         ) {
             items(state.donor?.variants.orEmpty(), key = { it.basename }) { variant ->
                 FitChip(importVariantLabel(variant), state.variant == variant,
-                    { viewModel.selectVariant(variant) }, enabled = !state.busy)
+                    { viewModel.selectVariant(variant) },
+                    enabled = !state.saving && state.progress == null)
             }
         }
+        // Space always held for it, so a load that shows a bar moves nothing; and the bar
+        // only comes up once a load has taken long enough to be worth saying so.
+        QuietProgress(state.variantLoading, Modifier.padding(horizontal = 16.dp))
         if (content == null) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -331,7 +370,12 @@ private fun DonorWidgetsPage(
             return@Column
         }
         if (state.showList) {
+            // The panel stays below the list, so picking from either view has the same
+            // summary and the same way on. The list used to replace the whole page, which
+            // with a set to build meant the action button was only on the other view.
             DonorWidgetList(state, content, snapshot, viewModel, Modifier.weight(1f))
+            DonorSelectionPanel(state, content, snapshot, viewModel,
+                Modifier.padding(top = 8.dp, bottom = 12.dp), compact = true)
             return@Column
         }
         BoxWithConstraints(Modifier.weight(1f)) {
@@ -342,11 +386,13 @@ private fun DonorWidgetsPage(
                 ) {
                     DonorFaceCanvas(
                         content = content,
-                        selected = state.selectedWidget,
-                        enabled = !state.busy,
+                        picks = state.picks,
+                        // Same reason as the rows: pricing one pick must not block the next.
+                        // A variant still loading is the other variant's face, so no pick.
+                        enabled = !state.saving && !state.variantLoading,
                         onSelect = { index ->
                             if (index == null) viewModel.clearSelectedWidget()
-                            else viewModel.selectWidget(index)
+                            else viewModel.togglePick(index)
                         },
                         modifier = Modifier.width(
                             minOf(
@@ -410,7 +456,7 @@ private fun DonorWidgetsPage(
 @Composable
 private fun DonorFaceCanvas(
     content: WidgetDonorVariant,
-    selected: Int?,
+    picks: List<Int>,
     enabled: Boolean,
     onSelect: (Int?) -> Unit,
     modifier: Modifier = Modifier,
@@ -420,7 +466,9 @@ private fun DonorFaceCanvas(
         content.widgets.filter { it.globalIndex !in content.unavailable }
     }
     val latestWidgets by rememberUpdatedState(importable)
-    val latestSelected by rememberUpdatedState(selected)
+    // The last pick is what an overlap should resolve to, the way the editor's canvas
+    // prefers the widget already selected.
+    val latestSelected by rememberUpdatedState(picks.lastOrNull())
     val latestEnabled by rememberUpdatedState(enabled)
     // The panel extents the hit test scales by, and the callback it reports to, for the
     // same reason as the three above: the block below runs on `Unit`, so switching variant
@@ -431,10 +479,11 @@ private fun DonorFaceCanvas(
     val selectedColor = MaterialTheme.colorScheme.tertiary
     val borderColor = MaterialTheme.colorScheme.outlineVariant
     val description = stringResource(R.string.widget_import_canvas_a11y, importable.size)
+    val textMeasurer = rememberTextMeasurer()
     Canvas(
         modifier = modifier.fillMaxWidth()
             .aspectRatio(content.composed.width.toFloat() / content.composed.height)
-            .clip(RoundedCornerShape(32.dp))
+            .clip(RoundedCornerShape(FaceOutlineCorner))
             .semantics { contentDescription = description }
             .pointerInput(Unit) {
                 detectTapGestures { position ->
@@ -463,13 +512,19 @@ private fun DonorFaceCanvas(
         val scaleY = size.height / content.composed.height
         clipRect {
             importable.forEach { widget ->
-                val isSelected = widget.globalIndex == selected
+                val order = picks.indexOf(widget.globalIndex)
                 drawRect(
-                    color = if (isSelected) selectedColor else guideColor.copy(alpha = .55f),
+                    color = if (order >= 0) selectedColor else guideColor.copy(alpha = .55f),
                     topLeft = Offset(widget.drawLeft * scaleX, widget.drawTop * scaleY),
                     size = Size(widget.width * scaleX, widget.height * scaleY),
-                    style = Stroke(if (isSelected) 2.dp.toPx() else 1.dp.toPx()),
+                    style = Stroke(if (order >= 0) 2.dp.toPx() else 1.dp.toPx()),
                 )
+                if (order < 0) return@forEach
+                // The pick's number, because pick order is the order they are added and so
+                // the z-order they end up in. A ring that only says "chosen" cannot say
+                // which of three was chosen first.
+                drawPickBadge(order + 1, Offset(widget.drawLeft * scaleX, widget.drawTop * scaleY),
+                    selectedColor, textMeasurer)
             }
         }
         drawRect(color = borderColor, style = Stroke(2.dp.toPx()))
@@ -488,21 +543,29 @@ private fun DonorSelectionPanel(
     content: WidgetDonorVariant,
     snapshot: EditorSnapshot,
     viewModel: WidgetImportViewModel,
+    modifier: Modifier = Modifier,
+    /** Under the list, where the rows already carry the pick numbers and the height is theirs. */
+    compact: Boolean = false,
 ) {
-    val widget = content.widgets.firstOrNull { it.globalIndex == state.selectedWidget }
-    if (widget == null) {
+    if (state.picks.isEmpty()) {
         Text(
             stringResource(R.string.widget_import_pick_hint),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.fitText.secondary,
         )
         return
     }
+    if (state.picks.size > 1) {
+        ImportSetPanel(state, content, snapshot, viewModel, modifier, compact)
+        return
+    }
+    val widget = content.widgets.firstOrNull { it.globalIndex == state.picks.single() } ?: return
     val layer = content.layers.firstOrNull { it.globalIndex == widget.globalIndex }
     val added = state.preview?.addedBytes ?: content.addedBytes[widget.globalIndex]
+    val fits = added == null || snapshot.containerBytes + added <= WATCH_CONTAINER_BYTE_CEILING
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)
             .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
             .padding(12.dp),
@@ -529,7 +592,15 @@ private fun DonorSelectionPanel(
                 }
             }
         }
-        ImportRoomMeter(snapshot, added)
+        ImportRoomMeter(snapshot, added, verdict = false)
+        // The pricing failure first, because it is the exact answer and the meter's is an
+        // estimate; then the estimate's own verdict; then the way on.
+        ImportPanelMessage(
+            text = state.pickError ?: stringResource(
+                if (fits) R.string.widget_import_pick_hint_more else R.string.widget_import_too_big,
+            ),
+            warning = state.pickError != null || !fits,
+        )
         FitButton(
             stringResource(R.string.widget_import_use),
             viewModel::useSelectedWidget,
@@ -541,13 +612,163 @@ private fun DonorSelectionPanel(
 }
 
 /**
+ * The set, once more than one widget is picked.
+ *
+ * There is no exact price here and there cannot be: the repository holds one pending import
+ * at a time, so quoting the second widget would destroy the first one's ticket. The figures
+ * are `addedBytesEstimate`, which is a documented **floor**, so the panel says "at least"
+ * and "may not all fit" rather than promising a fit it cannot know. The 4 MiB ceiling is
+ * still enforced once, in `rebuild`, on every one of the commits this starts.
+ *
+ * **Its height does not depend on how many are picked.** The face above it is fitted to
+ * whatever height the panel leaves, so every line the panel grows is a line off the face:
+ * the chips used to wrap, and five picks took the face down to a dot. They scroll sideways
+ * on one line now, and the message under the meter is one slot of one height whichever
+ * of its two things it is saying.
+ */
+@Composable
+private fun ImportSetPanel(
+    state: WidgetImportUiState,
+    content: WidgetDonorVariant,
+    snapshot: EditorSnapshot,
+    viewModel: WidgetImportViewModel,
+    modifier: Modifier = Modifier,
+    compact: Boolean,
+) {
+    val floor = state.picks.sumOf { content.addedBytes[it] ?: 0 }
+    val fits = snapshot.containerBytes + floor <= WATCH_CONTAINER_BYTE_CEILING
+    Column(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                MicroLabel(stringResource(R.string.widget_import_selected, state.picks.size))
+                Text(
+                    stringResource(R.string.widget_import_set_estimate, importBytes(floor.toLong())),
+                    style = FitFaceType.numeric,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            TextButton(viewModel::clearSelectedWidget, enabled = !state.saving) {
+                Text(stringResource(R.string.widget_import_clear),
+                    style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        // In pick order, because that is the order they are added and so the z-order they
+        // land in — the set is a list, not a bag. Left out under the widget list, where
+        // every row already wears its own number and the height belongs to the rows.
+        if (!compact) {
+            val chips = rememberLazyListState()
+            // The newest pick is the one just tapped, so it is the one to keep in view.
+            LaunchedEffect(state.picks.size) {
+                if (state.picks.isNotEmpty()) chips.animateScrollToItem(state.picks.lastIndex)
+            }
+            LazyRow(state = chips, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                itemsIndexed(state.picks, key = { _, index -> index }) { order, index ->
+                    val widget = content.widgets.firstOrNull { it.globalIndex == index }
+                        ?: return@itemsIndexed
+                    ImportPickChip(order + 1, importWidgetName(widget), !state.saving) {
+                        viewModel.togglePick(index)
+                    }
+                }
+            }
+        }
+        ImportRoomMeter(snapshot, floor, verdict = false)
+        // Under the list only the refusal earns the height; the caveat is on the review.
+        if (!compact || !fits) {
+            ImportPanelMessage(
+                text = stringResource(
+                    if (fits) R.string.widget_import_set_floor else R.string.widget_import_too_big_set,
+                ),
+                warning = !fits,
+            )
+        }
+        FitButton(
+            stringResource(R.string.widget_import_use_many, state.picks.size),
+            viewModel::useSelectedWidget,
+            Modifier.fillMaxWidth(),
+            enabled = !state.saving && !state.busy,
+        )
+    }
+}
+
+/**
+ * The line under a panel's meter: the way on, or why there is none.
+ *
+ * Two lines tall whatever it says, so that swapping the hint for a refusal — which is what
+ * crossing the ceiling does — does not move the face above it.
+ */
+@Composable
+private fun ImportPanelMessage(text: String, warning: Boolean) {
+    Text(
+        text,
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 2,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (warning) MaterialTheme.colorScheme.error else MaterialTheme.fitText.secondary,
+    )
+}
+
+/**
+ * An indeterminate bar in a fixed 2dp slot, shown only once [active] has lasted past a short
+ * grace period. A load quicker than that shows nothing at all, which is the point: a bar that
+ * appears and vanishes inside a fifth of a second is the flicker it was meant to explain.
+ */
+@Composable
+private fun QuietProgress(active: Boolean, modifier: Modifier = Modifier) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(active) {
+        visible = false
+        if (active) {
+            kotlinx.coroutines.delay(QuietProgressGraceMillis)
+            visible = true
+        }
+    }
+    Box(modifier.fillMaxWidth().height(2.dp)) {
+        if (visible) LinearProgressIndicator(Modifier.fillMaxSize())
+    }
+}
+
+private const val QuietProgressGraceMillis = 300L
+
+/** One pick, numbered, tappable to take it back out of the set. */
+@Composable
+private fun ImportPickChip(order: Int, name: String, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = .13f),
+                RoundedCornerShape(999.dp))
+            .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(999.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("$order", style = FitFaceType.micro, color = MaterialTheme.colorScheme.primary)
+        Text(name, style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+        Text("✕", style = FitFaceType.micro, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+/**
  * How much of the watch's 4 MiB this face would be using afterwards.
  *
  * The ceiling is settled and `rebuild` refuses to cross it, so a widget that cannot fit is
  * worth knowing about while there is still another one to pick.
  */
 @Composable
-private fun ImportRoomMeter(snapshot: EditorSnapshot, added: Int?) {
+private fun ImportRoomMeter(
+    snapshot: EditorSnapshot,
+    added: Int?,
+    set: Boolean = false,
+    /** Off in the pickers' panels, which say it in their own fixed-height slot. */
+    verdict: Boolean = true,
+) {
     val after = snapshot.containerBytes + (added ?: 0)
     val fits = after <= WATCH_CONTAINER_BYTE_CEILING
     Column {
@@ -573,9 +794,11 @@ private fun ImportRoomMeter(snapshot: EditorSnapshot, added: Int?) {
                 ),
             )
         }
-        if (!fits) {
+        if (!fits && verdict) {
             Text(
-                stringResource(R.string.widget_import_too_big),
+                stringResource(
+                    if (set) R.string.widget_import_too_big_set else R.string.widget_import_too_big,
+                ),
                 modifier = Modifier.padding(top = 6.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
@@ -622,9 +845,16 @@ private fun DonorWidgetList(
                 layer = content.layers.firstOrNull { it.globalIndex == widget.globalIndex },
                 added = content.addedBytes[widget.globalIndex],
                 snapshot = snapshot,
-                selected = state.selectedWidget == widget.globalIndex,
-                enabled = !state.busy,
-                onClick = { viewModel.selectWidget(widget.globalIndex); viewModel.setShowList(false) },
+                // The list stays open on a tap now: it is a picker for a set, and closing
+                // it after every pick would make choosing three widgets three round trips.
+                pickOrder = state.picks.indexOf(widget.globalIndex).takeIf { it >= 0 },
+                pickCount = state.picks.size,
+                // Not `!busy`. Picking the first widget starts pricing it, and a row
+                // disabled for that swallowed the very next tap — so a set of three was a
+                // tap, a wait, a tap, a wait, with nothing on screen saying why. Only a
+                // commit is uninterruptible, and `togglePick` refuses during one.
+                enabled = !state.saving && !state.variantLoading,
+                onClick = { viewModel.togglePick(widget.globalIndex) },
             )
         }
         if (refused.isNotEmpty()) {
@@ -649,13 +879,23 @@ private fun DonorWidgetRow(
     layer: WidgetImageLayer?,
     added: Int?,
     snapshot: EditorSnapshot,
-    selected: Boolean,
+    pickOrder: Int?,
+    pickCount: Int,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
+    val selected = pickOrder != null
     val fits = added == null || snapshot.containerBytes + added <= WATCH_CONTAINER_BYTE_CEILING
+    // A row that toggles has to say which way it will go, and a picked one has to say
+    // where in the order it sits — the order is the order they are added.
+    val description = if (pickOrder == null) {
+        stringResource(R.string.widget_import_pick_add_a11y, importWidgetName(widget))
+    } else {
+        stringResource(R.string.widget_import_pick_order_a11y,
+            importWidgetName(widget), pickOrder + 1, pickCount)
+    }
     Row(
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = description }
             .background(
                 if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .08f)
                 else MaterialTheme.colorScheme.surfaceContainerLow,
@@ -672,7 +912,10 @@ private fun DonorWidgetRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ImportArtworkTile(layer, Modifier.size(48.dp))
+        Box(contentAlignment = Alignment.TopStart) {
+            ImportArtworkTile(layer, Modifier.size(48.dp))
+            pickOrder?.let { PickBadge(it + 1) }
+        }
         Column(Modifier.weight(1f)) {
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(importWidgetName(widget), style = MaterialTheme.typography.titleSmall)
@@ -722,7 +965,118 @@ private fun RefusedWidgetRow(widget: WidgetGuide, layer: WidgetImageLayer?, reas
 }
 
 // ---------------------------------------------------------------------------
-// 3 · the review
+// 3 · the batch report
+// ---------------------------------------------------------------------------
+
+/**
+ * What became of each widget of a set, while it runs and after it stops.
+ *
+ * This page exists because **there is no rollback across commits**. Each widget is its own
+ * commit, so a set that stops at the third leaves the first two on the face and saved, and
+ * the reader has to be told that in those words rather than shown a banner over a closing
+ * dialog. Leaving the page — by Done or by back — is what hands the editor the snapshot the
+ * last successful commit produced.
+ */
+@Composable
+private fun ImportBatchPage(
+    state: WidgetImportUiState,
+    viewModel: WidgetImportViewModel,
+    modifier: Modifier,
+) {
+    val names = state.content?.widgets.orEmpty().associateBy { it.globalIndex }
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        state.batch.forEach { step ->
+            ImportBatchRow(step, names[step.globalIndex]?.let { importWidgetName(it) }
+                ?: stringResource(R.string.widget_import_widget_number, step.globalIndex))
+        }
+        if (state.batchRunning) {
+            Text(
+                stringResource(R.string.widget_import_batch_saving),
+                modifier = Modifier.padding(top = 6.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+            return@Column
+        }
+        Text(
+            when {
+                // Nothing committed: no warning to give, because there is nothing to undo.
+                state.batchAdded == 0 -> stringResource(R.string.widget_import_batch_none)
+                state.batchAdded == state.batch.size ->
+                    stringResource(R.string.widget_import_batch_all_done, state.batchAdded)
+                else -> stringResource(R.string.widget_import_batch_partial, state.batchAdded)
+            },
+            modifier = Modifier.padding(top = 6.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.fitText.secondary,
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            FitButton(
+                // "Done" leaves the importer with what committed. With nothing committed it
+                // goes back to the picker instead, so it says that rather than promising an
+                // exit it will not make.
+                stringResource(
+                    if (state.batchAdded == 0) R.string.widget_import_back_to_widgets
+                    else R.string.widget_import_done,
+                ),
+                viewModel::finishBatch,
+                Modifier.weight(1f),
+            )
+            // Offered rather than automatic: every limit a batch can hit only gets tighter
+            // as it goes, so carrying on past a refusal is a decision, not a retry.
+            if (state.batchRemaining.isNotEmpty()) {
+                FitButton(
+                    stringResource(R.string.widget_import_batch_continue),
+                    viewModel::continueBatch,
+                    Modifier.weight(1f),
+                    style = FitButtonStyle.Secondary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImportBatchRow(step: WidgetImportStep, name: String) {
+    val (glyph, label, tint) = when (step.outcome) {
+        WidgetImportOutcome.QUEUED -> Triple("·",
+            stringResource(R.string.widget_import_batch_queued), MaterialTheme.fitText.secondary)
+        WidgetImportOutcome.ADDING -> Triple("⟳",
+            stringResource(R.string.widget_import_batch_adding), MaterialTheme.fitColors.warning)
+        WidgetImportOutcome.ADDED -> Triple("✓",
+            stringResource(R.string.widget_import_batch_added), MaterialTheme.colorScheme.primary)
+        WidgetImportOutcome.FAILED -> Triple("✕", "", MaterialTheme.colorScheme.error)
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(glyph, style = FitFaceType.numeric, color = tint)
+        Column(Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.titleSmall)
+            step.reason?.let {
+                Text(it, modifier = Modifier.padding(top = 3.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+            }
+        }
+        if (label.isNotEmpty()) {
+            Text(label, style = FitFaceType.numeric, color = tint)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4 · the review
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -732,6 +1086,11 @@ private fun ImportReviewPage(
     viewModel: WidgetImportViewModel,
     modifier: Modifier,
 ) {
+    val content = state.content
+    if (state.picks.size > 1 && content != null) {
+        ImportSetReviewPage(state, content, snapshot, viewModel, modifier)
+        return
+    }
     val preview = state.preview
     if (preview == null) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -740,121 +1099,225 @@ private fun ImportReviewPage(
         }
         return
     }
+    ImportReviewLayout(
+        frame = preview.preview,
+        modifier = modifier,
+        face = { faceModifier ->
+            ImportReviewFace(
+                after = preview.preview,
+                before = snapshot.composedPreview,
+                additions = listOf(preview.widget),
+                description = stringResource(R.string.widget_import_review_a11y),
+                modifier = faceModifier,
+            )
+        },
+    ) {
+        MicroLabel(stringResource(R.string.widget_import_compare), Modifier.fillMaxWidth())
+        ImportFactCard {
+            ImportFactRow(
+                stringResource(R.string.widget_import_fact_from),
+                importDonorLabel(state),
+            )
+            ImportFactRow(
+                stringResource(R.string.widget_import_fact_widget),
+                stringResource(R.string.widget_import_widget_size,
+                    preview.widget.width, preview.widget.height),
+            )
+            ImportFactRow(
+                stringResource(R.string.widget_import_fact_adds),
+                importBytes(preview.addedBytes.toLong()),
+                emphasised = true,
+            )
+            Box(Modifier.padding(top = 4.dp)) {
+                ImportRoomMeter(snapshot, preview.addedBytes)
+            }
+        }
+        FitButton(
+            stringResource(R.string.widget_import_add_to,
+                importVariantLabel(snapshot.selectedVariant)),
+            viewModel::add,
+            Modifier.fillMaxWidth(),
+            enabled = !state.busy &&
+                snapshot.containerBytes + preview.addedBytes <= WATCH_CONTAINER_BYTE_CEILING,
+            loading = state.saving,
+        )
+        Text(
+            stringResource(R.string.widget_import_review_detail,
+                importVariantLabel(snapshot.selectedVariant)),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.fitText.secondary,
+        )
+    }
+}
+
+/**
+ * The same review for a set: your face with every pick painted in, numbered in the order
+ * they will be added, and the face as it is for as long as a finger is held on it.
+ *
+ * The one difference is where the "after" picture comes from. A single widget's is the
+ * repository's render of the edited container, because that edit exists — it is the
+ * ticket. A set's edit cannot exist before it is committed (one pending import, validated
+ * by reference against a container every commit replaces), so its picture is
+ * [composeImportSet]: each pick's own donor layer over the face as it is now. That is the
+ * same picture and not an approximation of it, because `WidgetImporter` copies a widget's
+ * rasters byte for byte and **checks** that it lands exactly where it sat on its own face.
+ */
+@Composable
+private fun ImportSetReviewPage(
+    state: WidgetImportUiState,
+    content: WidgetDonorVariant,
+    snapshot: EditorSnapshot,
+    viewModel: WidgetImportViewModel,
+    modifier: Modifier,
+) {
+    val before = snapshot.composedPreview
+    val after = remember(before, content, state.picks) {
+        composeImportSet(before, content, state.picks)
+    }
+    val additions = remember(content, state.picks) {
+        state.picks.mapNotNull { index -> content.widgets.firstOrNull { it.globalIndex == index } }
+    }
+    val floor = state.picks.sumOf { content.addedBytes[it] ?: 0 }
+    val target = importVariantLabel(snapshot.selectedVariant)
+    ImportReviewLayout(
+        frame = after,
+        modifier = modifier,
+        face = { faceModifier ->
+            ImportReviewFace(
+                after = after,
+                before = before,
+                additions = additions,
+                numbered = true,
+                description = stringResource(R.string.widget_import_review_set_a11y, additions.size),
+                modifier = faceModifier,
+            )
+        },
+    ) {
+        MicroLabel(stringResource(R.string.widget_import_compare_set), Modifier.fillMaxWidth())
+        ImportFactCard {
+            ImportFactRow(stringResource(R.string.widget_import_fact_from), importDonorLabel(state))
+            ImportFactRow(stringResource(R.string.widget_import_fact_widgets), "${state.picks.size}")
+            ImportFactRow(
+                stringResource(R.string.widget_import_fact_adds),
+                stringResource(R.string.widget_import_at_least, importBytes(floor.toLong())),
+                emphasised = true,
+            )
+            Box(Modifier.padding(top = 4.dp)) {
+                ImportRoomMeter(snapshot, floor, set = true)
+            }
+        }
+        // Not disabled over the ceiling, unlike the single review: the figure is a floor
+        // for the set as a whole, and the widgets that do fit still go in, in order.
+        FitButton(
+            stringResource(R.string.widget_import_add_many_to, state.picks.size, target),
+            viewModel::addPicks,
+            Modifier.fillMaxWidth(),
+            enabled = !state.busy && !state.saving,
+            loading = state.saving,
+        )
+        Text(
+            stringResource(R.string.widget_import_review_set_detail, target),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.fitText.secondary,
+        )
+    }
+}
+
+/**
+ * The review's face beside its facts, or above them.
+ *
+ * The face takes the height the facts leave, the way the canvas page does it. A `weight`
+ * inside a scrolling column is measured against an infinite height, so the column that
+ * holds one cannot be the one that scrolls.
+ */
+@Composable
+private fun ImportReviewLayout(
+    frame: PreviewFrame,
+    modifier: Modifier,
+    face: @Composable (Modifier) -> Unit,
+    facts: @Composable ColumnScope.() -> Unit,
+) {
     BoxWithConstraints(modifier) {
-        val face: @Composable (Modifier) -> Unit = { faceModifier ->
+        val faceSlot: @Composable (Modifier) -> Unit = { faceModifier ->
             BoxWithConstraints(
                 modifier = faceModifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                ImportReviewFace(
-                    preview = preview,
-                    before = snapshot.composedPreview,
-                    modifier = Modifier.width(
-                        minOf(
-                            maxWidth,
-                            maxHeight * (preview.preview.width.toFloat() / preview.preview.height),
-                            ImportCanvasMaxWidth,
-                        ),
+                face(
+                    Modifier.width(
+                        minOf(maxWidth, maxHeight * (frame.width.toFloat() / frame.height),
+                            ImportCanvasMaxWidth),
                     ),
                 )
             }
         }
-        val facts: @Composable (Modifier) -> Unit = { factsModifier ->
+        val factsSlot: @Composable (Modifier) -> Unit = { factsModifier ->
             Column(
                 factsModifier.padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                MicroLabel(
-                    stringResource(R.string.widget_import_compare),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceContainerLow,
-                            MaterialTheme.shapes.medium)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant,
-                            MaterialTheme.shapes.medium)
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    ImportFactRow(
-                        stringResource(R.string.widget_import_fact_from),
-                        stringResource(R.string.widget_import_fact_from_value,
-                            state.selectedFace?.name ?: state.donor?.faceId.orEmpty(),
-                            state.variant?.let { importVariantLabel(it) }.orEmpty()),
-                    )
-                    ImportFactRow(
-                        stringResource(R.string.widget_import_fact_widget),
-                        stringResource(R.string.widget_import_widget_size,
-                            preview.widget.width, preview.widget.height),
-                    )
-                    ImportFactRow(
-                        stringResource(R.string.widget_import_fact_adds),
-                        importBytes(preview.addedBytes.toLong()),
-                        emphasised = true,
-                    )
-                    Box(Modifier.padding(top = 4.dp)) {
-                        ImportRoomMeter(snapshot, preview.addedBytes)
-                    }
-                }
-                FitButton(
-                    stringResource(R.string.widget_import_add_to,
-                        importVariantLabel(snapshot.selectedVariant)),
-                    viewModel::add,
-                    Modifier.fillMaxWidth(),
-                    enabled = !state.busy &&
-                        snapshot.containerBytes + preview.addedBytes <= WATCH_CONTAINER_BYTE_CEILING,
-                    loading = state.saving,
-                )
-                Text(
-                    stringResource(R.string.widget_import_review_detail,
-                        importVariantLabel(snapshot.selectedVariant)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.fitText.secondary,
-                )
-            }
+                content = facts,
+            )
         }
         if (importPageSplits(maxWidth, maxHeight)) {
             Row(Modifier.fillMaxSize()) {
-                face(Modifier.weight(1f).fillMaxHeight())
-                facts(
+                faceSlot(Modifier.weight(1f).fillMaxHeight())
+                factsSlot(
                     Modifier.weight(1f).fillMaxHeight()
                         .verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
                 )
             }
         } else {
-            // The face takes the height the facts leave, the way the canvas page does it.
-            // A `weight` inside a scrolling column is measured against an infinite height,
-            // so the column that holds one cannot be the one that scrolls.
             Column(Modifier.fillMaxSize()) {
-                face(Modifier.fillMaxWidth().weight(1f))
-                facts(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 16.dp))
+                faceSlot(Modifier.fillMaxWidth().weight(1f))
+                factsSlot(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 16.dp))
             }
         }
     }
 }
 
+@Composable
+private fun ImportFactCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun importDonorLabel(state: WidgetImportUiState) =
+    stringResource(R.string.widget_import_fact_from_value,
+        state.selectedFace?.name ?: state.donor?.faceId.orEmpty(),
+        state.variant?.let { importVariantLabel(it) }.orEmpty())
+
 /**
- * The face as it would be, with everything but the addition dimmed — and the face as it is
- * for as long as a finger is held on it.
+ * The face as it would be, with everything but the additions dimmed — and the face as it
+ * is for as long as a finger is held on it.
  *
- * Both pictures are real renders of the same container before and after the edit, so the
- * comparison invents nothing. A 2px rectangle on a busy face was the only thing saying what
- * had changed.
+ * Both pictures are renders of the same face before and after, so the comparison invents
+ * nothing. A 2px rectangle on a busy face was the only thing saying what had changed.
  */
 @Composable
 private fun ImportReviewFace(
-    preview: WidgetImportPreview,
+    after: PreviewFrame,
     before: PreviewFrame,
+    additions: List<WidgetGuide>,
+    description: String,
     modifier: Modifier = Modifier,
+    /** A set's additions carry their add order, the way they did on the donor face. */
+    numbered: Boolean = false,
 ) {
     var comparing by remember { mutableStateOf(false) }
-    val after = preview.preview.rememberImportBitmap()
+    val afterBitmap = after.rememberImportBitmap()
     val original = before.rememberImportBitmap()
     val scrim = MaterialTheme.colorScheme.background.copy(alpha = .55f)
     val ringColor = MaterialTheme.colorScheme.primary
+    val badgeColor = MaterialTheme.colorScheme.tertiary
     val borderColor = MaterialTheme.colorScheme.outlineVariant
-    val description = stringResource(R.string.widget_import_review_a11y)
+    val textMeasurer = rememberTextMeasurer()
     // No caption inside this box. The face is fitted to the height it was handed, so a
     // line under it either takes height off the face or falls outside the box — the hint
     // lives with the facts instead, and an overlay would sit on the artwork it offers to
@@ -862,8 +1325,8 @@ private fun ImportReviewFace(
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(
             Modifier.fillMaxWidth()
-                .aspectRatio(preview.preview.width.toFloat() / preview.preview.height)
-                .clip(RoundedCornerShape(32.dp))
+                .aspectRatio(after.width.toFloat() / after.height)
+                .clip(RoundedCornerShape(FaceOutlineCorner))
                 .semantics { contentDescription = description }
                 .pointerInput(Unit) {
                     detectTapGestures(
@@ -877,25 +1340,27 @@ private fun ImportReviewFace(
         ) {
             drawRect(Color.Black)
             drawImage(
-                image = if (comparing) original else after,
+                image = if (comparing) original else afterBitmap,
                 dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
                 filterQuality = FilterQuality.Low,
             )
             if (!comparing) {
-                val scaleX = size.width / preview.preview.width
-                val scaleY = size.height / preview.preview.height
-                val left = preview.widget.drawLeft * scaleX
-                val top = preview.widget.drawTop * scaleY
-                val width = preview.widget.width * scaleX
-                val height = preview.widget.height * scaleY
-                // Four rectangles rather than one translucent sheet with a hole in it:
-                // the addition keeps its own pixels untouched, which is the whole point of
-                // showing it.
-                drawRect(scrim, Offset.Zero, Size(size.width, top))
-                drawRect(scrim, Offset(0f, top + height), Size(size.width, size.height - top - height))
-                drawRect(scrim, Offset(0f, top), Size(left, height))
-                drawRect(scrim, Offset(left + width, top), Size(size.width - left - width, height))
-                drawRect(ringColor, Offset(left, top), Size(width, height), style = Stroke(2.dp.toPx()))
+                val scaleX = size.width / after.width
+                val scaleY = size.height / after.height
+                val rects = additions.map {
+                    Rect(Offset(it.drawLeft * scaleX, it.drawTop * scaleY),
+                        Size(it.width * scaleX, it.height * scaleY))
+                }
+                // One sheet with a hole cut for each addition, rather than a translucent
+                // sheet over everything: the additions keep their own pixels untouched,
+                // which is the whole point of showing them. Overlapping holes are one hole,
+                // because every rectangle winds the same way.
+                val holes = Path().apply { rects.forEach(::addRect) }
+                clipPath(holes, ClipOp.Difference) { drawRect(scrim) }
+                rects.forEachIndexed { order, rect ->
+                    drawRect(ringColor, rect.topLeft, rect.size, style = Stroke(2.dp.toPx()))
+                    if (numbered) drawPickBadge(order + 1, rect.topLeft, badgeColor, textMeasurer)
+                }
             }
             drawRect(color = borderColor, style = Stroke(2.dp.toPx()))
         }
@@ -929,6 +1394,29 @@ private fun ImportFactRow(label: String, value: String, emphasised: Boolean = fa
  */
 internal fun importPageSplits(maxWidth: Dp, maxHeight: Dp): Boolean =
     maxWidth >= ImportSideBySideMinWidth && maxHeight < ImportStackedMinHeight
+
+/**
+ * The face as a set would leave it: [before] with each pick's own donor layers painted over
+ * it, **in pick order**, which is add order and so the z-order the imports produce.
+ *
+ * Exact rather than approximate, for two reasons the importer enforces rather than hopes
+ * for: it copies a widget's rasters byte for byte, and it checks the widget's drawn position
+ * on the target is the one it had on its donor. So a donor layer at its donor position is
+ * the pixels the imported widget will draw. Pure so it can be pinned by a test.
+ */
+internal fun composeImportSet(
+    before: PreviewFrame,
+    content: WidgetDonorVariant,
+    picks: List<Int>,
+): PreviewFrame {
+    val layers = picks.flatMap { index -> content.layers.filter { it.globalIndex == index } }
+    val additions = WidgetLayerComposer.compose(
+        before.width, before.height, layers, content.widgets, transparent = true,
+    )
+    return PreviewFrame(before.width, before.height, IntArray(before.argb.size) { i ->
+        WidgetLayerComposer.over(before.argb[i], additions.argb[i])
+    })
+}
 
 private val ImportStackedMinHeight = 480.dp
 private val ImportSideBySideMinWidth = 560.dp

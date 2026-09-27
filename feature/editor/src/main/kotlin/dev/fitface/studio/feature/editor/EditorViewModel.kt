@@ -73,6 +73,22 @@ internal fun displayToStored(display: Int, origin: Int): Int = display - origin
 /** A copy was made and named. The screen turns it into a sentence. */
 data class DuplicateNotice(val id: Long, val name: String)
 
+/** What a set of widgets can have done to all of them at once. Moves go through the nudge. */
+enum class SelectionAction { DUPLICATE, REMOVE }
+
+/**
+ * A set edit that stopped partway. Each widget is its own commit, so the ones before the
+ * failure are done and saved — and the screen has to say how many, in words, rather than
+ * show a bare error over a face that visibly changed.
+ */
+data class SelectionStop(
+    val id: Long,
+    val action: SelectionAction,
+    val done: Int,
+    val total: Int,
+    val reason: String,
+)
+
 data class EditorUiState(
     val snapshot: EditorSnapshot? = null,
     val isWorking: Boolean = true,
@@ -80,6 +96,17 @@ data class EditorUiState(
     val pendingImage: ReplacementImage? = null,
     val placement: ImagePlacement = ImagePlacement(),
     val selectedWidgetIndex: Int? = null,
+    /**
+     * Widgets picked together, in pick order: two or more, or empty.
+     *
+     * Never exactly one. A set that falls to one widget becomes the ordinary selection,
+     * because the single tray does everything a set can and more — the same rule the
+     * import picker follows, where one pick is the single flow unchanged. So "is a set
+     * selected" is `isNotEmpty()`, and [selectedWidgetIndex] is null whenever it is.
+     */
+    val multiSelection: List<Int> = emptyList(),
+    /** A set edit stopped partway; see [SelectionStop]. */
+    val selectionStopped: SelectionStop? = null,
     /**
      * How many widget removals have committed.
      *
@@ -106,9 +133,27 @@ data class EditorUiState(
      * `strings.xml` with the rest of the editor's copy.
      */
     val duplicated: DuplicateNotice? = null,
-    val applyWidgetEditsToAllStyles: Boolean = true,
+    /**
+     * Whether a widget edit reaches every style that has the same widget. **Off until asked
+     * for.** Each style carries its own copy of the artwork, so an edit that grows it — a
+     * larger widget, a duplicate that brings frames — costs its bytes once per style it
+     * reaches: on a four-style face, four times the room under the 4 MiB the watch accepts,
+     * for styles the reader may never install. Widening an edit is the tray's scope toggle.
+     */
+    val applyWidgetEditsToAllStyles: Boolean = false,
     val previewReviewed: Boolean = false,
     val pendingWidgetMove: WidgetMovePreview? = null,
+    /**
+     * Where every member of a set being nudged is headed, all at once.
+     *
+     * The commits are still one widget each, through the same worker as any move, and a
+     * commit is slower than a held arrow repeats. With only [pendingWidgetMove] to draw
+     * from, the canvas could show one member gliding while the rest waited for their own
+     * commits, so a set stuttered across the face one widget at a time and never seemed to
+     * accelerate together. This holds every member's target, updated on each step, and the
+     * canvas draws all of them from it until the last commit has caught up.
+     */
+    val pendingSetMove: List<WidgetMovePreview> = emptyList(),
     val directInstall: DirectInstallState = DirectInstallState(),
     val error: UserMessage? = null,
     /** The pasteable report, non-null while the dialog is open. */
@@ -269,6 +314,8 @@ class EditorViewModel @Inject constructor(
     fun selectVariant(variant: EditorVariant) {
         mutableState.value = mutableState.value.copy(
             selectedWidgetIndex = null,
+            // A global index means something different in every entry.
+            multiSelection = emptyList(),
             previewReviewed = false,
             pendingImage = null,
             // Never carried into AOD. The repository already refuses to let it reach
@@ -284,17 +331,212 @@ class EditorViewModel @Inject constructor(
     }
 
     fun selectWidget(globalIndex: Int?) {
+        // With a set picked, a tap changes the set: on a widget it toggles that widget, on
+        // bare canvas it lets go of all of them — the same two gestures the import picker
+        // uses, so choosing several is learned once.
+        if (mutableState.value.multiSelection.isNotEmpty()) {
+            if (globalIndex == null) clearSelection() else toggleInSelection(globalIndex)
+            return
+        }
         val imported = mutableState.value.snapshot?.widgets?.singleOrNull { it.globalIndex == globalIndex }
             ?.importedFromFaceId != null
         mutableState.value = mutableState.value.copy(selectedWidgetIndex = globalIndex,
             applyWidgetEditsToAllStyles = !imported && mutableState.value.applyWidgetEditsToAllStyles)
     }
 
+    /**
+     * Adds a widget to the set, or takes it out — what holding a widget on the canvas does.
+     *
+     * Starting from a single selection carries it in, so holding a second widget makes a
+     * set of two rather than throwing the first one away. A set that falls to one becomes
+     * that one's ordinary selection; see [EditorUiState.multiSelection].
+     */
+    fun toggleInSelection(globalIndex: Int) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        if (current.isWorking || snapshot.widgets.none { it.globalIndex == globalIndex }) return
+        val base = current.multiSelection.ifEmpty { listOfNotNull(current.selectedWidgetIndex) }
+        val next = if (globalIndex in base) base - globalIndex else base + globalIndex
+        mutableState.value = when (next.size) {
+            0 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = null)
+            1 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = next.single())
+            else -> current.copy(multiSelection = next, selectedWidgetIndex = null)
+        }
+    }
+
+    fun clearSelection() {
+        mutableState.value = mutableState.value.copy(
+            multiSelection = emptyList(),
+            selectedWidgetIndex = null,
+        )
+    }
+
+    fun clearSelectionStopped(id: Long) {
+        if (mutableState.value.selectionStopped?.id == id) {
+            mutableState.value = mutableState.value.copy(selectionStopped = null)
+        }
+    }
+
+    /**
+     * Moves every widget of the set by the same step, through the same queue a single
+     * nudge uses — one target per widget, each committed by the one worker.
+     *
+     * The step is shared, and it is as far as the most constrained widget can go: each
+     * member is clamped to the panel exactly as a lone nudge would clamp it, and the set
+     * takes the smallest of those steps. Clamping each on its own would let a widget at the
+     * edge stop while the rest carried on, shearing the arrangement the reader built.
+     */
+    fun nudgeSelection(deltaX: Int, deltaY: Int) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        val variant = snapshot.selectedVariant.basename
+        val moves = current.multiSelection
+            .mapNotNull { index -> snapshot.widgets.firstOrNull { it.globalIndex == index } }
+            .filter { it.canEditPosition }
+            .map { widget ->
+                val base = pendingTarget(variant, widget.globalIndex)
+                    ?: PendingWidgetTarget(widget.x, widget.y, widget.type, widget.sequenceId)
+                Triple(widget, base, clampToPanel(snapshot, widget, base.x + deltaX, base.y + deltaY))
+            }
+        if (moves.isEmpty()) return
+        val stepX = sharedNudgeStep(moves.map { (_, base, next) -> next.x - base.x }, deltaX)
+        val stepY = sharedNudgeStep(moves.map { (_, base, next) -> next.y - base.y }, deltaY)
+        if (stepX == 0 && stepY == 0) return
+        val targets = moves.map { (widget, base, _) -> Triple(widget, base.x + stepX, base.y + stepY) }
+        if (targets.any { (_, x, y) -> x !in Short.MIN_VALUE..Short.MAX_VALUE || y !in Short.MIN_VALUE..Short.MAX_VALUE }) {
+            return
+        }
+        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false) }
+        // Published once, for every member, after they are all queued: the canvas moves the
+        // set as one picture on this step, whatever order the commits then land in.
+        mutableState.value = mutableState.value.copy(
+            pendingSetMove = targets.map { (widget, x, y) ->
+                WidgetMovePreview(
+                    globalIndex = widget.globalIndex,
+                    displayX = storedToDisplay(x, widget.originX).toFloat(),
+                    displayY = storedToDisplay(y, widget.originY).toFloat(),
+                )
+            },
+        )
+    }
+
+    fun duplicateSelection() = runOnSelection(SelectionAction.DUPLICATE)
+
+    fun removeSelection() = runOnSelection(SelectionAction.REMOVE)
+
+    /**
+     * Duplicates or removes every widget of the set, one at a time, through the same
+     * single-widget repository call the tray's own buttons make. Nothing below this knows
+     * a set exists.
+     *
+     * Removal goes **highest index first**. Removing a widget renumbers only the ones after
+     * it, so taking them from the top leaves every index still to go naming the widget it
+     * was picked as. Duplicates append at the end and renumber nothing, so they go in pick
+     * order, which is the order the copies stack in.
+     *
+     * **There is no rollback across commits** — the same honest limit as importing a set.
+     * It stops at the first refusal, keeps what committed, publishes the snapshot that
+     * produced, and says how far it got.
+     */
+    private fun runOnSelection(action: SelectionAction) {
+        val start = mutableState.value
+        val snapshot = start.snapshot ?: return
+        if (start.isWorking || start.multiSelection.size < 2) return
+        val order = when (action) {
+            SelectionAction.REMOVE -> start.multiSelection.sortedDescending()
+            SelectionAction.DUPLICATE -> start.multiSelection
+        }
+        val variant = snapshot.selectedVariant.basename
+        val allStyles = start.applyWidgetEditsToAllStyles
+        viewModelScope.launch {
+            // A structural edit renumbers global indices and a queued move names one, the
+            // reason `operate` drops them too.
+            clearPendingMoves()
+            mutableState.value = mutableState.value.copy(
+                isWorking = true,
+                pendingWidgetMove = null,
+                pendingSetMove = emptyList(),
+                previewReviewed = false,
+                error = null,
+            )
+            var latest = snapshot
+            val copies = mutableListOf<Int>()
+            var done = 0
+            var failure: Throwable? = null
+            for (index in order) {
+                val widget = latest.widgets.firstOrNull { it.globalIndex == index }
+                if (widget == null) {
+                    failure = WatchFaceException("A selected widget is no longer on the face.")
+                    break
+                }
+                try {
+                    latest = when (action) {
+                        SelectionAction.DUPLICATE -> repository.duplicateWidget(
+                            variant, widget.globalIndex, widget.type, widget.sequenceId,
+                            widget.x, widget.y, applyToAllStyles = allStyles,
+                        )
+                        SelectionAction.REMOVE -> repository.removeWidget(
+                            variant, widget.globalIndex, widget.type, widget.sequenceId,
+                            widget.x, widget.y, requireFinal = false, applyToAllStyles = allStyles,
+                        )
+                    }
+                    if (action == SelectionAction.DUPLICATE) {
+                        latest.widgets.maxByOrNull { it.ordinal }?.globalIndex?.let(copies::add)
+                    }
+                    done++
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    failure = error
+                    break
+                }
+            }
+            if (done == 0) {
+                failure?.let(::showFailure)
+                return@launch
+            }
+            directInstaller.payloadChanged()
+            val remaining = order.drop(done)
+            val selection = when {
+                // The copies sit exactly on their originals, so they are what the arrows
+                // should move next.
+                action == SelectionAction.DUPLICATE && failure == null -> copies
+                action == SelectionAction.DUPLICATE -> start.multiSelection
+                // What was not removed keeps its index, because removal went from the top.
+                else -> start.multiSelection.filter { it in remaining }
+            }
+            mutableState.value = mutableState.value.copy(
+                snapshot = latest,
+                isWorking = false,
+                pendingWidgetMove = null,
+                pendingSetMove = emptyList(),
+                multiSelection = selection.takeIf { it.size >= 2 }.orEmpty(),
+                selectedWidgetIndex = selection.singleOrNull(),
+                widgetRemovals = mutableState.value.widgetRemovals +
+                    if (action == SelectionAction.REMOVE) done else 0,
+                selectionStopped = failure?.let { error ->
+                    diagnostics.warn(TAG, "Set edit stopped", (error as? WatchFaceException)?.technicalDetail, error)
+                    SelectionStop(
+                        id = messageIds.incrementAndGet(),
+                        action = action,
+                        done = done,
+                        total = order.size,
+                        reason = (error as? WatchFaceException)?.userMessage
+                            ?: error.message?.takeIf(String::isNotBlank)
+                            ?: "The operation could not be applied",
+                    )
+                },
+            )
+        }
+    }
+
     fun acceptWidgetImport(snapshot: EditorSnapshot) {
         if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
         mutableState.value = mutableState.value.copy(snapshot = snapshot,
+            multiSelection = emptyList(),
             selectedWidgetIndex = snapshot.widgets.lastOrNull()?.globalIndex,
-            applyWidgetEditsToAllStyles = false, previewReviewed = false, pendingWidgetMove = null)
+            applyWidgetEditsToAllStyles = false, previewReviewed = false, pendingWidgetMove = null,
+            pendingSetMove = emptyList())
     }
 
     fun setApplyWidgetEditsToAllStyles(value: Boolean) {
@@ -494,6 +736,8 @@ class EditorViewModel @Inject constructor(
         widget: WidgetGuide,
         x: Int,
         y: Int,
+        /** False for a set's members, whose preview is [EditorUiState.pendingSetMove]. */
+        previewAlone: Boolean = true,
     ) {
         // The variant is captured now, from the canvas this drag/nudge is actually on —
         // never re-read at commit time, when the user may have switched to a different
@@ -511,11 +755,15 @@ class EditorViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(
             previewReviewed = false,
             error = null,
-            pendingWidgetMove = WidgetMovePreview(
-                globalIndex = widget.globalIndex,
-                displayX = storedToDisplay(x, widget.originX).toFloat(),
-                displayY = storedToDisplay(y, widget.originY).toFloat(),
-            ),
+            pendingWidgetMove = if (previewAlone) {
+                WidgetMovePreview(
+                    globalIndex = widget.globalIndex,
+                    displayX = storedToDisplay(x, widget.originX).toFloat(),
+                    displayY = storedToDisplay(y, widget.originY).toFloat(),
+                )
+            } else {
+                mutableState.value.pendingWidgetMove
+            },
         )
         if (startMoveWorker) {
             viewModelScope.launch { drainWidgetMoves() }
@@ -576,6 +824,9 @@ class EditorViewModel @Inject constructor(
         // Nothing is outstanding, so the snapshot has overtaken the optimistic preview.
         if (mutableState.value.pendingWidgetMove != null) {
             mutableState.value = mutableState.value.copy(pendingWidgetMove = null)
+        }
+        if (mutableState.value.pendingSetMove.isNotEmpty()) {
+            mutableState.value = mutableState.value.copy(pendingSetMove = emptyList())
         }
     }
 
@@ -744,7 +995,7 @@ class EditorViewModel @Inject constructor(
 
     fun reset() = operate(
         onSuccess = {
-            it.copy(selectedWidgetIndex = null, pendingImage = null)
+            it.copy(selectedWidgetIndex = null, multiSelection = emptyList(), pendingImage = null)
         },
     ) { repository.resetEdits() }
 
@@ -823,6 +1074,7 @@ class EditorViewModel @Inject constructor(
             mutableState.value = mutableState.value.copy(
                 isWorking = true,
                 pendingWidgetMove = null,
+                pendingSetMove = emptyList(),
                 previewReviewed = false,
                 error = null,
             )
@@ -835,13 +1087,18 @@ class EditorViewModel @Inject constructor(
                     val selectedStillExists = mutableState.value.selectedWidgetIndex?.let { index ->
                         snapshot.widgets.any { it.globalIndex == index }
                     } ?: true
+                    val stillSelected = mutableState.value.multiSelection.filter { index ->
+                        snapshot.widgets.any { it.globalIndex == index }
+                    }
                     mutableState.value = onSuccess(
                         mutableState.value.copy(
                             snapshot = snapshot,
+                            multiSelection = stillSelected.takeIf { it.size >= 2 }.orEmpty(),
                             selectedWidgetIndex = mutableState.value.selectedWidgetIndex
                                 .takeIf { selectedStillExists },
                             isWorking = false,
                             pendingWidgetMove = null,
+                            pendingSetMove = emptyList(),
                             error = null,
                         ),
                     )
@@ -873,6 +1130,7 @@ class EditorViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(
             isWorking = false,
             pendingWidgetMove = null,
+            pendingSetMove = emptyList(),
             error = UserMessage(messageIds.incrementAndGet(), text),
         )
     }
@@ -948,3 +1206,16 @@ internal const val MinZoomPercent = 25
 internal const val MaxZoomPercent = 800
 
 internal fun centeredPlacement(fit: ImageFit): ImagePlacement = ImagePlacement(fit = fit)
+
+/**
+ * The step a whole set takes, given the step each member could take on its own.
+ *
+ * As far as the most constrained member can go in the wanted direction, and never
+ * backwards: a member already past an edge reports a clamp of zero, which holds the set.
+ * Pure so a test can pin it.
+ */
+internal fun sharedNudgeStep(steps: List<Int>, wanted: Int): Int = when {
+    steps.isEmpty() || wanted == 0 -> 0
+    wanted > 0 -> steps.min().coerceIn(0, wanted)
+    else -> steps.max().coerceIn(wanted, 0)
+}

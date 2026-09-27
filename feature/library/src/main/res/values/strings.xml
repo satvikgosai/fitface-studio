@@ -129,6 +129,19 @@
     <string name="library_projects_no_matches_title">No matching projects</string>
     <string name="library_projects_no_matches_detail">Try a project name or a numeric face ID.</string>
     <!-- Two projects on one face are the same face to the watch, which keeps one per face. -->
+    <!-- A custom face: one face's clock on an empty panel, made on the phone from the store's package. -->
+    <string name="library_custom_face_title">Start a custom face</string>
+    <string name="library_custom_face_detail">A clock on an empty panel. Add your own background and widgets.</string>
+    <string name="library_custom_face_name">Custom face</string>
+    <string name="library_custom_face_download">↓ %1$s download</string>
+    <string name="library_custom_face_cached">No download needed</string>
+    <string name="library_custom_face_waiting">Waiting for the catalogue</string>
+    <string name="library_custom_face_unavailable">Not in the catalogue right now</string>
+    <string name="library_custom_face_source_fallback">Info_4</string>
+    <!-- The one fact about the watch this cannot change: it is built on another face's slot. -->
+    <string name="library_custom_face_slot">Built from %1$s, so on your watch it takes %1$s\'s place, and each custom face replaces the last one installed.</string>
+    <string name="library_custom_face_downloading">Downloading %1$s… %2$d%%</string>
+    <string name="library_custom_face_building">Building your custom face…</string>
     <string name="library_projects_shared_face_note">More than one project shares a face. The watch keeps one face per slot, so installing one replaces the other on your wrist.</string>
     <!-- project name -->
     <string name="library_project_more_a11y">More options for %1$s</string>

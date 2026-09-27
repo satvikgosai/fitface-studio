@@ -98,13 +98,15 @@ class WidgetImportRepositoryTest {
             }
             s = move(s, widget)
             val moved = s.widgets.last()
+            val beforeCopy = s.containerBytes
             s = repository.duplicateWidget(s.selectedVariant.basename, moved.globalIndex, moved.type,
                 moved.sequenceId, moved.x, moved.y, true)
-            s = remove(s, s.widgets.last())
-            assertNotNull(s.removedWidgets.last().importOriginId)
-            s = repository.restoreWidget(s.removedWidgets.last().id)
             assertEquals(id, s.widgets.last().importedFromFaceId)
-            s = remove(s, s.widgets.last()) // Keep one live and one restorable instance.
+            // An imported widget is deleted, not parked under Removed. The copy shared the
+            // original's artwork, so deleting it gives back exactly the record it added.
+            s = remove(s, s.widgets.last())
+            assertTrue(s.removedWidgets.none { it.importOriginId != null })
+            assertEquals(beforeCopy, s.containerBytes)
             repository = repository()
             s = repository.openProject(native.projectId)
             assertEquals(id, s.widgets.last().importedFromFaceId)
@@ -113,7 +115,7 @@ class WidgetImportRepositoryTest {
         assertEquals(1, dao.findByFaceId("00106").size)
         assertTrue(dao.findByFaceId("00008").isEmpty())
         assertEquals(9, s.widgets.count { it.importedFromFaceId != null })
-        assertEquals(9, s.removedWidgets.count { it.importOriginId != null })
+        assertTrue(s.removedWidgets.isEmpty())
         val sibling = repository.currentSnapshot("style1.bin")
         assertTrue(sibling.widgets.none { it.importedFromFaceId != null })
     }
@@ -252,18 +254,72 @@ class WidgetImportRepositoryTest {
         assertEquals("00106", after.importedFromFaceId)
     }
 
-    @Test fun savedImportedPointersFollowOtherWidgetResizes() = runBlocking {
-        var s = add(repository.openPackage(face("00106")), "00008", 1)
+    /**
+     * Removing an imported widget deletes it, artwork and all, and that survives a reopen.
+     *
+     * It used to go under Removed with every raster it brought still in the container,
+     * drawn by nothing — the bytes never came back. Now the face is the size it was before
+     * the import, and the project still opens: the saved import table outlives the widget,
+     * because what the import added beside it (fonts, dictionary entries) is still there.
+     */
+    @Test fun anImportedWidgetIsDeletedWithItsArtwork() = runBlocking {
+        val native = repository.openPackage(face("00106"))
+        var s = add(native, "00008", 1)
+        val imported = s.widgets.last()
+        assertTrue(s.containerBytes > native.containerBytes)
+        s = remove(s, imported)
+        assertTrue(s.removedWidgets.isEmpty())
+        assertEquals(native.widgets.size, s.widgets.size)
+        assertEquals(native.containerBytes, s.containerBytes)
+        assertEquals(native.imageCount, s.imageCount)
+        repository = repository()
+        s = repository.openProject(s.projectId)
+        assertEquals(native.containerBytes, s.containerBytes)
+        assertTrue(s.widgets.none { it.importedFromFaceId != null })
+        // And importing again after that still works — the table it kept is still valid.
+        s = add(s, "00008", 1)
+        assertEquals("00008", s.widgets.last().importedFromFaceId)
+    }
+
+    /** A duplicate shares its original's artwork, so that artwork stays while either does. */
+    @Test fun deletingAnImportKeepsTheArtworkItsDuplicateShares() = runBlocking {
+        val native = repository.openPackage(face("00106"))
+        var s = add(native, "00008", 1)
         val imported = s.widgets.last()
         val expected = pixels(s, imported.globalIndex)
-        s = remove(s, imported)
-        val native = s.widgets.first { it.type == 3 && it.canResize }
-        s = repository.resizeWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
-            native.x, native.y, maxOf(1, native.width / 2), maxOf(1, native.height / 2), false)
+        s = repository.duplicateWidget("style0.bin", imported.globalIndex, imported.type,
+            imported.sequenceId, imported.x, imported.y, false)
+        val withCopy = s.imageCount
+        s = remove(s, s.widgets.single { it.globalIndex == imported.globalIndex })
+        assertEquals(withCopy, s.imageCount)
+        val copy = s.widgets.last()
+        assertEquals("00008", copy.importedFromFaceId)
+        assertArrayEquals(expected, pixels(s, copy.globalIndex))
+        s = remove(s, copy)
+        assertEquals(native.containerBytes, s.containerBytes)
+    }
+
+    /**
+     * A stock widget under Removed stays restorable across an import's artwork being
+     * deleted — its saved record is carried past the images that went.
+     */
+    @Test fun aStockRemovalStaysRestorableAfterAnImportIsDeleted() = runBlocking {
+        val native = repository.openPackage(face("00106"))
+        val anchors = native.widgets.mapNotNull { it.alignedToGlobalIndex }.toSet()
+        val stock = native.widgets.first {
+            it.globalIndex !in anchors && it.placement == WidgetPlacement.CANVAS
+        }
+        val expected = pixels(native, stock.globalIndex)
+        var s = repository.removeWidget("style0.bin", stock.globalIndex, stock.type, stock.sequenceId,
+            stock.x, stock.y, false, false)
+        s = add(s, "00008", 1)
+        s = add(s, "00008", 1)
+        s = remove(s, s.widgets[s.widgets.size - 2])
+        s = remove(s, s.widgets.last())
+        assertEquals(1, s.removedWidgets.size)
         repository = repository()
         s = repository.openProject(s.projectId)
         s = repository.restoreWidget(s.removedWidgets.single().id)
-        assertEquals("00008", s.widgets.last().importedFromFaceId)
         assertArrayEquals(expected, pixels(s, s.widgets.last().globalIndex))
     }
 

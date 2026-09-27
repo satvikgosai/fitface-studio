@@ -222,6 +222,7 @@ fun LibraryRoute(
         onExportProject = viewModel::startExport,
         onDeleteProject = viewModel::startDelete,
         onImportProject = { importPicker.launch(ProjectArchiveNaming.ImportMimeTypes) },
+        onStartCustomFace = viewModel::startCustomFace,
     )
 }
 
@@ -260,6 +261,7 @@ private fun LibraryScreen(
     onExportProject: (ProjectSummary) -> Unit,
     onDeleteProject: (ProjectSummary) -> Unit,
     onImportProject: () -> Unit,
+    onStartCustomFace: (String) -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
     Scaffold(
@@ -307,6 +309,7 @@ private fun LibraryScreen(
                     onDuplicate = onDuplicateProject,
                     onExport = onExportProject.takeIf { state.developerTools },
                     onRemove = onDeleteProject,
+                    onStartCustomFace = onStartCustomFace,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -1046,9 +1049,12 @@ private fun ProjectsList(
     /** Null while the tools are locked, which is what keeps the entry off the menu. */
     onExport: ((ProjectSummary) -> Unit)?,
     onRemove: (ProjectSummary) -> Unit,
+    onStartCustomFace: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val projects = state.visibleProjects
+    val customFaceName = stringResource(R.string.library_custom_face_name)
+    val startCustomFace = { onStartCustomFace(customFaceName) }
     // Only one menu is ever composed, because only one id can be held here. A DropdownMenu
     // is a Popup — its own window — and one per row would be one window per project.
     var openMenuFor by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -1067,6 +1073,7 @@ private fun ProjectsList(
     ) {
         if (state.projects.isEmpty()) {
             item { ProjectsEmptyState(onBrowse) }
+            item { CustomFaceCard(state, startCustomFace) }
             return@LazyColumn
         }
         // The same controls the catalogue has, in the same place, scrolling with the list.
@@ -1100,6 +1107,10 @@ private fun ProjectsList(
                 }
             }
         }
+        // Under the controls, never above them: both pages lay their controls out in the
+        // same place so the search field does not move when the tab changes, and a card
+        // above them on this page alone would move it by its own height.
+        item { CustomFaceCard(state, startCustomFace) }
         if (projects.isEmpty()) {
             item {
                 Column(
@@ -1135,6 +1146,101 @@ private fun ProjectsList(
                 )
             }
         }
+    }
+}
+
+/**
+ * Starts a custom face: a face's clock on an empty panel, to build on.
+ *
+ * It says two things before it is tapped, because both are costs the reader should choose
+ * knowingly. **Whether it downloads**: nothing ships with this app, so the face it is built
+ * from comes from the store like any other, and the card says how big that is or that the
+ * package is already here. **What it replaces on the watch**: it is built on another face's
+ * slot, so installing it takes that face's place, and one custom face replaces another.
+ */
+@Composable
+private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
+    val source = state.customFaceSource
+    val progress = state.customFaceProgress
+    val enabled = source != null && progress == null && !state.isOpeningProject &&
+        state.downloadingProductId == null
+    val sourceName = source?.name ?: stringResource(R.string.library_custom_face_source_fallback)
+    val cost = when {
+        source == null && state.isLoadingCatalog -> stringResource(R.string.library_custom_face_waiting)
+        source == null -> stringResource(R.string.library_custom_face_unavailable)
+        state.customFaceCached -> stringResource(R.string.library_custom_face_cached)
+        else -> stringResource(R.string.library_custom_face_download, formatBytes(source.packageSize))
+    }
+    val slot = stringResource(R.string.library_custom_face_slot, sourceName)
+    val title = stringResource(R.string.library_custom_face_title)
+    val detail = stringResource(R.string.library_custom_face_detail)
+    val description = "$title. $detail $cost. $slot"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (source == null) .6f else 1f)
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = .06f))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .35f), MaterialTheme.shapes.medium)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onStart)
+            .semantics { contentDescription = description }
+            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(13.dp),
+        ) {
+            // The empty state's tile, with the mark for adding one.
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), MaterialTheme.shapes.medium)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), MaterialTheme.shapes.medium),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    detail,
+                    modifier = Modifier.padding(top = 3.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
+        }
+        if (progress != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (progress.building) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator({ progress.fraction }, Modifier.fillMaxWidth())
+                }
+                Text(
+                    if (progress.building) {
+                        stringResource(R.string.library_custom_face_building)
+                    } else {
+                        stringResource(R.string.library_custom_face_downloading, sourceName,
+                            (progress.fraction * 100).toInt())
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
+        } else {
+            Text(
+                cost.uppercase(),
+                style = FitFaceType.micro,
+                color = if (state.customFaceCached && source != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.fitText.secondary
+                },
+            )
+        }
+        Text(slot, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
     }
 }
 

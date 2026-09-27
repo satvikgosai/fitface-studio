@@ -40,7 +40,7 @@ step nor the current-face selector — command 3 is what selects the current fac
 
 **The result the watch computes for that command does not come back to this app.**
 It is addressed to the fixed component the stock plugin owns, so the app's honest
-ceiling is "the install request was delivered", which is what the Send page
+ceiling is "the install request was delivered", which is what the Install page
 says. The watch distinguishes success, low battery, a wrong path, a wrong binary
 format, storage full and a full favourites list; none of those reach the phone
 here, which is exactly why a face that transfers cleanly and never appears has to
@@ -81,7 +81,7 @@ means the same thing.
 
 A committed edit invalidates a finished transfer, so `payloadChanged()` re-arms
 `COMPLETE` and `FAILED` back to `READY` while keeping the cached peers. Without
-it the Send page offers nothing but "Back to canvas" after the first install.
+it the Install page offers nothing but "Back to canvas" after the first install.
 
 ### Android 11 and earlier: freezing the plugin
 
@@ -156,7 +156,7 @@ The handover is one-way in the UI unless something rewinds it, and that is the
 trap: a peer handle does not outlive the connection it was found on, so a
 transfer that fails *after* the plugin let go can only be retried by reconnecting
 the watch, discovering again, and handing the channel over again. `peersCached`
-never went false, so `setupComplete` stayed true, so the Send page stayed on
+never went false, so `setupComplete` stayed true, so the Install page stayed on
 the transfer panel offering a re-send that could not work — the checklist step
 the user needed was unreachable.
 

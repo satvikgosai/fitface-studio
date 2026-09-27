@@ -51,13 +51,52 @@ fun FitButton(
     style: FitButtonStyle = FitButtonStyle.Primary,
     /** Pass a hoisted source to observe presses, e.g. for press-and-hold repeat. */
     interactionSource: MutableInteractionSource? = null,
+    /**
+     * Shrinks the button to [ICON_BUTTON_SIZE], the height a square action already has.
+     *
+     * For a dense row of them — the editor's selection tray, where move, size, duplicate,
+     * remove and colour all sit under the face and the face is what the height is being
+     * taken from. Not for a button standing on its own: 46dp is the default because it is
+     * the one people actually aim at.
+     */
+    compact: Boolean = false,
+) {
+    FitButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        loading = loading,
+        style = style,
+        interactionSource = interactionSource,
+        compact = compact,
+    ) {
+        Text(text, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+/**
+ * [FitButton] with drawn content in place of a label — for a mark no font can be trusted to
+ * draw the same way twice, like the editor's nudge arrows. The content reads
+ * `LocalContentColor`, so it dims with the button.
+ */
+@Composable
+fun FitButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+    style: FitButtonStyle = FitButtonStyle.Primary,
+    interactionSource: MutableInteractionSource? = null,
+    compact: Boolean = false,
+    content: @Composable RowScope.() -> Unit,
 ) {
     val isEnabled = enabled && !loading
+    val minHeight = if (compact) ICON_BUTTON_SIZE else 46.dp
     if (style == FitButtonStyle.Primary) {
         Button(
             onClick = onClick,
             enabled = isEnabled,
-            modifier = modifier.heightIn(min = 46.dp),
+            modifier = modifier.heightIn(min = minHeight),
             shape = MaterialTheme.shapes.small,
             interactionSource = interactionSource,
             colors = ButtonDefaults.buttonColors(
@@ -75,7 +114,7 @@ fun FitButton(
                 )
                 Spacer(Modifier.width(9.dp))
             }
-            Text(text, style = MaterialTheme.typography.labelLarge)
+            content()
         }
     } else {
         val color = when (style) {
@@ -86,7 +125,7 @@ fun FitButton(
         OutlinedButton(
             onClick = onClick,
             enabled = isEnabled,
-            modifier = modifier.heightIn(min = 46.dp),
+            modifier = modifier.heightIn(min = minHeight),
             shape = MaterialTheme.shapes.small,
             interactionSource = interactionSource,
             border = BorderStroke(1.dp, color.copy(alpha = if (enabled) .38f else .12f)),
@@ -99,7 +138,7 @@ fun FitButton(
                 CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(9.dp))
             }
-            Text(text, style = MaterialTheme.typography.labelLarge)
+            content()
         }
     }
 }
@@ -186,21 +225,39 @@ fun FitIconButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     tint: Color? = null,
+    /**
+     * Draws the button as **on**, in [FitChip]'s selected vocabulary: a filled tint, a
+     * primary border and a primary glyph.
+     *
+     * A colour swap alone is not enough for a toggle sitting in a row of momentary actions.
+     * The editor's scope button proved it — tinted teal among six outlined buttons, it read
+     * as "this one is special", not as "this setting is on".
+     */
+    selected: Boolean = false,
 ) {
+    val accent = MaterialTheme.colorScheme.primary
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(ICON_BUTTON_SIZE).semantics {
+        // Size first, caller's modifier second, so a dense row can hand these a
+        // `weight(1f)` and have it win on width while the height stays the design's.
+        // Every existing caller passes no size at all, so nothing else moves.
+        modifier = Modifier.size(ICON_BUTTON_SIZE).then(modifier).semantics {
             this.contentDescription = contentDescription
         },
         shape = MaterialTheme.shapes.small,
         contentPadding = PaddingValues(0.dp),
         border = BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (enabled) 1f else .45f),
+            when {
+                !enabled -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f)
+                selected -> accent
+                else -> MaterialTheme.colorScheme.outlineVariant
+            },
         ),
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = tint ?: MaterialTheme.colorScheme.onSurface,
+            containerColor = if (selected) accent.copy(alpha = .13f) else Color.Transparent,
+            contentColor = if (selected) accent else tint ?: MaterialTheme.colorScheme.onSurface,
             disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = .28f),
         ),
     ) {

@@ -3,6 +3,7 @@ package dev.fitface.studio.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.CatalogSort
@@ -125,7 +126,22 @@ data class LibraryUiState(
      * anything could be said at the time, and a sideloaded APK reports to no console.
      */
     val previousCrash: Boolean = false,
+    /**
+     * Whether the package a custom face is built from is already on the phone, so the card
+     * can say whether starting one costs a download. Checked when the catalogue arrives —
+     * a promise of "no download" has to be checked, not assumed.
+     */
+    val customFaceCached: Boolean = false,
+    /** A custom face being made, or null. */
+    val customFaceProgress: CustomFaceProgress? = null,
 ) {
+    /**
+     * The catalogue entry a custom face is built from, or null while the catalogue has none —
+     * still loading, offline with nothing cached, or no longer served.
+     */
+    val customFaceSource: CatalogFace?
+        get() = faces.firstOrNull { it.faceId == CUSTOM_FACE_TEMPLATE_FACE_ID }
+
     val isOpeningProject: Boolean
         get() = openingProjectId != null
 
@@ -139,7 +155,8 @@ data class LibraryUiState(
         get() = exporting?.let { ProjectArchiveNaming.fileName(it.faceId, it.name) }
 
     val isWorking: Boolean
-        get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null
+        get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null ||
+            customFaceProgress != null
 
     /**
      * Whether a tap on the grid may open the face sheet. Deliberately narrower than
@@ -153,7 +170,7 @@ data class LibraryUiState(
      * Opening a project and a download in flight do conflict, so those still refuse.
      */
     val canSelectFace: Boolean
-        get() = !isOpeningProject && downloadingProductId == null
+        get() = !isOpeningProject && downloadingProductId == null && customFaceProgress == null
 
     val visibleFaces: List<CatalogFace>
         get() {
@@ -255,6 +272,13 @@ internal fun faceAction(
 data class DuplicateNotice(val id: Long, val name: String)
 
 /**
+ * How far making a custom face has got: downloading the face it is built from, then
+ * building it. Two phases because the second takes long enough to be seen, and a bar
+ * sitting at 100% while nothing seems to happen reads as stuck.
+ */
+data class CustomFaceProgress(val fraction: Float, val building: Boolean)
+
+/**
  * An export waiting for the system picker.
  *
  * The three facts the picker and the repository need between them: which project to write,
@@ -315,8 +339,53 @@ class LibraryViewModel @Inject constructor(
                         catalogFetchedAtEpochMillis = cached.fetchedAtEpochMillis,
                     )
                 }
+                refreshCustomFaceCached()
             }
             loadCatalog(forceRefresh = false)
+        }
+    }
+
+    private suspend fun refreshCustomFaceCached() {
+        val source = mutableState.value.customFaceSource ?: return
+        val cached = runCatching { catalog.isPackageCached(source) }.getOrDefault(false)
+        mutableState.update { it.copy(customFaceCached = cached) }
+    }
+
+    /**
+     * Makes a custom face and opens it: the face it is built from is downloaded — or read
+     * from the phone if it is already there — stripped to its clock, and saved as a new
+     * project called [name].
+     *
+     * The download happens here, on the reader's tap, because that is the only way this app
+     * obtains watch-face content: nothing is bundled. It refuses while anything else holds
+     * the repository's single editing session, for the reason [downloadSelectedFace] does.
+     */
+    fun startCustomFace(name: String) {
+        val current = mutableState.value
+        val source = current.customFaceSource ?: return
+        if (current.customFaceProgress != null || current.downloadingProductId != null) return
+        if (current.isOpeningProject) return
+        viewModelScope.launch {
+            mutableState.update {
+                it.copy(customFaceProgress = CustomFaceProgress(0f, building = false), error = null)
+            }
+            runCatching {
+                val downloaded = catalog.downloadPackage(source, source.styles.firstOrNull()?.id ?: 0) { progress ->
+                    mutableState.update {
+                        it.copy(customFaceProgress = CustomFaceProgress(progress.fraction, building = false))
+                    }
+                }
+                mutableState.update {
+                    it.copy(customFaceProgress = CustomFaceProgress(1f, building = true), customFaceCached = true)
+                }
+                repository.openTemplate(downloaded, name)
+            }.onSuccess { snapshot ->
+                eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
+                mutableState.update { it.copy(customFaceProgress = null) }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(customFaceProgress = null, error = error.userMessage()) }
+            }
         }
     }
 
@@ -339,6 +408,7 @@ class LibraryViewModel @Inject constructor(
                         catalogFailure = null,
                     )
                 }
+                refreshCustomFaceCached()
             }
             .onFailure { error ->
                 val message = error.userMessage()
@@ -459,6 +529,7 @@ class LibraryViewModel @Inject constructor(
         // takes. Two editors on the back stack was the result.
         if (mutableState.value.downloadingProductId != null) return
         if (mutableState.value.isOpeningProject) return
+        if (mutableState.value.customFaceProgress != null) return
         viewModelScope.launch {
             mutableState.update {
                 it.copy(

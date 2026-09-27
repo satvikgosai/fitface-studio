@@ -164,6 +164,50 @@ compares against, with no network call. A row written before schema 5 whose
 `sourceUri` was not one of this app's keys keeps NULL for the parsed columns, and NULL
 means "say nothing", never "out of date".
 
+### A custom face
+
+**Start a custom face** on the Projects page makes a project that is face `00006`'s clock on
+an empty panel, to build on with the backgrounds and widgets the editor already has. It is
+**built on the phone, from the store's package, when it is asked for — never shipped.**
+`NOTICE.md` promises that no watch-face container, raster, font or preview is bundled in the
+app or committed here, and a template in `assets/` would be exactly that inside every
+published APK. So the card downloads Info_4 like any other face (or reads the cached copy,
+and says which before it is tapped), and `openTemplate` builds from that:
+
+1. `CustomFaceTemplate.strip` keeps **one** style — Info_4's four differ only in which
+   readings they show, so without them the other three are copies with nothing to choose
+   between — through `StructuralEditor.keepFirstStyles`, which moves all three counts the
+   watch reads together: the `styleN.bin` entries, `setting.bin +0x34`, and `preview.bin`'s
+   frames. It then removes the two readings and their labels from that style through
+   `StructuralEditor.removeWidget` — the tray's ✕, highest index first — after checking the
+   style is the nine-record shape the recipe was written for. A newer Info_4 that is not is
+   refused with a sentence rather than stripped of the wrong things. `aod.bin` is already just
+   the clock and is not touched.
+2. The style's `preview.bin` frame and package preview PNG are redrawn from the stripped
+   composition, so neither the watch's face picker nor the Styles page shows a heart rate the
+   face no longer has, and the previews of the styles that went are dropped.
+3. `CustomFaceTemplate.pack` writes a package holding exactly the three member shapes
+   `Fit3Apk.parse` reads — the project archive's shape — and `createProject`, the same
+   row-then-files commit `openPackage` uses, saves it. From then on it is an ordinary project:
+   the stripped container is its *pristine*, so Reset returns to the empty panel.
+
+Its row has a `fit3-template://00006/v<recipe>/<uuid>` key and NULL `productId`,
+`packageVersionCode` and `styleId`. It is not a store download, and a store version would
+badge every custom face as outdated the day Info_4 updates. Export and import carry that
+provenance through verbatim, like any other.
+
+**One style is a shape no catalogue face has** — the fewest in the corpus is three — so a
+custom face is the one container this app sends whose style count no vendor face shares.
+The install command names the style to activate, which is what should keep a watch that last
+showed Info_4 on style 3 from holding a saved index past the end; that is the argument, and an
+install on a wrist is what settles it. `CustomFaceTemplate.VERSION` is `2` for this recipe; a
+project made by `1` kept all four styles and goes on working as it is.
+
+A custom face **installs into Info_4's slot on the watch** — the container's name and face-id
+byte are Info_4's — so it replaces Info_4, and one custom face replaces another. The card
+says so before it is tapped. Templates on other slots would mean rewriting a face's identity
+fields, which no code here does and no watch has been shown to accept.
+
 ### The project archive
 
 Imported-widget projects use schema 2 and require their pristine donor artwork in
@@ -230,7 +274,7 @@ thumbnail.
 
 An archive is a zip a stranger could have written, which is a different threat from a store
 package or a picked image. Everything is checked **before a row is written**, because a
-project someone spends an evening on must not turn out on the Send page to have never
+project someone spends an evening on must not turn out on the Install page to have never
 been sendable.
 
 The structural defence is that **no entry name ever becomes a filesystem path**. An import

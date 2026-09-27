@@ -23,10 +23,10 @@
     <string name="editor_reopen">Reopen from library</string>
 
     <!-- Page titles, reused as the navigation rail's labels -->
-    <!-- The one exception: the Canvas page's header is titled with the project's name,
+    <!-- The one exception: the canvas page's header is titled with the project's name,
          because two projects on one face are otherwise indistinguishable from it. The rail
          needs a word for the destination, and this is it. -->
-    <string name="editor_page_face">Face</string>
+    <string name="editor_page_canvas">Canvas</string>
     <string name="editor_page_widgets">Widgets</string>
     <string name="editor_page_widget_number">Widget #%1$s</string>
     <string name="editor_page_background">Background</string>
@@ -34,9 +34,9 @@
     <!-- The Styles page's row for the always-on display, and every place a variant name
          is shown — never the raw "aod.bin" basename. -->
     <string name="editor_aod_label">Always-on display</string>
-    <!-- One page: the checks and the transfer were always one journey — the rail's
-         Install entry silently redirected to Validate until the render had been seen. -->
-    <string name="editor_page_send">Send</string>
+    <!-- One page: the checks and the transfer were always one journey — the Install entry
+         silently redirected to Validate until the render had been seen. -->
+    <string name="editor_page_install">Install</string>
     <string name="editor_page_project">Project</string>
     <!-- The "⋯" that opens the page above. A glyph needs its label spelled out for TalkBack,
          which otherwise announces the ellipsis character itself. -->
@@ -80,7 +80,7 @@
         <item quantity="one">%1$d style · always-on display</item>
         <item quantity="other">%1$d styles · always-on display</item>
     </plurals>
-    <string name="editor_subtitle_send">checks, then the paired Fit3</string>
+    <string name="editor_subtitle_install">checks, then the paired Fit3</string>
     <string name="editor_badge_edited">EDITED</string>
     <!--
       Shown in the top bar while an image is positioned but not yet committed. The bar is
@@ -91,7 +91,8 @@
     <string name="editor_badge_unapplied">UNAPPLIED</string>
 
     <!-- Canvas -->
-    <string name="editor_canvas_hint_none">Built from the face’s resources with sample readings. Tap an outlined widget to select it.</string>
+    <string name="editor_canvas_hint_none">Built from the face’s resources with sample readings. Tap an outlined widget to select it, or hold one to select several.</string>
+    <string name="editor_canvas_hint_set">Tap widgets to add them to the set or take them out, or empty space to let go. The arrows move them together.</string>
     <string name="editor_canvas_hint_all_styles">Drag to move, or hold a nudge button. Changes apply to every style that has this widget.</string>
     <string name="editor_canvas_hint_this_style">Drag to move, or hold a nudge button. Changes only apply here.</string>
     <string name="editor_canvas_hint_aod">Drag to move, or hold a nudge button. Changes apply only to the always-on display.</string>
@@ -102,7 +103,7 @@
       Styles and AOD share the resource renderer. Both disclose font substitution and
       unavailable firmware content here and on Validate.
     -->
-    <string name="editor_canvas_hint_none_approximate">Built from the face’s resources with sample readings. Watch fonts are approximated; some firmware-only content cannot be previewed.</string>
+    <string name="editor_canvas_hint_none_approximate">Built from the face’s resources with sample readings. Watch fonts are approximated; some firmware-only content cannot be previewed. Hold a widget to select several.</string>
     <string name="editor_aod_approximate">Resource preview with sample readings, not live watch data. Text uses the face’s strings and font size with substitute glyphs. Firmware-only content may be unavailable. Your edits are sent whole.</string>
     <string name="editor_canvas_pick_from_list">OR PICK FROM THE LIST ›</string>
     <string name="editor_canvas_a11y">Fit3 watch-face editor for %1$s. %2$d movable widgets.</string>
@@ -115,17 +116,25 @@
     <string name="editor_action_smaller_a11y">Make this widget smaller</string>
     <string name="editor_action_larger_a11y">Make this widget larger</string>
     <string name="editor_action_color_a11y">Colour</string>
-    <string name="editor_action_more_a11y">More actions for this widget</string>
+    <!-- The scope toggle, as a tray button. Its glyph is the rail's own Styles mark and
+         its tint is the state, so the label has to say which state that is. -->
+    <string name="editor_action_scope_on_a11y">Editing all %1$d styles. Tap to edit only this one.</string>
+    <string name="editor_action_scope_off_a11y">Editing this style only. Tap to edit all %1$d.</string>
+    <string name="editor_action_scope_fixed_a11y">This edit reaches one variant and cannot be widened</string>
     <!-- Shown in the colour menu when the record carries no colour field at all, so the
          control says why it can do nothing rather than being silently absent. -->
     <string name="editor_action_no_color">No colour of its own — this widget draws its artwork.</string>
-    <string name="editor_action_record_details">Record details ›</string>
-    <!-- The scope toggle, as one line of a menu. The switch and its explanation stay on
-         the inspector; here a tick in the label carries the state. -->
-    <string name="editor_action_scope">Apply to all %1$d styles</string>
-    <string name="editor_nudge_hint">tap for 1 px · hold to keep moving · drag on canvas for coarse</string>
-    <string name="editor_nudge_hint_no_drag">tap for 1 px · hold to keep moving</string>
+    <string name="editor_action_record_details">Record details</string>
+    <!-- One line at 320dp, which is what the selection tray can spare: it sits under the
+         face and every line it takes is a line the face loses. -->
+    <string name="editor_nudge_hint">tap 1 px · hold to run · drag on the face</string>
+    <string name="editor_nudge_hint_no_drag">tap 1 px · hold to run</string>
     <string name="editor_nudge_locked">position locked by container</string>
+    <!-- The nudge arrows are drawn, not text, so these are all a screen reader has. -->
+    <string name="editor_nudge_left_a11y">Move left</string>
+    <string name="editor_nudge_up_a11y">Move up</string>
+    <string name="editor_nudge_down_a11y">Move down</string>
+    <string name="editor_nudge_right_a11y">Move right</string>
 
     <!-- Widget list -->
     <string name="editor_widgets_on_canvas_title">On the canvas</string>
@@ -180,6 +189,35 @@
     <string name="editor_remove_body_all_styles">This removes the matching widget from every style that has it. It stays in the Removed list so you can put it back.</string>
     <string name="editor_remove_body_one_style">This removes the widget from %1$s only. It stays in the Removed list so you can put it back.</string>
     <string name="editor_remove_confirm">Remove</string>
+    <!-- A widget from another face is deleted rather than kept under Removed. -->
+    <string name="editor_delete_title">Delete widget #%1$d?</string>
+    <string name="editor_delete_body_imported">It came from face %1$s, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Add it from that face again to have it back.</string>
+    <string name="editor_delete_confirm">Delete</string>
+    <!-- Several widgets at once. Each is still its own edit, one after another. -->
+    <string name="editor_widgets_hint">Tap a widget to edit it on the face, or hold one to select several.</string>
+    <string name="editor_widgets_hint_set">Tap widgets to add them to the set or take them out.</string>
+    <string name="editor_widgets_set_edit">Edit them on the face</string>
+    <string name="editor_selection_set_title">%1$d widgets selected</string>
+    <string name="editor_selection_clear">Clear</string>
+    <string name="editor_selection_duplicate_a11y">Duplicate all %1$d</string>
+    <string name="editor_selection_remove_a11y">Remove all %1$d</string>
+    <string name="editor_nudge_hint_set">tap 1 px · hold to run · they move together</string>
+    <string name="editor_remove_set_title">Remove %1$d widgets?</string>
+    <plurals name="editor_remove_set_stock_all">
+        <item quantity="one">%1$d goes to the Removed list, from every style that has it, so you can put it back.</item>
+        <item quantity="other">%1$d go to the Removed list, from every style that has them, so you can put them back.</item>
+    </plurals>
+    <plurals name="editor_remove_set_stock_one">
+        <item quantity="one">%1$d goes to the Removed list, from %2$s only, so you can put it back.</item>
+        <item quantity="other">%1$d go to the Removed list, from %2$s only, so you can put them back.</item>
+    </plurals>
+    <plurals name="editor_remove_set_imported">
+        <item quantity="one">%1$d came from another face, so it is deleted with its artwork. Add it from that face again to have it back.</item>
+        <item quantity="other">%1$d came from other faces, so they are deleted with their artwork. Add them from those faces again to have them back.</item>
+    </plurals>
+    <!-- Each widget is its own commit, so the ones before the refusal are done and saved. -->
+    <string name="editor_selection_stopped_duplicate">Duplicated %1$d of %2$d, then stopped: %3$s</string>
+    <string name="editor_selection_stopped_remove">Removed %1$d of %2$d, then stopped: %3$s</string>
     <string name="editor_cancel">Cancel</string>
     <string name="editor_label_background">BG</string>
     <string name="editor_label_hidden">NO OUTLINE</string>
@@ -208,6 +246,7 @@
         <item quantity="other">Every one of the %1$d styles that carries this widget stays in sync. Styles that do not have it, and the always-on display, are left alone.</item>
     </plurals>
     <string name="editor_apply_all_off">Only %1$s changes.</string>
+    <string name="editor_apply_all_single">This face has one style, so every edit is made to it.</string>
     <string name="editor_apply_all_aod">Edits here affect only the always-on display, never a numbered style.</string>
     <string name="editor_destructive_heading">Destructive</string>
     <string name="editor_duplicate">Duplicate &amp; select clone</string>
@@ -279,24 +318,28 @@
     <string name="editor_aod_tap_to_load">Tap to load the always-on display</string>
     <string name="editor_styles_footnote">Every style except the current one is the package\'s own picture of the unedited face. The always-on display\'s picture is generated by this app instead — the package ships none. Switching style clears the current selection and reloads the preview; widget moves follow the apply-to-every-style setting, which never reaches the always-on display.</string>
 
-    <!-- Validate page -->
-    <string name="editor_validate_ok">Container reparsed successfully. Entry bounds, records and CRCs are valid.</string>
     <string name="editor_checks_heading">Checks</string>
     <!-- The collapsed summary beside each Send-page section heading. -->
-    <string name="editor_send_checks_summary">%1$d pass</string>
-    <string name="editor_send_checks_summary_failed">failed</string>
-    <string name="editor_send_expand">Show %1$s</string>
-    <string name="editor_send_collapse">Hide %1$s</string>
-    <string name="editor_send_watch_heading">Send to the watch</string>
+    <string name="editor_install_checks_summary">%1$d pass</string>
+    <string name="editor_install_checks_failed">failed</string>
+    <string name="editor_install_expand">Show %1$s</string>
+    <string name="editor_install_collapse">Hide %1$s</string>
+    <!-- The same section, folded, beside the face. Five characters because it shares a
+         143dp line with a status badge on a 320dp phone. -->
+    <string name="editor_install_watch_label">Watch</string>
     <!-- Shown in place of the watch section when the container did not reparse. Nothing
          may be sent, so the page offers the way back rather than a disabled transfer. -->
-    <string name="editor_send_blocked">This container did not reparse, so nothing can be sent. Undo the last edit, or reset the project to the face as it was downloaded.</string>
+    <string name="editor_install_blocked">This container did not reparse, so nothing can be sent. Undo the last edit, or reset the project to the face as it was downloaded.</string>
     <string name="editor_check_entry_bounds">Entry table bounds</string>
     <string name="editor_check_record_sizes">Record sizes</string>
     <string name="editor_check_crc">Per-entry CRC</string>
     <string name="editor_check_payload_length">Payload length</string>
     <string name="editor_check_face_id">Face ID byte range</string>
     <string name="editor_audit_heading">Audit</string>
+    <!-- The audit section is always on the page, so it needs something to say before the
+         first commit of a session. -->
+    <string name="editor_audit_none_summary">no edit yet</string>
+    <string name="editor_audit_none">Nothing has been committed in this session. The container on disk is whatever your last edit left.</string>
     <string name="editor_audit_detail">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nentries rewritten %4$d\ncontainer %5$s of %6$s</string>
     <!-- Same as editor_audit_detail, for an edit that touched only the always-on display —
          "%4$d of %5$d styles" would misreport it as one of the numbered styles, when it is
@@ -307,11 +350,20 @@
     <!-- Thumbnail card -->
     <string name="editor_thumbnail_heading">Face-picker thumbnail</string>
     <string name="editor_thumbnail_in_sync_label">IN SYNC</string>
-    <string name="editor_send_thumbnail_summary_stale">not refreshed</string>
     <string name="editor_thumbnail_in_sync">Matches your edit, so the watch\'s carousel shows the same layout as %1$s. Make another edit before updating it again.</string>
     <string name="editor_thumbnail_unedited">Unedited, so the stock thumbnail already matches this face.</string>
     <string name="editor_thumbnail_blocked">Resolve the errors above first — a thumbnail rendered from a container that does not validate would bake in a broken layout.</string>
-    <string name="editor_thumbnail_stale">The watch\'s face picker still shows the stock image. Update it once so the carousel matches what you install.</string>
+    <string name="editor_thumbnail_stale">The watch\'s face picker still shows the picture on the left. Update it so the carousel matches what you install.</string>
+    <!-- The card shows the thumbnail as it is, and as Update thumbnail would leave it. -->
+    <string name="editor_thumbnail_now">Now</string>
+    <string name="editor_thumbnail_after">After</string>
+    <string name="editor_thumbnail_now_a11y">The face picker\'s thumbnail for %1$s as it is now</string>
+    <string name="editor_thumbnail_after_a11y">The thumbnail after updating it</string>
+    <string name="editor_thumbnail_state_stock">Stock image, matches</string>
+    <string name="editor_thumbnail_state_stale">Out of date</string>
+    <string name="editor_thumbnail_state_in_sync">Matches your edit</string>
+    <string name="editor_thumbnail_state_blocked">Fix the errors first</string>
+    <string name="editor_thumbnail_state_aod">Shown for %1$s</string>
     <string name="editor_thumbnail_aod">The face-picker thumbnail is rendered from a numbered style, never the always-on display, so there is nothing to update here. Select %1$s to refresh it.</string>
     <string name="editor_thumbnail_update">Update thumbnail</string>
 
@@ -328,8 +380,8 @@
     <string name="editor_install_stopped_label">STOPPED</string>
     <string name="editor_install_restart">Restart direct-install setup</string>
 
-    <!-- Device status -->
-    <string name="editor_device_face_a11y">The face that will be installed</string>
+    <!-- The plate on the install page, which is the only render of the face on it. -->
+    <string name="editor_device_face_a11y">The face that will be sent to the watch</string>
     <string name="editor_device_name">Fit3 · SM-R390</string>
     <string name="editor_device_face_named">%1$s · %2$s</string>
     <string name="editor_device_face_unnamed">face %1$s · %2$s</string>

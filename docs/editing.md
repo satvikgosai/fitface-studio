@@ -255,6 +255,20 @@ detail that survived the smaller one. `StructuralEditor.resizeWidget` takes the 
 container and resamples from it every time, so the result depends only on the size asked
 for.
 
+**A shrink averages; only a palette raster copies samples.** `RasterResampler` gives each
+new pixel the area-weighted mean of the source pixels it covers when an axis shrinks, and
+interpolates between the two nearest when it grows. Nearest neighbour used to serve every
+format, on the reasoning that an average invents a colour the format cannot hold — true
+only of `IMAGE_INDEXED8`, whose samples are palette indices, and which keeps nearest
+neighbour for that reason (one raster in the catalogue is indexed, a background). RGB565
+has no palette, and for it nearest neighbour only cost the edges: it kept one source pixel
+per new pixel, so the 95% rung dropped a row and a column in twenty and every curve stepped
+where it lost them. Colour is averaged **weighted by alpha**, because the catalogue's
+transparent pixels all store black and its edges store straight colour — an unweighted mean
+darkens every edge — and a pixel left fully transparent stores black like the rest. An
+unchanged size returns the samples untouched, so the shipped extent still restores the
+shipped bytes.
+
 **Device-proven, and bounded by what the face shipped.** A resized widget installs on an
 SM-R390 and the watch redraws it. The bound is `widgetResizeLimit`: 128 px per side, *or*
 the extent the frames shipped at when the face ships something larger. A sprite can
@@ -371,6 +385,100 @@ field not explicitly relocated. Full-panel backgrounds are refused here and belo
 [the background page](#adding-a-background-to-a-face-that-has-none); the remaining eight
 constructors have no producer record in the corpus, so importing one would be from-scratch
 authoring wearing an import's clothes.
+
+### Adding several at once
+
+Picking is a **set**: tapping an outlined widget, or a row in the list, toggles it in and
+numbers it in pick order, which is the order it is added and so the z-order it lands in.
+
+Underneath, every widget still goes in through the single import this section describes, one
+at a time, and **it can only work that way**. `WatchFaceRepositoryImpl` holds exactly one
+pending import; `previewWidgetImport` clears it on entry, so pricing the second widget
+destroys the first one's ticket; and `importWidget` validates that ticket against the
+session, the donor and the target container **by reference**, which every commit replaces.
+"Price them all, then commit them all" is not expressible, and nothing in the format layer
+had to change to allow a set. The loop lives in `WidgetImportViewModel.addPicks`, as one
+`run {}` for the whole batch — never one per item, because `run` cancels the call before it.
+
+Three consequences the screen has to carry.
+
+* **The set's cost is a floor.** Only the single pick can be priced exactly; a set is quoted
+  from `addedBytesEstimate`, so the panel says "adds at least" and "may not all fit" rather
+  than promising a fit it cannot know. The 4 MiB ceiling is still enforced once, in
+  `rebuild`, on each of the commits.
+* **There is no rollback across commits.** Each widget is its own commit. A set that stops at
+  the third leaves the first two on the face and saved, and the report says exactly that.
+* **It stops at the first failure.** All three limits a batch can hit — the ceiling, the
+  saved-artwork budget in `WidgetImportOrigins`, the ten ROM font bindings — only get tighter
+  as it proceeds, so carrying on is offered as a decision ("Add the rest anyway") rather than
+  taken automatically.
+
+A set gets the **same review** a single widget does — the face with every pick painted in and
+numbered, the rest dimmed, the face as it is while a finger is held on it — and only the source
+of the "after" picture differs. A single widget's is the repository's render of the edit,
+because the ticket *is* that edit. A set's edit cannot exist before it is committed, so
+`composeImportSet` paints each pick's own donor layer over the current face, in pick order.
+That is the picture the commits produce, not an estimate of it, for a reason the importer
+enforces rather than assumes: it copies rasters byte for byte and `check`s that the widget's
+drawn position on the target is the one it had on its donor.
+
+Two things the emulator caught that no ViewModel test could, both the same shape — *work
+started by one pick must not obstruct the next*. The rows and the canvas were disabled while
+`busy`, which swallowed the tap right after the first pick; they gate on `saving` now. And
+the progress strip is pinned above the page, so flashing it for the pricing shifted the whole
+list down by its own height and back, landing the next tap on the row above. Pricing is
+silent now — the panel's own button is what shows it working.
+
+A third, of the same family: **the panel under the donor face must not grow with the pick
+count.** The face is fitted to the height the panel leaves, and two things grew it — the chips
+wrapped onto a new line every few picks, and a pricing refusal landed in the banner pinned above
+the page and stayed there for every pick after — so five picks on a nearly full face took the
+face down to a dot. The chips scroll on one line, the message under the meter is two lines tall
+whichever thing it says, and a refused pick is `pickError`, said in the panel beside the button
+it disables and cleared by the next pick.
+
+### Removing an imported widget deletes it
+
+A stock widget's removal cuts its **record** — a few dozen bytes — and writes the image section
+back verbatim (`StructuralEditor.removeWidgetEntry`), because it is restorable: `session.json`
+holds the record bytes, **Restore** appends them verbatim, and those bytes name their rasters by
+offset. That costs nothing, since the artwork was always part of the face.
+
+An imported widget used to go the same way, and there it cost the whole import. Measured on a
+test project of face `00013` after nine imported digits were removed again: its Style 4 carried
+71 rasters where the stock style has 19, **52 of them pointed at by no widget — 1,370,656 bytes**,
+a third of the 4 MiB ceiling. An imported widget is never truly lost — it can be imported again
+— so removing one now **deletes it**: `StructuralEditor.deleteWidget` removes the record and
+then `dropImages` deletes the rasters only it drew, rebuilding the image section from the
+survivors in their original order and rewriting every pointer after the gap through the same
+`relocatePointers` map every other relocation uses. It goes nowhere near the Removed list.
+
+Which rasters go is two rules, both fail-closed:
+
+* **Never one the face shipped with.** Imports append after the shipped rasters, so an index
+  below the pristine entry's image count is refused outright. No delete here can take a style
+  below the image count it shipped with or move a shipped raster.
+* **Never one anything still points at** — a live widget (a duplicate of an imported widget
+  shares its rasters) or a record waiting under Removed. Saved removals are then carried past
+  the images that went: `relocateSavedWidget` takes the dropped indices, because it used to
+  refuse any edit that lowered the image count.
+
+Afterwards every widget must be byte-identical apart from its pointers and every pointer must
+name byte-identical artwork. `ImportedWidgetDeletionTest` holds the round trip — import then
+delete is the style entry it was, byte for byte, for every stock type, and the whole container
+where the import added nothing else — and the three things it must not drop.
+
+Two things stay. The **import table** keeps one entry even when no imported widget is left,
+because what an import adds beside the widget — `font_N.bin` resources, dictionary entries —
+is still in the container, and an empty table is refused; reopening would then find entries the
+original face never had and refuse the edit. Only the table is kept, never pixels in the
+container. And the **font resources** themselves stay: removing a binding would renumber the
+ones after it, and they are small.
+
+**The watch has not seen a container whose image count went *down*.** Appending is proven —
+imports, and a background added to a face that had none — and a delete only ever returns a
+style toward the count it shipped with, which the watch accepted. But that is the argument,
+not a hardware result.
 
 `WidgetImporter` copies the closure it can *name*, never one guessed from words that look
 like offsets:
