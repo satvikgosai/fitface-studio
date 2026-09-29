@@ -4,7 +4,7 @@ User-visible changes per version. APKs are on the
 [releases page](https://github.com/satvikgosai/fitface-studio/releases); technical references are in
 the [documentation index](docs/README.md).
 
-## Unreleased
+## 0.2.0 (code `20`) — 2026-09-29
 
 Fixed:
 
