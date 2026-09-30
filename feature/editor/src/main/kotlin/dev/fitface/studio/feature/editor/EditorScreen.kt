@@ -291,6 +291,7 @@ fun EditorRoute(
         onResizeWidget = viewModel::resizeSelectedWidget,
         onWidgetColor = viewModel::setSelectedWidgetColor,
         onRotateWidget = viewModel::rotateSelectedWidget,
+        onArrangeWidget = viewModel::arrangeSelectedWidget,
         onSyncThumbnail = viewModel::refreshThumbnail,
         onTintCyan = viewModel::tintCyan,
         onTintMagenta = viewModel::tintMagenta,
@@ -394,6 +395,7 @@ private fun EditorScreen(
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onRotateWidget: (Int) -> Unit,
+    onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
     onTintCyan: () -> Unit,
     onTintMagenta: () -> Unit,
@@ -440,6 +442,11 @@ private fun EditorScreen(
     if (rotating && snapshot != null && selected != null) RotationDialog(
         selected, snapshot, state.applyWidgetEditsToAllStyles, !state.isWorking,
         onRotate = { rotating = false; onRotateWidget(it) }, onDismiss = { rotating = false },
+    )
+    var arranging by rememberSaveable(snapshot?.selectedVariant?.basename, selected?.globalIndex) { mutableStateOf(false) }
+    if (arranging && snapshot != null && selected != null) ArrangementDialog(
+        selected, snapshot, !state.isWorking,
+        onArrange = { arranging = false; onArrangeWidget(it) }, onDismiss = { arranging = false },
     )
     // No redirect any more: Install is one page, so there is nowhere to be quietly sent
     // instead. Arriving marks the preview reviewed, which is what arms the send button,
@@ -534,6 +541,7 @@ private fun EditorScreen(
                         onResizeWidget = onResizeWidget,
                         onWidgetColor = onWidgetColor,
                         onOpenRotation = { rotating = true },
+                        onOpenArrangement = { arranging = true },
                         onSyncThumbnail = onSyncThumbnail,
                         onTintCyan = onTintCyan,
                         onTintMagenta = onTintMagenta,
@@ -1024,6 +1032,7 @@ private fun EditorPageContent(
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onOpenRotation: () -> Unit,
+    onOpenArrangement: () -> Unit,
     onSyncThumbnail: () -> Unit,
     onTintCyan: () -> Unit,
     onTintMagenta: () -> Unit,
@@ -1053,7 +1062,7 @@ private fun EditorPageContent(
     when (page) {
         EditorPage.Canvas -> CanvasWorkspace(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
-            onResizeWidget, onWidgetColor, onOpenRotation, onDuplicateWidget, onRemoveWidget, onApplyAll,
+            onResizeWidget, onWidgetColor, onOpenRotation, onOpenArrangement, onDuplicateWidget, onRemoveWidget, onApplyAll,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
             selection, modifier,
         )
@@ -1083,7 +1092,7 @@ private fun EditorPageContent(
         )
         EditorPage.Inspector -> InspectorWorkspace(
             state, snapshot, selected, onNudgeWidget, onApplyAll, onRemoveWidget,
-            onDuplicateWidget, onResizeWidget, onWidgetColor, onOpenRotation, modifier,
+            onDuplicateWidget, onResizeWidget, onWidgetColor, onOpenRotation, onOpenArrangement, modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
@@ -1137,6 +1146,7 @@ private fun CanvasWorkspace(
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onOpenRotation: () -> Unit,
+    onOpenArrangement: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRemoveWidget: () -> Unit,
     onApplyAll: (Boolean) -> Unit,
@@ -1171,6 +1181,7 @@ private fun CanvasWorkspace(
                 onResize = onResizeWidget,
                 onColor = onWidgetColor,
                 onRotate = onOpenRotation,
+                onArrange = onOpenArrangement,
                 onDuplicate = onDuplicateWidget,
                 onRemove = onRemoveWidget,
                 onApplyAll = onApplyAll,
@@ -1384,6 +1395,7 @@ private fun SelectionActionBar(
     onResize: (Boolean) -> Unit,
     onColor: (Int) -> Unit,
     onRotate: () -> Unit,
+    onArrange: () -> Unit,
     onDuplicate: () -> Unit,
     onRemove: () -> Unit,
     onApplyAll: (Boolean) -> Unit,
@@ -1418,24 +1430,10 @@ private fun SelectionActionBar(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    // The rectangle the canvas outlines, not the stored endpoint. Reading
-                    // the stored coordinate here reported a far-end Rule's far endpoint —
-                    // a whole width away from the edge being nudged.
-                    stringResource(
-                        R.string.editor_selection_facts,
-                        widget.globalIndex,
-                        widget.width,
-                        widget.height,
-                        widget.drawLeft,
-                        widget.drawTop,
-                    ),
-                    color = MaterialTheme.colorScheme.primary,
-                    style = FitFaceType.numeric,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+
             }
+            FitIconButton(glyph = "⇅", contentDescription = stringResource(R.string.editor_arrange),
+                onClick = onArrange, enabled = enabled)
             RotationControl(enabled, onRotate)
             FitIconButton(
                 glyph = "▦",
@@ -1444,6 +1442,21 @@ private fun SelectionActionBar(
                 enabled = enabled,
             )
         }
+        Text(
+            // The rectangle the canvas outlines, not the stored endpoint. Reading
+            // the stored coordinate here reported a far-end Rule's far endpoint —
+            // a whole width away from the edge being nudged.
+            stringResource(
+                R.string.editor_selection_facts,
+                widget.globalIndex,
+                widget.width,
+                widget.height,
+                widget.drawLeft,
+                widget.drawTop,
+            ),
+            color = MaterialTheme.colorScheme.primary,
+            style = FitFaceType.numeric,
+        )
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -2680,6 +2693,7 @@ private fun InspectorWorkspace(
     onResize: (Boolean) -> Unit,
     onColor: (Int) -> Unit,
     onRotate: () -> Unit,
+    onArrange: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (widget == null) {
@@ -2854,6 +2868,8 @@ private fun InspectorWorkspace(
                 )
             }
         }
+        FitButton(stringResource(R.string.editor_arrange), onArrange, enabled = !state.isWorking,
+            style = FitButtonStyle.Secondary)
         RotationControl(!state.isWorking, onRotate, labelled = true)
         WidgetSizeControls(widget, !state.isWorking, onResize)
         widget.colorArgb?.let { currentColor ->
@@ -5606,3 +5622,32 @@ internal fun parseRotationInput(input: String): Int? = runCatching {
     val value = input.trim().replace(',', '.').toBigDecimal().movePointRight(1).intValueExact()
     dev.fitface.studio.core.model.normalizedRotation(value)
 }.getOrNull()
+
+@Composable
+private fun ArrangementDialog(widget: WidgetGuide, snapshot: EditorSnapshot, enabled: Boolean,
+    onArrange: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.editor_arrange)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.editor_arrange_scope, variantLabel(snapshot.selectedVariant.basename)))
+                Text(stringResource(R.string.editor_arrange_description))
+                dev.fitface.studio.core.model.WidgetArrangement.entries.reversed().forEach { action ->
+                    val label = when (action) {
+                        dev.fitface.studio.core.model.WidgetArrangement.FRONT -> R.string.editor_arrange_front
+                        dev.fitface.studio.core.model.WidgetArrangement.FORWARD -> R.string.editor_arrange_forward
+                        dev.fitface.studio.core.model.WidgetArrangement.BACKWARD -> R.string.editor_arrange_backward
+                        dev.fitface.studio.core.model.WidgetArrangement.BACK -> R.string.editor_arrange_back
+                    }
+                    FitButton(stringResource(label), { onArrange(action) }, Modifier.fillMaxWidth(),
+                        enabled = enabled && dev.fitface.studio.core.model.arrangementTarget(snapshot.widgets, widget.globalIndex, action) != null,
+                        style = FitButtonStyle.Secondary)
+                }
+                Text(stringResource(R.string.editor_arrange_boundaries), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) } },
+    )
+}

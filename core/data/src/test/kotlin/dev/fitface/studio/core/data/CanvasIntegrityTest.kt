@@ -60,6 +60,27 @@ class CanvasIntegrityTest {
         assumeTrue("corpus holds no containers", containers.isNotEmpty())
     }
 
+    @Test fun reorderingOpaqueOverlappingWidgetsChangesCoverageWithoutChangingAnyArtwork() {
+        val path = containers.first { it.fileName.toString().contains("00112") }
+        val source = Fit3Container.parse(Files.readAllBytes(path))
+        val widgets = FaceRecordParser.widgetGuides(source.entryByBasename("style0.bin"))
+        val first = widgets.first { it.type == 3 }
+        val second = widgets.first { it.type == 3 && it.globalIndex > first.globalIndex }
+        val overlap = FaceEditor.moveWidget(source, "style0.bin", second.globalIndex, second.type,
+            second.sequenceId, first.x, first.y).container
+        val before = WidgetPreviewComposer.compose(overlap.entryByBasename("style0.bin"), overlap.entries, WidgetTextRasterizer::render)
+        val result = StructuralEditor.reorderWidget(overlap, "style0.bin", first.globalIndex, first.type,
+            first.sequenceId, first.x, first.y, second.globalIndex)
+        val after = WidgetPreviewComposer.compose(result.edit.container.entryByBasename("style0.bin"), result.edit.container.entries, WidgetTextRasterizer::render)
+        assertTrue("Changing opaque coverage must change the canvas", !before.composed.argb.contentEquals(after.composed.argb))
+        before.widgetImageLayers.forEach { layer ->
+            val moved = after.widgetImageLayers.single { it.globalIndex == result.indices.getValue(layer.globalIndex) }
+            org.junit.Assert.assertArrayEquals(layer.frame.argb, moved.frame.argb)
+            org.junit.Assert.assertEquals(layer.offsetX, moved.offsetX)
+            org.junit.Assert.assertEquals(layer.offsetY, moved.offsetY)
+        }
+    }
+
     @Test fun rotatingCompositeSharesItsVisualBoundsAndRetainsTheOpaqueCanvas() {
         val path = containers.first { it.fileName.toString().contains("00105") }
         val original = Fit3Container.parse(Files.readAllBytes(path))

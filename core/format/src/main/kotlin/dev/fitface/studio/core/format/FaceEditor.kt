@@ -42,6 +42,7 @@ object FaceEditor {
         sequenceId: Int,
         x: Int,
         y: Int,
+        targetIndices: Map<String, Int>? = null,
     ): ContainerEdit {
         requireEditable(source)
         if (x !in Short.MIN_VALUE..Short.MAX_VALUE ||
@@ -49,7 +50,7 @@ object FaceEditor {
         ) {
             throw Fit3FormatException("widget coordinates must fit signed 16-bit integers")
         }
-        val targets = StyleWidgetMatch.resolve(source, entryBasenames) { _, records ->
+        val targets = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
             records.singleOrNull {
                 it.globalIndex == globalIndex &&
                     it.widgetType == widgetType &&
@@ -162,12 +163,13 @@ object FaceEditor {
         x: Int,
         y: Int,
         colorArgb: Int,
+        targetIndices: Map<String, Int>? = null,
     ): ContainerEdit {
         requireEditable(source)
         if (colorArgb ushr 24 != 0xFF) {
             throw Fit3FormatException("Pair widget color must be opaque ARGB")
         }
-        val resolved = StyleWidgetMatch.resolve(source, entryBasenames) { _, records ->
+        val resolved = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
             records.singleOrNull {
                 it.globalIndex == globalIndex &&
                     it.widgetType == WIDGET_PAIR &&
@@ -208,10 +210,10 @@ object FaceEditor {
 
     /** Changes the native Composite angle without rewriting its text or layout. */
     fun rotateWidget(source: Fit3Container, entryBasenames: List<String>, globalIndex: Int,
-        sequenceId: Int, x: Int, y: Int, angleTenths: Int): ContainerEdit {
+        sequenceId: Int, x: Int, y: Int, angleTenths: Int, targetIndices: Map<String, Int>? = null): ContainerEdit {
         requireEditable(source)
         val angle = dev.fitface.studio.core.model.normalizedRotation(angleTenths)
-        val resolved = StyleWidgetMatch.resolve(source, entryBasenames) { _, records ->
+        val resolved = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
             records.singleOrNull { it.globalIndex == globalIndex && it.widgetType == WIDGET_COMP &&
                 it.sequenceId == sequenceId && it.x == x && it.y == y }
         }

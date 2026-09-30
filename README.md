@@ -50,7 +50,8 @@ the app. The watch photo shows a real Bluetooth install.
 - Replace, tint or add a background where the face has room for it, including
   copying the background from another face.
 - Move, resize, recolour, duplicate and remove supported widgets; restore removed
-  stock widgets and add widgets from other faces. Rotate Composite text widgets
+  stock widgets and add widgets from other faces. Arrange widgets in front of or
+  behind each other. Rotate Composite text widgets
   with degree controls and an original-angle reset.
 - Edit the selected style, opt into matching widgets across styles, or edit the
   always-on display separately.

@@ -1297,7 +1297,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
+            val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+            val styleNames = targetIndices.keys.toList()
             val edit = FaceEditor.recolorPairWidgetAcrossStyles(
                 source = current.currentContainer,
                 entryBasenames = styleNames,
@@ -1306,6 +1307,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 x = x,
                 y = y,
                 colorArgb = colorArgb,
+                targetIndices = targetIndices,
             )
             commit(
                 current,
@@ -1332,7 +1334,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
+            val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+            val styleNames = targetIndices.keys.toList()
             val edit = FaceEditor.moveWidgetAcrossStyles(
                 source = current.currentContainer,
                 entryBasenames = styleNames,
@@ -1341,6 +1344,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 sequenceId = sequenceId,
                 x = x,
                 y = y,
+                targetIndices = targetIndices,
             )
             commit(
                 current,
@@ -1384,14 +1388,28 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
         }
 
+    override suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
+        x: Int, y: Int, destination: Int): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val current = requireSession()
+            val result = StructuralEditor.reorderWidget(current.currentContainer, styleName, globalIndex,
+                widgetType, sequenceId, x, y, destination)
+            commit(current, result.edit.container, result.edit.audit("Widget layers rearranged in $styleName"), styleName,
+                importOrigins = current.importOrigins?.renumber(styleName, result.indices::get),
+                lineage = current.identities().remap(styleName, result.indices::get),
+                indexMappings = mapOf(styleName to result.indices))
+        }
+    }
+
     override suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
         x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot =
         withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                val targets = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
+                val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+                val targets = targetIndices.keys.toList()
                 val edit = FaceEditor.rotateWidget(current.currentContainer, targets, globalIndex,
-                    sequenceId, x, y, angleTenths)
+                    sequenceId, x, y, angleTenths, targetIndices)
                 commit(current, edit.container, EditAuditSummary(edit.changedPayloadBytes,
                     edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName)
             }
@@ -1415,7 +1433,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 identities.widgets[styleName]?.get(globalIndex)?.originalIndex == null) {
                 throw WatchFaceException("This widget's original artwork is unknown, so it cannot be resized safely.")
             }
-            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
+            val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+            val styleNames = targetIndices.keys.toList()
             val edit = StructuralEditor.resizeWidget(
                 current.currentContainer,
                 styleNames,
@@ -1430,6 +1449,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // same reason `reference` is read from the original container. Without
                 // it, Smaller-then-Larger hands back a blurred sprite.
                 pristine = current.originalContainer,
+                targetIndices = targetIndices,
                 pristineWidgets = current.pristineWidgets(styleNames, styleName, globalIndex),
             )
             commit(
@@ -1453,7 +1473,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
+            val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+            val styleNames = targetIndices.keys.toList()
             val guide = FaceRecordParser.widgetGuides(
                 current.currentContainer.entryByBasename(styleName),
             ).firstOrNull { it.globalIndex == globalIndex }
@@ -1487,6 +1508,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         x,
                         y,
                         requireFinal,
+                        targetIndices = targetIndices,
                     )
                 }
             } catch (error: Fit3WidgetIsAnchorException) {
@@ -1674,7 +1696,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val styleNames = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
+            val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+            val styleNames = targetIndices.keys.toList()
             val edit = StructuralEditor.duplicateWidget(
                 current.currentContainer,
                 styleNames,
@@ -1683,6 +1706,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 sequenceId,
                 x,
                 y,
+                targetIndices = targetIndices,
             )
             commit(
                 current,
@@ -1694,10 +1718,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         FaceRecordParser.scanWidgets(edit.container.entryByBasename(styleName)).last().globalIndex)
                 } ?: current.importOrigins,
                 lineage = edit.changedStyles.fold(current.identities()) { state, variant ->
-                    val selected = FaceRecordParser.scanWidgets(current.currentContainer.entryByBasename(styleName)).single { it.globalIndex == globalIndex }
-                    val source = if (variant == styleName) selected else requireNotNull(
-                        StyleWidgetMatch.match(current.currentContainer.entryByBasename(variant), selected))
-                    val origin = state.widgets.getValue(variant)[source.globalIndex]
+                    val origin = state.widgets.getValue(variant)[targetIndices.getValue(variant)]
                     if (origin == null) state else state.append(variant,
                         FaceRecordParser.scanWidgets(edit.container.entryByBasename(variant)).last().globalIndex,
                         origin.copy(duplicate = true))
@@ -1807,6 +1828,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         /** Image records the edit deleted, per entry — see [StructuralEdit.droppedImages]. */
         droppedImages: Map<String, Set<Int>> = emptyMap(),
         lineage: SessionLineage = current.identities(),
+        indexMappings: Map<String, Map<Int, Int>> = emptyMap(),
     ): EditorSnapshot {
         val previousContainer = current.currentContainer
         val previousAudit = current.audit
@@ -1824,8 +1846,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
             lineage.validate(current.originalContainer, container, importOrigins)
             val relocated = identifiedRemoved.map { removed ->
                 removed.copy(recordsByVariant = removed.recordsByVariant.mapValues { (variant, raw) ->
-                    StructuralEditor.relocateSavedWidget(previousContainer.entryByBasename(variant),
+                    val relocated = StructuralEditor.relocateSavedWidget(previousContainer.entryByBasename(variant),
                         container.entryByBasename(variant), raw, droppedImages[variant].orEmpty())
+                    StructuralEditor.remapSavedAlignmentTargets(container.entryByBasename(variant), relocated,
+                        indexMappings[variant].orEmpty())
                 })
             }
             current.removedWidgets.clear()
@@ -2215,14 +2239,22 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 Base64.getEncoder().encodeToString(result.baseline.data), listOf(result.globalIndex)))
         }
 
-        fun widgetEditTargets(styleName: String, applyToAllStyles: Boolean, index: Int): List<String> {
-            if (importOrigins?.find(styleName, index) != null) return listOf(styleName)
-            val source = FaceRecordParser.scanWidgets(currentContainer.entryByBasename(styleName))
-                .singleOrNull { it.globalIndex == index } ?: return listOf(styleName)
-            return editTargets(styleName, applyToAllStyles).filter { variant ->
-                variant == styleName || StyleWidgetMatch.match(currentContainer.entryByBasename(variant), source)
-                    ?.let { importOrigins?.find(variant, it.globalIndex) == null } != false
+        fun widgetTargetIndices(styleName: String, applyToAllStyles: Boolean, index: Int): Map<String, Int> {
+            val targets = linkedMapOf(styleName to index)
+            if (!applyToAllStyles || styleName == AOD_ENTRY_NAME || importOrigins?.find(styleName, index) != null) return targets
+            val saved = identities()
+            val origin = saved.widgets[styleName]?.get(index) ?: return targets
+            val originalIndex = origin.originalIndex ?: return targets
+            val original = FaceRecordParser.scanWidgets(originalEntry(styleName))
+                .singleOrNull { it.globalIndex == originalIndex } ?: return targets
+            editTargets(styleName, true).filterNot { it == styleName }.forEach { variant ->
+                val sibling = StyleWidgetMatch.match(originalEntry(variant), original) ?: return@forEach
+                val matching = saved.widgets.getValue(variant).filterValues {
+                    it.originalIndex == sibling.globalIndex && it.duplicate == origin.duplicate
+                }.keys.singleOrNull()
+                if (matching != null) targets[variant] = matching
             }
+            return targets
         }
 
         fun pristineWidgets(styleNames: List<String>, styleName: String, index: Int): Map<String, WidgetPristine> {

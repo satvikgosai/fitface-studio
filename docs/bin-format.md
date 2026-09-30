@@ -880,6 +880,33 @@ RGB565 precision, or safely change the panel identity/geometry. The two referenc
 files contain no unreferenced raster or compression stage; shrinking artwork and
 bounded imported-resource deletion are separate editing mechanisms.
 
+### Arranging widget layers
+
+Later records draw above earlier records; there is no independent z-index field.
+`StructuralEditor.reorderWidget` permutes one variant's variable-length records,
+renumbers globals and only the schema-named alignment references, and leaves the
+image section and all other entries byte-identical. Full-panel raster widgets are
+pinned: other widgets may move within the interval between them, never across them.
+
+Before accepting, compare every resolved placement's origin, basis and mapped
+referent. Refuse loss of an existing anchor or activation of a forward reference,
+even if its current coordinates happen to agree with panel placement. Self references
+remain self references; nonexistent producer targets remain unchanged. Unsupported
+alignment codes refuse arrangement. Saved removed records carry their named targets
+through the same permutation before later Restore.
+
+The repository commits the permutation with native and donor identities atomically.
+Selection follows the moved widget, pending moves are cancelled, and review/thumbnail
+state becomes stale. Subsequent all-style edits match pristine counterparts and map
+those identities into each current table; current indices must never select siblings
+after reorder. Ambiguous duplicate counterparts are skipped. Arrangement itself is
+selected-variant-only, including isolated AOD.
+
+`WidgetReorderTest` checks synthetic dependencies, mixed record sizes, saved removals
+and corpus round trips. `CanvasIntegrityTest` checks actual opaque overlap and unchanged
+per-widget artwork. Emulator checks do not establish watch-side acceptance of changed
+record order; deliberate hardware verification remains outstanding.
+
 ### Resizing a widget
 
 `WidgetSchema.ResizeModel` drives both capability and execution:

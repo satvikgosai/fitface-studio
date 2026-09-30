@@ -68,6 +68,37 @@ class EditorSelectionSetTest {
         return viewModel to repository
     }
 
+    @Test fun arrangingKeepsTheMovedWidgetSelectedClearsReviewAndStopsAtBoundaries() {
+        val (vm, repo) = opened(listOf(widget(0,0,0).copy(placement = dev.fitface.studio.core.model.WidgetPlacement.BACKGROUND),
+            widget(1,20,20), widget(2,60,120), widget(3,100,220)))
+        vm.selectWidget(1); vm.setApplyWidgetEditsToAllStyles(true); vm.markPreviewReviewed()
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(3, vm.state.value.selectedWidgetIndex)
+        assertEquals(20, vm.state.value.snapshot!!.widgets.last().x)
+        assertFalse(vm.state.value.previewReviewed)
+        assertEquals(listOf(1 to 3), repo.reorders)
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(1, repo.reorders.size)
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.BACK); settle()
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        vm.beginSelection(1); vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FORWARD); settle()
+        assertEquals(2, repo.reorders.size)
+        vm.finishSelection(); vm.selectWidget(0)
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(2, repo.reorders.size)
+    }
+
+    @Test fun refusedArrangementKeepsSelectionAndTheCanvasAndReportsTheReason() {
+        val (vm, repo) = opened()
+        vm.selectWidget(1); repo.failReorder = true
+        val before = vm.state.value.snapshot
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(before, vm.state.value.snapshot)
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        assertNotNull(vm.state.value.error)
+        assertFalse(vm.state.value.isWorking)
+    }
+
     @Test fun rotationKeepsSelectionClearsReviewAndHonoursScopeAndNoOp() {
         val (vm, repo) = opened(listOf(widget(1, 20, 20).copy(type = 13, rotationTenths = 0)))
         vm.selectWidget(1)
@@ -408,6 +439,19 @@ class EditorSelectionSetTest {
      */
     private class FakeRepository(private var current: EditorSnapshot) :
         WatchFaceRepository by mockk(relaxed = true) {
+        val reorders = mutableListOf<Pair<Int, Int>>()
+        var failReorder = false
+        override suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
+            x: Int, y: Int, destination: Int): EditorSnapshot {
+            if (failReorder) throw WatchFaceException("Alignment would change")
+            identify(globalIndex, sequenceId)
+            reorders += globalIndex to destination
+            val widgets = current.widgets.toMutableList()
+            val widget = widgets.single { it.globalIndex == globalIndex }
+            widgets.remove(widget); widgets.add(destination, widget)
+            current = current.copy(widgets = widgets.mapIndexed { index, it -> it.copy(globalIndex = index, ordinal = index) }, isDirty = true)
+            return current
+        }
         val rotations = mutableListOf<Int>()
         override suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
             x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot {

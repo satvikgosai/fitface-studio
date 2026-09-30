@@ -82,6 +82,109 @@ class WidgetImportRepositoryTest {
     private fun exportFile() = File(context.cacheDir, "widget-import-tests/out.zip").also { it.parentFile!!.mkdirs() }
     private suspend fun export(id: Long): File = exportFile().also { repository.exportProject(id, Uri.fromFile(it).toString()) }
 
+    @Test fun reorderedTwinsKeepTheirOriginalThroughResizeAllStylesRemoveRestoreAndArchive() = runBlocking {
+        val original = repository.openPackage(face("00003"))
+        val native = original.widgets.first { it.type == 1 && it.placement == WidgetPlacement.CANVAS }
+        val expected = pixels(original, native.globalIndex)
+        val destination = original.widgets.last().globalIndex
+        var s = repository.reorderWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, destination)
+        assertEquals(native.originalX, s.widgets.last().originalX)
+        assertEquals(native.originalY, s.widgets.last().originalY)
+        assertArrayEquals(expected, pixels(s, destination))
+        val moved = s.widgets.last()
+        s = move(s, moved, 9)
+        val sibling = repository.currentSnapshot("style1.bin")
+        val siblingOriginal = FaceRecordParser.widgetGuides(Fit3Container.parse(bin("00003")).entryByBasename("style1.bin"))
+        sibling.widgets.forEach { widget ->
+            val before = siblingOriginal.single { it.globalIndex == widget.globalIndex }
+            // This colourway puts the same colon at #8, while Style 1 has it at #6.
+            if (widget.globalIndex == 8) assertEquals(moved.x + 9, widget.x)
+            else assertEquals(before.x, widget.x)
+        }
+        s = repository.currentSnapshot("style0.bin")
+        val current = s.widgets.last()
+        val smallerWidth = (native.originalWidth * .95).toInt().coerceAtLeast(1)
+        val smallerHeight = (native.originalHeight * .95).toInt().coerceAtLeast(1)
+        s = repository.resizeWidget("style0.bin", destination, current.type, current.sequenceId,
+            current.x, current.y, smallerWidth, smallerHeight, false)
+        repository = repository(); s = repository.openProject(s.projectId)
+        val small = s.widgets.last()
+        s = repository.resizeWidget("style0.bin", destination, small.type, small.sequenceId,
+            small.x, small.y, native.originalWidth, native.originalHeight, false)
+        assertArrayEquals(expected, pixels(s, destination))
+        val restoredSize = s.widgets.last()
+        s = repository.removeWidget("style0.bin", destination, restoredSize.type, restoredSize.sequenceId,
+            restoredSize.x, restoredSize.y, false, true)
+        assertEquals(original.styleNames.size, s.removedWidgets.single().recordsByVariant.size)
+        val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
+        repository = repository(); s = repository.openProject(imported.id)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertArrayEquals(expected, pixels(s, s.widgets.last().globalIndex))
+        assertEquals(native.originalX, s.widgets.last().originalX)
+        repository.resetEdits(); assertArrayEquals(bin("00003"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun reorderedCompositeUsesOriginalCounterpartsForAllStyleRotationAndDuplication() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val original = s.widgets.first { it.rotationTenths != null }
+        s = repository.reorderWidget("style0.bin", original.globalIndex, original.type, original.sequenceId,
+            original.x, original.y, s.widgets.last().globalIndex)
+        val reordered = s.widgets.last()
+        s = repository.rotateWidget("style0.bin", reordered.globalIndex, reordered.sequenceId,
+            reordered.x, reordered.y, 0, true)
+        assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
+        val sibling = repository.currentSnapshot("style1.bin")
+        assertEquals(0, sibling.widgets.single { it.globalIndex == original.globalIndex }.rotationTenths)
+        assertEquals(3180, sibling.widgets.last().rotationTenths)
+        s = repository.currentSnapshot("style0.bin")
+        s = repository.duplicateWidget("style0.bin", reordered.globalIndex, reordered.type, reordered.sequenceId,
+            reordered.x, reordered.y, true)
+        assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
+        assertEquals(original.globalIndex, s.widgets.last().duplicateSourceGlobalIndex)
+        val duplicate = s.widgets.last()
+        s = repository.removeWidget("style0.bin", duplicate.globalIndex, duplicate.type, duplicate.sequenceId,
+            duplicate.x, duplicate.y, false, true)
+        assertEquals(s.styleNames.size, s.removedWidgets.single().recordsByVariant.size)
+    }
+
+    @Test fun failedReorderRestoresBothTheBytesAndNativeIdentitiesInMemoryAndOnDisk() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val original = s.widgets.first { it.rotationTenths != null }
+        s = repository.reorderWidget("style0.bin", original.globalIndex, original.type, original.sequenceId,
+            original.x, original.y, s.widgets.last().globalIndex)
+        val expected = repository.prepareDirectInstall().copyBytes()
+        val last = s.widgets.last()
+        dao.fail = true
+        assertTrue(runCatching { repository.reorderWidget("style0.bin", last.globalIndex, last.type, last.sequenceId,
+            last.x, last.y, original.globalIndex) }.isFailure)
+        dao.fail = false
+        assertArrayEquals(expected, repository.prepareDirectInstall().copyBytes())
+        assertEquals(original.originalX, repository.currentSnapshot(null).widgets.last().originalX)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertArrayEquals(expected, repository.prepareDirectInstall().copyBytes())
+        assertEquals(original.originalX, s.widgets.last().originalX)
+    }
+
+    @Test fun reorderedImportRemainsDonorBackedAndAodReorderDoesNotTouchStyles() = runBlocking {
+        var s = add(repository.openPackage(face("00106")), "00008", 1)
+        val imported = s.widgets.last(); val expected = pixels(s, imported.globalIndex)
+        val destination = s.widgets.first { it.placement == WidgetPlacement.CANVAS }.globalIndex
+        s = repository.reorderWidget("style0.bin", imported.globalIndex, imported.type, imported.sequenceId,
+            imported.x, imported.y, destination)
+        assertEquals("00008", s.widgets.single { it.globalIndex == destination }.importedFromFaceId)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertArrayEquals(expected, pixels(s, destination))
+        val before = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        s = repository.currentSnapshot("aod.bin")
+        val widget = s.widgets.first()
+        s = repository.reorderWidget("aod.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, s.widgets.last().globalIndex)
+        assertEquals(listOf("aod.bin"), s.audit!!.changedStyles)
+        val after = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        before.entries.filter { it.basename != "aod.bin" }.forEach { assertArrayEquals(it.data, after.entryByBasename(it.basename).data) }
+    }
+
     @Test fun nativeCheckpointCarriesIdentitiesAndRemovalAtomicallyThroughCopyAndArchive() = runBlocking {
         var s = repository.openPackage(face("00003"))
         val anchors = s.widgets.mapNotNull { it.alignedToGlobalIndex }.toSet()

@@ -907,6 +907,18 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    fun arrangeSelectedWidget(action: dev.fitface.studio.core.model.WidgetArrangement) {
+        val current = mutableState.value
+        if (current.isWorking || current.multiSelection.isNotEmpty()) return
+        val snapshot = current.snapshot ?: return
+        val widget = snapshot.widgets.singleOrNull { it.globalIndex == current.selectedWidgetIndex } ?: return
+        val destination = dev.fitface.studio.core.model.arrangementTarget(snapshot.widgets, widget.globalIndex, action) ?: return
+        operate(onSuccess = { it.copy(selectedWidgetIndex = destination, multiSelection = emptyList()) }) {
+            repository.reorderWidget(snapshot.selectedVariant.basename, widget.globalIndex, widget.type,
+                widget.sequenceId, widget.x, widget.y, destination)
+        }
+    }
+
     fun rotateSelectedWidget(angleTenths: Int) {
         val current = mutableState.value
         if (current.isWorking) return

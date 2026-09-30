@@ -31,7 +31,60 @@ data class StructuralEdit(
 /** Explicit provenance overrides index/record heuristics for widgets from another face. */
 data class WidgetPristine(val entry: ContainerEntry, val sources: Map<Int, Int>)
 
+data class WidgetReorderEdit(val edit: StructuralEdit, val indices: Map<Int, Int>)
+
 object StructuralEditor {
+    /** Record order is drawing order. Preserve artwork, geometry and resolved referents. */
+    fun reorderWidget(source: Fit3Container, variant: String, index: Int, type: Int,
+        sequenceId: Int, x: Int, y: Int, destination: Int): WidgetReorderEdit {
+        requireValidAndTight(source)
+        val entry = StyleWidgetMatch.requireVariantEntry(source.entryByBasename(variant))
+        val records = FaceRecordParser.scanWidgets(entry)
+        requireContiguousWidgets(entry, records, FaceRecordParser.scanImages(entry))
+        val target = records.singleOrNull { it.globalIndex == index && it.widgetType == type &&
+            it.sequenceId == sequenceId && it.x == x && it.y == y }
+            ?: throw Fit3FormatException("The selected widget changed. Select it again.")
+        if (destination !in records.indices || destination == index)
+            throw Fit3FormatException("This widget is already at that layer boundary.")
+        val order = records.toMutableList().apply { removeAt(target.ordinal); add(destination, target) }
+        val indices = order.withIndex().associate { (now, record) -> record.globalIndex to now }
+        val pinned = FaceRecordParser.widgetGuides(entry).filter { it.placement == dev.fitface.studio.core.model.WidgetPlacement.BACKGROUND }
+        if (pinned.any { indices.getValue(it.globalIndex) != it.globalIndex })
+            throw Fit3FormatException("Full-face background layers stay fixed. Choose a layer on this side of the background.")
+        val before = FaceRecordParser.placements(entry)
+        if (before.values.any { it.basis == PlacementBasis.UNRESOLVED })
+            throw Fit3FormatException("This style has an unsupported alignment, so its layers cannot be rearranged safely.")
+        val output = entry.data.copyOf()
+        var cursor = STYLE_HEADER_SIZE
+        order.forEachIndexed { now, record ->
+            val raw = entry.data.copyOfRange(record.recordOffset, record.recordOffset + record.recordSize)
+            raw.putU16(0x0E, now)
+            remapAlignmentTarget(raw, record, indices::get)
+            raw.copyInto(output, cursor)
+            cursor += raw.size
+        }
+        validateStructuralEntry(entry, output, records.size)
+        val afterEntry = entry.copy(data = output)
+        val after = FaceRecordParser.placements(afterEntry)
+        records.forEach { record ->
+            val old = before.getValue(record.ordinal)
+            val now = after.getValue(indices.getValue(record.globalIndex))
+            if (old.copy(targetGlobalIndex = old.targetGlobalIndex?.let(indices::getValue)) != now)
+                throw Fit3FormatException("This layer move would change a widget's alignment. These widgets need their current relative order.")
+        }
+        return WidgetReorderEdit(rebuild(source, mapOf(entry.index to output)), indices)
+    }
+
+    /** Saved removals will be appended later, so carry their named referents too. */
+    fun remapSavedAlignmentTargets(entry: ContainerEntry, raw: ByteArray, indices: Map<Int, Int>): ByteArray {
+        if (indices.isEmpty()) return raw
+        val header = StyleHeader.parse(entry)
+        val data = WidgetImporter.styleBytes(entry.data, raw, 1,
+            entry.data.copyOfRange(header.storedImageOffset, entry.data.size), header.fontBindingCount)
+        val record = FaceRecordParser.scanWidgets(entry.copy(data = data, size = data.size)).single()
+        return raw.copyOf().also { remapAlignmentTarget(it, record, indices::get) }
+    }
+
     /**
      * Saved removals point at retained rasters; resize moves their offsets too.
      *
@@ -514,6 +567,7 @@ object StructuralEditor {
         height: Int,
         pristine: Fit3Container? = null,
         pristineWidgets: Map<String, WidgetPristine> = emptyMap(),
+        targetIndices: Map<String, Int>? = null,
     ): StructuralEdit {
         requireValidAndTight(source)
         // The precise per-side bound needs the widget's shipped extent, which only
@@ -524,7 +578,7 @@ object StructuralEditor {
             )
         }
         val replacements = linkedMapOf<Int, ByteArray>()
-        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y)
+        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y, targetIndices)
             .forEach { (entry, target) ->
                 replacements[entry.index] = resizeWidgetEntry(
                     entry = entry,
@@ -558,11 +612,12 @@ object StructuralEditor {
         x: Int,
         y: Int,
         requireFinal: Boolean,
+        targetIndices: Map<String, Int>? = null,
     ): StructuralEdit {
         requireValidAndTight(source)
         val replacements = linkedMapOf<Int, ByteArray>()
         val removed = linkedMapOf<String, ByteArray>()
-        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y)
+        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y, targetIndices)
             .forEach { (entry, target) ->
                 val (replacement, record) = removeWidgetEntry(entry, target, requireFinal)
                 replacements[entry.index] = replacement
@@ -611,10 +666,11 @@ object StructuralEditor {
         sequenceId: Int,
         x: Int,
         y: Int,
+        targetIndices: Map<String, Int>? = null,
     ): StructuralEdit {
         requireValidAndTight(source)
         val replacements = linkedMapOf<Int, ByteArray>()
-        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y)
+        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y, targetIndices)
             .forEach { (entry, target) ->
                 replacements[entry.index] = duplicateWidgetEntry(entry, target)
             }
@@ -633,8 +689,9 @@ object StructuralEditor {
         sequenceId: Int,
         x: Int,
         y: Int,
+        targetIndices: Map<String, Int>? = null,
     ): List<Pair<ContainerEntry, WidgetRecord>> =
-        StyleWidgetMatch.resolve(source, entryBasenames) { _, records ->
+        StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
             records.singleOrNull { it.globalIndex == globalIndex }?.takeIf {
                 listOf(it.widgetType, it.sequenceId, it.x, it.y) ==
                     listOf(widgetType, sequenceId, x, y)

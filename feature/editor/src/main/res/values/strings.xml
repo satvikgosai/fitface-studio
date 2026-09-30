@@ -493,4 +493,12 @@
     <string name="editor_rotation_invalid">Enter degrees with at most one decimal place.</string>
     <string name="editor_rotation_too_large">This text box is too large to rotate safely. You can set its angle to zero.</string>
     <string name="editor_rotation_backdrop">Tilted text has a black rectangular backdrop. Check the canvas after applying. The sample font may differ from your watch.</string>
+    <string name="editor_arrange">Arrange layers</string>
+    <string name="editor_arrange_scope">Applies to: %1$s only</string>
+    <string name="editor_arrange_description">Widgets in front cover widgets behind them where their artwork overlaps.</string>
+    <string name="editor_arrange_front">Bring to front</string>
+    <string name="editor_arrange_forward">Bring forward</string>
+    <string name="editor_arrange_backward">Send backward</string>
+    <string name="editor_arrange_back">Send to back</string>
+    <string name="editor_arrange_boundaries">Full-face background layers stay fixed. Unavailable actions are at a layer boundary. A move that changes widget alignment will be refused.</string>
 </resources>

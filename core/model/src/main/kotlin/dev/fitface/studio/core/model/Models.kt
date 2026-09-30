@@ -1239,6 +1239,9 @@ interface WatchFaceRepository {
         applyToAllStyles: Boolean,
     ): EditorSnapshot
 
+    suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
+        x: Int, y: Int, destination: Int): EditorSnapshot = throw UnsupportedOperationException("Widget arrangement is unavailable")
+
     suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
         x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot =
         throw UnsupportedOperationException("Widget rotation is unavailable")
