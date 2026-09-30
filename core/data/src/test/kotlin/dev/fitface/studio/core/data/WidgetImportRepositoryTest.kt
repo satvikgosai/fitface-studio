@@ -360,6 +360,85 @@ class WidgetImportRepositoryTest {
         }
     }
 
+    @Test fun backgroundReviewDoesNotCommitAndItsTicketCannotOutliveTheDonorOrTarget() = runBlocking {
+        val initial = repository.openPackage(face("00112"))
+        val originalBytes = repository.prepareDirectInstall().copyBytes()
+        val donor = repository.inspectWidgetDonor(face("00076"))
+        val preview = repository.previewBackgroundImport(donor.handle, "style0.bin", initial.projectId, "style0.bin")
+        assertArrayEquals(originalBytes, repository.prepareDirectInstall().copyBytes())
+        assertFalse(repository.currentSnapshot().isDirty)
+        repository.currentSnapshot("aod.bin")
+        assertTrue(runCatching { repository.importBackground(preview.ticket) }.isFailure)
+        repository.currentSnapshot("style0.bin")
+        repository.releaseWidgetDonor(donor.handle)
+        assertTrue(runCatching { repository.importBackground(preview.ticket) }.isFailure)
+        assertArrayEquals(originalBytes, repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun backgroundImportSurvivesDonorReleaseAndReopenWithoutChangingWidgetArtwork() = runBlocking {
+        val initial = repository.openPackage(face("00112"))
+        val original = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        val donor = repository.inspectWidgetDonor(face("00076"))
+        val source = repository.backgroundDonorVariant(donor.handle, "style0.bin")
+        assertNotNull(source.background)
+        assertEquals(2, source.fullPanelImageCount)
+        val preview = repository.previewBackgroundImport(donor.handle, "style0.bin", initial.projectId, "style0.bin")
+        val result = repository.importBackground(preview.ticket)
+        assertEquals(initial.containerBytes, result.containerBytes)
+        assertTrue(result.isDirty)
+        assertEquals(initial.widgets, result.widgets)
+        assertArrayEquals(preview.preview.argb, result.composedPreview.argb)
+        initial.widgetImageLayers.filter { layer -> initial.widgets.single { it.globalIndex == layer.globalIndex }
+            .placement != WidgetPlacement.BACKGROUND }.forEach { layer ->
+            assertArrayEquals(layer.frame.argb, pixels(result, layer.globalIndex))
+        }
+        val binary = repository.prepareDirectInstall().copyBytes()
+        assertArrayEquals(original.entryByBasename("aod.bin").data,
+            Fit3Container.parse(binary).entryByBasename("aod.bin").data)
+        repository.releaseWidgetDonor(donor.handle)
+        repository = repository()
+        val reopened = repository.openProject(result.projectId)
+        assertArrayEquals(result.composedPreview.argb, reopened.composedPreview.argb)
+        assertArrayEquals(binary, repository.prepareDirectInstall().copyBytes())
+        assertTrue(dao.findByFaceId("00076").isEmpty())
+    }
+
+    @Test fun backgroundTicketRejectsLaterEditsAndDatabaseFailureRollsBack() = runBlocking {
+        var current = repository.openPackage(face("00112"))
+        val donor = repository.inspectWidgetDonor(face("00076"))
+        suspend fun preview() = repository.previewBackgroundImport(donor.handle, "style0.bin", current.projectId, "style0.bin")
+        val stale = preview()
+        current = move(current, current.canvasWidgets.first())
+        assertTrue(runCatching { repository.importBackground(stale.ticket) }.isFailure)
+        val before = repository.prepareDirectInstall().copyBytes()
+        val prepared = preview()
+        dao.fail = true
+        assertTrue(runCatching { repository.importBackground(prepared.ticket) }.isFailure)
+        assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
+        repository = repository()
+        val reopened = repository.openProject(current.projectId)
+        assertArrayEquals(current.composedPreview.argb, reopened.composedPreview.argb)
+        assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun donorBackgroundAdditionPreservesImportedWidgetOrigins() = runBlocking {
+        val initial = add(repository.openPackage(face("00008")), "00008", 1)
+        val imported = initial.widgets.last()
+        val art = pixels(initial, imported.globalIndex)
+        val donor = repository.inspectWidgetDonor(face("00112"))
+        val review = repository.previewBackgroundImport(donor.handle, "style0.bin", initial.projectId, "style0.bin")
+        assertTrue(review.addedBackground)
+        var result = repository.importBackground(review.ticket)
+        assertEquals(imported.globalIndex + 1, result.widgets.last().globalIndex)
+        assertEquals(imported.importedFromFaceId, result.widgets.last().importedFromFaceId)
+        assertArrayEquals(art, pixels(result, result.widgets.last().globalIndex))
+        repository = repository()
+        result = repository.openProject(result.projectId)
+        assertEquals(imported.importedFromFaceId, result.widgets.last().importedFromFaceId)
+        assertArrayEquals(art, pixels(result, result.widgets.last().globalIndex))
+        assertTrue(repository.prepareDirectInstall().copyBytes().isNotEmpty())
+    }
+
     private class FailableDao(private val delegate: ProjectDao) : ProjectDao by delegate {
         var fail = false
         var insertCalls = 0

@@ -1,5 +1,6 @@
 package dev.fitface.studio.core.data
 
+import dev.fitface.studio.core.format.BackgroundImporter
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
@@ -300,6 +301,49 @@ class CanvasIntegrityTest {
         println("CanvasIntegrityTest: $steps chained edits")
         assumeTrue("no chained edit produced a canvas", steps > 0)
         assertTrue(failures.take(15).joinToString("\n"), failures.isEmpty())
+    }
+
+    @Test
+    fun donorBackgroundDoesNotBakeInDonorWidgetsOrChangeDestinationLayers() {
+        fun face(id: String): Fit3Container {
+            val path = containers.firstOrNull { it.fileName.toString().contains("_${id}_") }
+            assumeTrue("no corpus face $id", path != null)
+            return Fit3Container.parse(Files.readAllBytes(path!!))
+        }
+        val original = face("00112")
+        val donor = face("00076")
+        val donorEntry = donor.entryByBasename("style0.bin")
+        val donorBackground = BackgroundImporter.read(donorEntry).background!!
+        val donorScene = WidgetPreviewComposer.compose(donorEntry, donor.entries, WidgetTextRasterizer::render)
+        assertTrue("fixture must contain donor widgets above the background",
+            !donorScene.composed.argb.contentEquals(donorBackground.argb))
+        val edited = BackgroundImporter.prepare(original, "style0.bin", donorEntry).edit.container
+        val before = canvasOf(original, original, "style0.bin")!!
+        val after = canvasOf(original, edited, "style0.bin")!!
+        val failures = mutableListOf<String>()
+        checkLayerMatchesBox("background import", after, failures)
+        checkNoLayerLost("background import", before, after, failures)
+        checkOriginIdentity("background import", original.entryByBasename("style0.bin"),
+            edited.entryByBasename("style0.bin"), failures)
+        before.guides.filter { it.placement != WidgetPlacement.BACKGROUND }.forEach { widget ->
+            val old = before.layerFor(widget.globalIndex)
+            val new = after.layerFor(widget.globalIndex)
+            if (old != null) assertTrue("destination widget #${widget.globalIndex} changed",
+                old.frame.argb.contentEquals(new!!.frame.argb))
+        }
+        val entry = edited.entryByBasename("style0.bin")
+        val pixels = FaceRecordParser.decodeImage(entry, FaceRecordParser.backgroundImage(entry)!!).argb
+        donorBackground.argb.indices.forEach { index ->
+            val source = donorBackground.argb[index]
+            val alpha = source ushr 24
+            val red = ((source ushr 16 and 255) * alpha + 127) / 255
+            val green = ((source ushr 8 and 255) * alpha + 127) / 255
+            val blue = ((source and 255) * alpha + 127) / 255
+            val expected = (red shl 16 or (green shl 8) or blue) and 0xF8FCF8
+            assertTrue("background pixel $index contains something other than the donor raster",
+                expected == (pixels[index] and 0xF8FCF8))
+        }
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
     }
 
     @Test

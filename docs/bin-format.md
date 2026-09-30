@@ -980,6 +980,19 @@ pointers. `AddBackgroundTest` pins every original offset's referent.
 first. Of 16 eligible faces, ten fit all styles; five fit some (`00007`, `00019`,
 `00021`, `00024`, `00104`); `00022` fits none. See the hardware table above.
 
+`BackgroundImporter` copies the donor variant's primary `backgroundImage` resource,
+never its composed preview, widgets or extra full-panel artwork. A missing background
+is unavailable; a differing panel size is refused. Source transparency is flattened
+against black before the existing encoder runs, preserving the target RGB565+A mask;
+Indexed8 keeps the existing opaque requantization policy. Replacement keeps container
+size and image counts. On a completely bare scope, addition uses the same bounded,
+selected-first targets above. AOD is its own scope. Review renders the encoded candidate
+and lists changed/skipped variants; applying requires the same session, container,
+selected variant and donor handle. Donor pixels are self-contained after commit.
+Repository tests cover stale reviews, cancellation, rollback, reopen and imported
+origins; `CanvasIntegrityTest` checks isolated source pixels and unchanged widget
+layers. Emulator verification is separate from physical-watch acceptance of this flow.
+
 ### Adding a widget from another face
 
 `WidgetImporter` appends a record plus its named resource closure, retaining donor

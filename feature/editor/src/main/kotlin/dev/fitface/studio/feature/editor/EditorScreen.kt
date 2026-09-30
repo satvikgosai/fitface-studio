@@ -283,6 +283,7 @@ fun EditorRoute(
         onDuplicateWidget = viewModel::duplicateSelectedWidget,
         onRestoreWidget = viewModel::restoreWidget,
         onWidgetImported = viewModel::acceptWidgetImport,
+        onBackgroundImported = viewModel::acceptBackgroundImport,
         onResizeWidget = viewModel::resizeSelectedWidget,
         onWidgetColor = viewModel::setSelectedWidgetColor,
         onSyncThumbnail = viewModel::refreshThumbnail,
@@ -384,6 +385,7 @@ private fun EditorScreen(
     onDuplicateWidget: () -> Unit,
     onRestoreWidget: (Long) -> Unit,
     onWidgetImported: (EditorSnapshot) -> Unit,
+    onBackgroundImported: (EditorSnapshot) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -413,13 +415,16 @@ private fun EditorScreen(
 ) {
     var page by rememberSaveable { mutableStateOf(EditorPage.Canvas) }
     var importing by rememberSaveable { mutableStateOf(false) }
+    var importingBackground by rememberSaveable { mutableStateOf(false) }
 
     val snapshot = state.snapshot
-    if (importing && snapshot != null) WidgetImportRoute(snapshot,
-        onDismiss = { importing = false },
+    if ((importing || importingBackground) && snapshot != null) WidgetImportRoute(snapshot,
+        backgroundMode = importingBackground,
+        onDismiss = { importing = false; importingBackground = false },
         onImported = { result ->
-            onWidgetImported(result)
+            if (importingBackground) onBackgroundImported(result) else onWidgetImported(result)
             importing = false
+            importingBackground = false
             page = EditorPage.Canvas
         })
     val selected = snapshot?.widgets?.singleOrNull {
@@ -514,6 +519,7 @@ private fun EditorScreen(
                         onDuplicateWidget = onDuplicateWidget,
                         onRestoreWidget = onRestoreWidget,
                         onImportWidget = { importing = true },
+                        onImportBackground = { importingBackground = true },
                         onResizeWidget = onResizeWidget,
                         onWidgetColor = onWidgetColor,
                         onSyncThumbnail = onSyncThumbnail,
@@ -1002,6 +1008,7 @@ private fun EditorPageContent(
     onDuplicateWidget: () -> Unit,
     onRestoreWidget: (Long) -> Unit,
     onImportWidget: () -> Unit,
+    onImportBackground: () -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -1067,7 +1074,7 @@ private fun EditorPageContent(
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
-            onChooseImage, onResetImagePlacement, onDiscardImage, onApplyImage, onTintCyan,
+            onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage, onTintCyan,
             onTintMagenta, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(
@@ -3103,6 +3110,7 @@ private fun BackgroundWorkspace(
     onStepImageZoom: (Boolean) -> Unit,
     onFit: (ImageFit) -> Unit,
     onChooseImage: () -> Unit,
+    onImportBackground: () -> Unit,
     onResetPlacement: () -> Unit,
     onDiscard: () -> Unit,
     onApply: () -> Unit,
@@ -3158,6 +3166,10 @@ private fun BackgroundWorkspace(
                 onChooseImage,
                 Modifier.fillMaxWidth(),
                 !state.isWorking,
+            )
+            FitButton(
+                stringResource(R.string.editor_bg_import_open), onImportBackground,
+                Modifier.fillMaxWidth(), !state.isWorking, style = FitButtonStyle.Secondary,
             )
             FitDetails(label = stringResource(R.string.editor_image_details)) {
                 Text(

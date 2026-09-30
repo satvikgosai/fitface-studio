@@ -41,6 +41,61 @@ class WidgetImportViewModelTest {
     private fun open() { vm.openFace(face); settle() }
     private fun frame() = PreviewFrame(1, 1, intArrayOf(0))
 
+    private fun openBackground() {
+        coEvery { repository.backgroundDonorVariant("donor", "style0.bin") } returns BackgroundDonorVariant(frame(), 1)
+        coEvery { repository.previewBackgroundImport("donor", "style0.bin", 7, "style0.bin") } returns
+            BackgroundImportPreview("background", frame(), listOf("style0.bin"), emptyList(), false, 0, 100)
+        vm.start(snapshot, backgroundMode = true); settle(); open()
+    }
+
+    @Test fun backgroundReviewRequiresExplicitApplyAndCancelDoesNotSave() {
+        openBackground()
+        assertTrue(vm.state.value.backgroundMode)
+        coVerify(exactly = 0) { repository.widgetDonorVariant(any(), any()) }
+        vm.reviewBackground(); settle()
+        assertEquals(WidgetImportStage.REVIEW, vm.state.value.stage)
+        coVerify(exactly = 0) { repository.importBackground(any()) }
+        vm.back(); settle()
+        assertEquals(WidgetImportStage.WIDGETS, vm.state.value.stage)
+        vm.applyBackground(); settle()
+        coVerify(exactly = 0) { repository.importBackground(any()) }
+        vm.reviewBackground(); settle()
+        coEvery { repository.importBackground("background") } returns snapshot.copy(isDirty = true)
+        vm.applyBackground(); settle()
+        assertTrue(vm.state.value.imported!!.isDirty)
+        coVerify(exactly = 1) { repository.importBackground("background") }
+    }
+
+    @Test fun missingBackgroundCannotBeReviewedAndReviewFailureStaysInThePicker() {
+        openBackground()
+        coEvery { repository.previewBackgroundImport(any(), any(), any(), any()) } throws WatchFaceException("No room")
+        vm.reviewBackground(); settle()
+        assertEquals("No room", vm.state.value.error)
+        assertEquals(WidgetImportStage.WIDGETS, vm.state.value.stage)
+        vm.close(); settle()
+        coEvery { repository.backgroundDonorVariant(any(), any()) } returns BackgroundDonorVariant(null, 0)
+        vm.start(snapshot, backgroundMode = true); settle(); open()
+        vm.reviewBackground(); settle()
+        assertNull(vm.state.value.backgroundPreview)
+        assertFalse(vm.state.value.busy)
+        coVerify(exactly = 1) { repository.previewBackgroundImport(any(), any(), any(), any()) }
+    }
+
+    @Test fun cancelledBackgroundReviewCannotPublishOrCommitALateCandidate() {
+        openBackground()
+        val deferred = CompletableDeferred<BackgroundImportPreview>()
+        coEvery { repository.previewBackgroundImport(any(), any(), any(), any()) } coAnswers { deferred.await() }
+        vm.reviewBackground(); settle()
+        assertTrue(vm.state.value.busy)
+        vm.back(); settle()
+        deferred.complete(BackgroundImportPreview("late", frame(), emptyList(), emptyList(), false, 0, 100))
+        settle()
+        assertNull(vm.state.value.backgroundPreview)
+        assertFalse(vm.state.value.busy)
+        assertNull(vm.state.value.error)
+        coVerify(exactly = 0) { repository.importBackground(any()) }
+    }
+
     @Test fun cachedPackageUsesTheSameDownloadCacheApiAndNeverOpensAProject() {
         open()
         assertTrue(vm.state.value.selectedFaceCached)

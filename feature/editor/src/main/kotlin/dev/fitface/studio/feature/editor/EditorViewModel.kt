@@ -537,11 +537,16 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun acceptWidgetImport(snapshot: EditorSnapshot) {
+    fun acceptWidgetImport(snapshot: EditorSnapshot) = acceptImport(snapshot, selectLastWidget = true)
+
+    fun acceptBackgroundImport(snapshot: EditorSnapshot) = acceptImport(snapshot, selectLastWidget = false)
+
+    private fun acceptImport(snapshot: EditorSnapshot, selectLastWidget: Boolean) {
         if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
         mutableState.value = mutableState.value.copy(snapshot = snapshot,
             multiSelection = emptyList(),
-            selectedWidgetIndex = snapshot.widgets.lastOrNull()?.globalIndex,
+            selectedWidgetIndex = snapshot.widgets.lastOrNull()?.globalIndex?.takeIf { selectLastWidget },
+            pendingImage = mutableState.value.pendingImage.takeIf { selectLastWidget },
             applyWidgetEditsToAllStyles = false, previewReviewed = false, pendingWidgetMove = null,
             pendingSetMove = emptyList())
     }

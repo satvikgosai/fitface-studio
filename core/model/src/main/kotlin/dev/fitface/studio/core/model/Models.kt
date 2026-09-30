@@ -1101,6 +1101,11 @@ interface WatchFaceRepository {
         projectId: Long, targetVariant: String): WidgetImportPreview = throw UnsupportedOperationException()
     suspend fun importWidget(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
     suspend fun releaseWidgetDonor(handle: String) {}
+    suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
+        throw UnsupportedOperationException()
+    suspend fun previewBackgroundImport(handle: String, donorVariant: String,
+        projectId: Long, targetVariant: String): BackgroundImportPreview = throw UnsupportedOperationException()
+    suspend fun importBackground(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
     fun observeProjects(): Flow<List<ProjectSummary>>
 
     fun observeImageFit(): Flow<ImageFit>

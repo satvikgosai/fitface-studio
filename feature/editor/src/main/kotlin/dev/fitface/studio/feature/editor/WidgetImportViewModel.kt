@@ -33,6 +33,9 @@ data class WidgetImportStep(
 )
 data class WidgetImportUiState(
     val stage: WidgetImportStage = WidgetImportStage.FACES,
+    val backgroundMode: Boolean = false,
+    val backgroundContent: BackgroundDonorVariant? = null,
+    val backgroundPreview: BackgroundImportPreview? = null,
     val faces: List<CatalogFace> = emptyList(),
     val uneditable: Set<String> = emptySet(),
     /**
@@ -126,13 +129,14 @@ class WidgetImportViewModel @Inject constructor(
     private var target = ""
     private var opened = false
 
-    fun start(snapshot: EditorSnapshot) {
-        if (opened && projectId == snapshot.projectId && target == snapshot.selectedVariant.basename) return
+    fun start(snapshot: EditorSnapshot, backgroundMode: Boolean = false) {
+        if (opened && projectId == snapshot.projectId && target == snapshot.selectedVariant.basename &&
+            mutable.value.backgroundMode == backgroundMode) return
         close()
         opened = true
         projectId = snapshot.projectId
         target = snapshot.selectedVariant.basename
-        mutable.value = WidgetImportUiState()
+        mutable.value = WidgetImportUiState(backgroundMode = backgroundMode)
         loadCatalog()
     }
 
@@ -169,8 +173,7 @@ class WidgetImportViewModel @Inject constructor(
             active.ensureActive()
             val variant = donor.variants.firstOrNull() ?: throw WatchFaceException("This face has no editable variants.")
             mutable.update { it.copy(donor = donor, variant = variant, stage = WidgetImportStage.WIDGETS, progress = null) }
-            val content = repository.widgetDonorVariant(donor.handle, variant.basename)
-            mutable.update { it.copy(content = content, contentVariant = variant) }
+            readVariant(donor, variant)
         }
     }
 
@@ -181,23 +184,58 @@ class WidgetImportViewModel @Inject constructor(
         // superseded — `run` cancels the call before it. Refusing it dimmed every chip for
         // the length of each load, which was half of the flicker.
         if (current.saving || current.progress != null) return
-        if (variant == current.variant && !current.variantLoading && current.content != null) return
+        if (variant == current.variant && !current.variantLoading &&
+            (current.content != null || current.backgroundContent != null)) return
         mutable.update {
-            it.copy(variant = variant, preview = null, picks = emptyList(), pickError = null,
+            it.copy(variant = variant, preview = null, backgroundPreview = null, picks = emptyList(), pickError = null,
                 variantLoading = true)
         }
         run {
             try {
-                val content = repository.widgetDonorVariant(donor.handle, variant.basename)
-                mutable.update { it.copy(content = content, contentVariant = variant, variantLoading = false) }
+                readVariant(donor, variant)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 // Nothing of the new variant to show, and the old one is not what the chip
                 // now says — so the page falls to its "could not be read" state and retry.
-                mutable.update { it.copy(content = null, contentVariant = null, variantLoading = false) }
+                mutable.update { it.copy(content = null, backgroundContent = null, contentVariant = null, variantLoading = false) }
                 throw error
             }
+        }
+    }
+
+    private suspend fun readVariant(donor: WidgetDonor, variant: EditorVariant) {
+        if (mutable.value.backgroundMode) {
+            val content = repository.backgroundDonorVariant(donor.handle, variant.basename)
+            currentCoroutineContext().ensureActive()
+            mutable.update { it.copy(backgroundContent = content, contentVariant = variant, variantLoading = false) }
+        } else {
+            val content = repository.widgetDonorVariant(donor.handle, variant.basename)
+            currentCoroutineContext().ensureActive()
+            mutable.update { it.copy(content = content, contentVariant = variant, variantLoading = false) }
+        }
+    }
+
+    fun reviewBackground() {
+        val current = mutable.value
+        val source = current.donor ?: return
+        val variant = current.contentVariant ?: return
+        if (!current.backgroundMode || current.busy || current.backgroundContent?.background == null) return
+        run {
+            val preview = repository.previewBackgroundImport(source.handle, variant.basename, projectId, target)
+            currentCoroutineContext().ensureActive()
+            mutable.update { it.copy(backgroundPreview = preview, stage = WidgetImportStage.REVIEW) }
+        }
+    }
+
+    fun applyBackground() {
+        val current = mutable.value
+        val preview = current.backgroundPreview ?: return
+        if (!current.backgroundMode || current.busy || current.stage != WidgetImportStage.REVIEW) return
+        mutable.update { it.copy(saving = true) }
+        run {
+            val snapshot = repository.importBackground(preview.ticket)
+            mutable.update { it.copy(imported = snapshot) }
         }
     }
 
@@ -405,7 +443,7 @@ class WidgetImportViewModel @Inject constructor(
             WidgetImportStage.WIDGETS -> {
                 releaseDonor()
                 mutable.update { it.copy(stage = WidgetImportStage.FACES, donor = null, content = null,
-                    contentVariant = null, variant = null, picks = emptyList(), preview = null,
+                    backgroundContent = null, backgroundPreview = null, contentVariant = null, variant = null, picks = emptyList(), preview = null,
                     pickError = null, showList = false, error = null) }
             }
             WidgetImportStage.FACES -> return true

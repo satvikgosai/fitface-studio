@@ -1029,8 +1029,9 @@
     <li>Previews render current layers, ordered and alpha-correct; unavailable content is disclosed, never replaced by invented boxes. The <a href="architecture.md#the-preview-pipeline">preview pipeline</a> defines sample readings, locale fallback and ROM-font approximations. Preview review does not establish watch-side acceptance.</li>
   </ul>
 
-  <h3 id="widget-import">Widget import</h3>
+  <h3 id="widget-import">Donor imports</h3>
   <ul>
+    <li><strong>Donor backgrounds:</strong> Background offers “From another watch face” beside image picking. Reuse the donor catalogue and variant labels, show only the primary background asset, and explain missing or additional full-panel artwork. Review is UNAPPLIED, renders the encoded result, has tap-accessible Before/After controls and lists both affected and skipped variants. Apply commits; back/cancel does not. Keep source/review errors in the picker and all content scrollable at large text or short height.</li>
     <li>A full-screen child from Widgets, not a sixth rail tab. Reuse catalogue grid and shared components; no separate Projects tab. Say whether each donor is cached or requires download, and show unavailable widgets with refusal reasons in List.</li>
     <li>Pick on the donor face with the editor's hit testing, or use rows for hands without outlines. Number picks in insertion/z-order. Selection offers <strong>Review widget(s)</strong>; only the review's <strong>Add</strong> commits. Face size means used bytes. Single-ticket pricing is exact; sets say “at least” and retain partial-save consequences.</li>
     <li>Review outlines additions, dims the rest and shows before while held. Both donor and review split on short height (<code>importPageSplits</code>, <code>WidgetImportLayoutTest</code>). Donor-position invariance and the batch commit contract live in the format reference.</li>

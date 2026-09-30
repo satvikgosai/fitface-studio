@@ -463,4 +463,23 @@
     <string name="editor_setup_details">Why this order?</string>
     <string name="editor_title_edited_a11y">%1$s, edited</string>
     <string name="editor_transfer_percent">%1$d%% sent</string>
+    <string name="editor_bg_import_open">From another watch face</string>
+    <string name="editor_bg_import_faces">Choose a background</string>
+    <string name="editor_bg_import_review">Review background</string>
+    <string name="editor_bg_import_experimental">Review the result before applying.</string>
+    <string name="editor_bg_import_saving">Applying background…</string>
+    <string name="editor_bg_import_asset">Source background image</string>
+    <string name="editor_bg_import_result">Background replacement preview</string>
+    <string name="editor_bg_import_missing">This style has no background image. Choose another style or face.</string>
+    <string name="editor_bg_import_primary">Copy this background image. Your widgets stay in place.</string>
+    <string name="editor_bg_import_multiple">This style has additional full-face artwork. Only its primary background is copied.</string>
+    <string name="editor_bg_import_before">Before</string>
+    <string name="editor_bg_import_after">After</string>
+    <string name="editor_bg_import_scope">Applies to: %1$s</string>
+    <string name="editor_bg_import_skipped">Unchanged: %1$s</string>
+    <string name="editor_bg_import_result_detail">Colours and transparency follow your face’s background. This sample preview may differ from the watch.</string>
+    <string name="editor_bg_import_scope_aod">Always-on display only</string>
+    <string name="editor_bg_import_scope_styles">Numbered styles</string>
+    <string name="editor_bg_import_replace">Replace background</string>
+    <string name="editor_bg_import_add">Add background</string>
 </resources>

@@ -11,6 +11,10 @@ import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.data.db.ProjectDao
 import dev.fitface.studio.core.data.db.ProjectEntity
+import dev.fitface.studio.core.format.BackgroundImporter
+import dev.fitface.studio.core.format.BackgroundImportEdit
+import dev.fitface.studio.core.model.BackgroundDonorVariant
+import dev.fitface.studio.core.model.BackgroundImportPreview
 import dev.fitface.studio.core.format.CONTAINER_HEADER_SIZE
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.CustomFaceTemplate
@@ -116,6 +120,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val before: Fit3Container, val variant: String, val result: WidgetImportEdit)
     private var donor: Donor? = null
     private var pendingImport: PendingImport? = null
+    private data class PendingBackground(val ticket: String, val donor: Donor, val session: Session,
+        val before: Fit3Container, val variant: String, val result: BackgroundImportEdit)
+    private var pendingBackground: PendingBackground? = null
 
     override suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = withContext(Dispatchers.Default) {
         // This must not call openPackage: inspecting a donor never replaces the active project.
@@ -127,6 +134,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             currentCoroutineContext().ensureActive()
             donor = candidate
             pendingImport = null
+            pendingBackground = null
             WidgetDonor(candidate.handle, candidate.faceId, FaceResources.variantEntries(candidate.container).map {
                 val number = EditorVariant.styleNumberOf(it.basename)
                 EditorVariant(it.basename, if (number == null) VariantKind.AOD else VariantKind.STYLE, number)
@@ -195,8 +203,60 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
+        withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val source = donor?.takeIf { it.handle == handle }
+                    ?: throw WatchFaceException("Choose the source watch face again.")
+                BackgroundImporter.read(source.container.entryByBasename(variant))
+            }
+        }
+
+    override suspend fun previewBackgroundImport(handle: String, donorVariant: String,
+        projectId: Long, targetVariant: String): BackgroundImportPreview = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            pendingBackground = null
+            val current = requireSession()
+            if (current.projectId != projectId || current.selectedVariantName != targetVariant)
+                throw WatchFaceException("The target project changed. Open the background picker again.")
+            val source = donor?.takeIf { it.handle == handle }
+                ?: throw WatchFaceException("Choose the source watch face again.")
+            val result = BackgroundImporter.prepare(current.currentContainer, targetVariant,
+                source.container.entryByBasename(donorVariant))
+            val preview = WidgetPreviewComposer.compose(result.edit.container.entryByBasename(targetVariant),
+                result.edit.container.entries, WidgetTextRasterizer::render,
+                java.util.Locale.getDefault().toString()).composed
+            val ticket = UUID.randomUUID().toString()
+            currentCoroutineContext().ensureActive()
+            pendingBackground = PendingBackground(ticket, source, current, current.currentContainer, targetVariant, result)
+            BackgroundImportPreview(ticket, preview, result.edit.changedStyles, result.skippedVariants,
+                result.addedBackground, result.edit.sizeDelta, result.edit.container.fileSize)
+        }
+    }
+
+    override suspend fun importBackground(ticket: String): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val pending = pendingBackground?.takeIf { it.ticket == ticket }
+                ?: throw WatchFaceException("Review this background again before applying it.")
+            val current = requireSession()
+            if (current !== pending.session || current.currentContainer !== pending.before ||
+                current.selectedVariantName != pending.variant || donor !== pending.donor)
+                throw WatchFaceException("The project changed after the preview. Review the background again.")
+            val origins = if (pending.result.addedBackground) {
+                pending.result.edit.changedStyles.fold(current.importOrigins) { saved, variant ->
+                    saved?.renumber(variant) { it + 1 }
+                }
+            } else current.importOrigins
+            val snapshot = commit(current, pending.result.edit.container,
+                pending.result.edit.audit("Background imported from face ${pending.donor.faceId}"),
+                importOrigins = origins)
+            pendingBackground = null
+            snapshot
+        }
+    }
+
     override suspend fun releaseWidgetDonor(handle: String) = mutex.withLock {
-        if (donor?.handle == handle) { donor = null; pendingImport = null }
+        if (donor?.handle == handle) { donor = null; pendingImport = null; pendingBackground = null }
     }
     private val removedWidgetIds = AtomicLong()
     private val json = Json { ignoreUnknownKeys = true }

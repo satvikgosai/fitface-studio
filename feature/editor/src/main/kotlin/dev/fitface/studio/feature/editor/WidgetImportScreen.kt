@@ -68,9 +68,9 @@ import kotlin.math.roundToInt
 
 @Composable
 internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
-    onImported: (EditorSnapshot) -> Unit, viewModel: WidgetImportViewModel = hiltViewModel()) {
+    onImported: (EditorSnapshot) -> Unit, backgroundMode: Boolean = false, viewModel: WidgetImportViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { viewModel.start(snapshot) }
+    LaunchedEffect(backgroundMode) { viewModel.start(snapshot, backgroundMode) }
     LaunchedEffect(state.imported) { state.imported?.let { viewModel.close(); onImported(it) } }
     val back = { if (viewModel.back()) { viewModel.close(); onDismiss() } }
     Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false,
@@ -81,10 +81,13 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
             Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
                 FitTopBar(
                     title = when (state.stage) {
-                        WidgetImportStage.FACES -> stringResource(R.string.widget_import_faces)
+                        WidgetImportStage.FACES -> stringResource(if (state.backgroundMode)
+                            R.string.editor_bg_import_faces else R.string.widget_import_faces)
                         WidgetImportStage.WIDGETS -> state.selectedFace?.name
                             ?: stringResource(R.string.widget_import_widgets)
-                        WidgetImportStage.REVIEW -> if (state.picks.size > 1) {
+                        WidgetImportStage.REVIEW -> if (state.backgroundMode) {
+                            stringResource(R.string.editor_bg_import_review)
+                        } else if (state.picks.size > 1) {
                             stringResource(R.string.widget_import_review_set_title, state.picks.size)
                         } else {
                             state.preview?.widget?.let { importWidgetName(it) }
@@ -97,7 +100,10 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                                 state.batchAdded, state.batch.size)
                         }
                     },
-                    subtitle = when (state.stage) {
+                    subtitle = if (state.backgroundMode) {
+                        stringResource(if (snapshot.isAodSelected) R.string.editor_bg_import_scope_aod
+                            else R.string.editor_bg_import_scope_styles)
+                    } else when (state.stage) {
                         WidgetImportStage.FACES -> stringResource(R.string.widget_import_target,
                             importVariantLabel(snapshot.selectedVariant))
                         else -> stringResource(R.string.widget_import_donor_subtitle,
@@ -105,6 +111,11 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                             importVariantLabel(snapshot.selectedVariant))
                     },
                     onBack = back,
+                    actions = {
+                        if (state.backgroundMode && state.stage == WidgetImportStage.REVIEW) {
+                            FitBadge(stringResource(R.string.editor_badge_unapplied), MaterialTheme.fitColors.warning)
+                        }
+                    },
                 )
                 // Pinned, not scrolled with the content. As a list item the progress bar
                 // and its Cancel button sat at the top of a list someone had scrolled far
@@ -112,10 +123,12 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                 ImportNotices(state, viewModel)
                 when (state.stage) {
                     WidgetImportStage.FACES -> DonorFacesPage(state, viewModel, Modifier.weight(1f))
-                    WidgetImportStage.WIDGETS ->
-                        DonorWidgetsPage(state, snapshot, viewModel, Modifier.weight(1f))
-                    WidgetImportStage.REVIEW ->
-                        ImportReviewPage(state, snapshot, viewModel, Modifier.weight(1f))
+                    WidgetImportStage.WIDGETS -> if (state.backgroundMode) {
+                        BackgroundDonorPage(state, viewModel, Modifier.weight(1f))
+                    } else DonorWidgetsPage(state, snapshot, viewModel, Modifier.weight(1f))
+                    WidgetImportStage.REVIEW -> if (state.backgroundMode) {
+                        BackgroundReviewPage(state, snapshot, viewModel, Modifier.weight(1f))
+                    } else ImportReviewPage(state, snapshot, viewModel, Modifier.weight(1f))
                     WidgetImportStage.BATCH ->
                         ImportBatchPage(state, viewModel, Modifier.weight(1f))
                 }
@@ -147,7 +160,8 @@ private fun ImportNotices(
             MicroLabel(stringResource(R.string.widget_import_experimental_label),
                 color = MaterialTheme.fitColors.warning)
             Text(
-                stringResource(R.string.widget_import_experimental_short),
+                stringResource(if (state.backgroundMode) R.string.editor_bg_import_experimental
+                    else R.string.widget_import_experimental_short),
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.fitText.secondary,
@@ -163,7 +177,8 @@ private fun ImportNotices(
         // variant chip made the screen flicker. The panel's button shows pricing working, and
         // a variant switch keeps the face on screen with a bar in reserved space if it is
         // slow; the strip is for the downloads and loads that have something to cancel.
-        val quietWork = state.stage == WidgetImportStage.WIDGETS && state.content != null &&
+        val quietWork = state.stage == WidgetImportStage.WIDGETS &&
+            (state.content != null || state.backgroundContent != null) &&
             state.progress == null && !state.saving
         if (state.busy && !quietWork) {
             Row(
@@ -178,6 +193,7 @@ private fun ImportNotices(
                     Text(
                         stringResource(
                             when {
+                                state.saving && state.backgroundMode -> R.string.editor_bg_import_saving
                                 state.saving -> R.string.widget_import_saving
                                 state.progress != null -> R.string.widget_import_downloading
                                 else -> R.string.widget_import_loading
@@ -322,6 +338,92 @@ private fun DonorFaceCard(
                     MaterialTheme.fitText.secondary
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun BackgroundDonorPage(state: WidgetImportUiState, viewModel: WidgetImportViewModel,
+    modifier: Modifier) {
+    Column(modifier) {
+        LazyRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.donor?.variants.orEmpty(), key = { it.basename }) { variant ->
+                FitChip(importVariantLabel(variant), state.variant == variant,
+                    { viewModel.selectVariant(variant) }, enabled = !state.saving && state.progress == null)
+            }
+        }
+        QuietProgress(state.variantLoading, Modifier.padding(horizontal = 16.dp))
+        val content = state.backgroundContent
+        BackgroundPageBody(content?.background, Modifier.weight(1f),
+            stringResource(R.string.editor_bg_import_asset)) {
+            if (content == null) {
+                if (!state.busy) {
+                    Text(stringResource(R.string.widget_import_variant_failed))
+                    FitButton(stringResource(R.string.widget_import_retry),
+                        { state.variant?.let(viewModel::selectVariant) })
+                }
+            } else if (content.background == null) {
+                Text(stringResource(R.string.editor_bg_import_missing),
+                    style = MaterialTheme.typography.bodyMedium)
+            } else {
+                Text(stringResource(R.string.editor_bg_import_primary),
+                    style = MaterialTheme.typography.bodyMedium)
+                if (content.fullPanelImageCount > 1) {
+                    Text(stringResource(R.string.editor_bg_import_multiple),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+                }
+                FitButton(stringResource(R.string.widget_import_review), viewModel::reviewBackground,
+                    Modifier.fillMaxWidth(), enabled = !state.busy, loading = state.busy)
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackgroundReviewPage(state: WidgetImportUiState, snapshot: EditorSnapshot,
+    viewModel: WidgetImportViewModel, modifier: Modifier) {
+    val preview = state.backgroundPreview ?: return
+    var before by remember(preview.ticket) { mutableStateOf(false) }
+    BackgroundPageBody(if (before) snapshot.composedPreview else preview.preview, modifier,
+        stringResource(R.string.editor_bg_import_result)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FitChip(stringResource(R.string.editor_bg_import_before), before, { before = true }, Modifier.weight(1f))
+            FitChip(stringResource(R.string.editor_bg_import_after), !before, { before = false }, Modifier.weight(1f))
+        }
+        Text(stringResource(R.string.editor_bg_import_scope, preview.changedVariants.map { backgroundVariantLabel(it) }.joinToString()),
+            style = MaterialTheme.typography.bodyMedium)
+        if (preview.skippedVariants.isNotEmpty()) {
+            Text(stringResource(R.string.editor_bg_import_skipped,
+                preview.skippedVariants.map { backgroundVariantLabel(it) }.joinToString()),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+        }
+        FitButton(stringResource(if (preview.addedBackground) R.string.editor_bg_import_add else R.string.editor_bg_import_replace),
+            viewModel::applyBackground, Modifier.fillMaxWidth(), enabled = !state.busy, loading = state.saving)
+        Text(stringResource(R.string.editor_bg_import_result_detail),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+    }
+}
+
+@Composable
+private fun backgroundVariantLabel(name: String): String = importVariantLabel(EditorVariant(name,
+    if (name == AOD_ENTRY_NAME) VariantKind.AOD else VariantKind.STYLE, EditorVariant.styleNumberOf(name)))
+
+/** Scrollable even when long target lists or large text leave little room for the preview. */
+@Composable
+private fun BackgroundPageBody(frame: PreviewFrame?, modifier: Modifier, description: String,
+    content: @Composable ColumnScope.() -> Unit) {
+    BoxWithConstraints(modifier) {
+        val width = frame?.let { minOf(maxWidth - 32.dp, maxHeight * .55f * it.width / it.height, 186.dp) }
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (frame != null && width != null) {
+                androidx.compose.foundation.Image(frame.rememberImportBitmap(), description,
+                    Modifier.width(width).aspectRatio(frame.width.toFloat() / frame.height)
+                        .background(Color.Black, MaterialTheme.shapes.medium).clip(MaterialTheme.shapes.medium),
+                    contentScale = ContentScale.Fit)
+            }
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
         }
     }
 }
