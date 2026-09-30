@@ -206,6 +206,34 @@ object FaceEditor {
         return finalize(source, output, changedEntries, changed)
     }
 
+    /** Changes the native Composite angle without rewriting its text or layout. */
+    fun rotateWidget(source: Fit3Container, entryBasenames: List<String>, globalIndex: Int,
+        sequenceId: Int, x: Int, y: Int, angleTenths: Int): ContainerEdit {
+        requireEditable(source)
+        val angle = dev.fitface.studio.core.model.normalizedRotation(angleTenths)
+        val resolved = StyleWidgetMatch.resolve(source, entryBasenames) { _, records ->
+            records.singleOrNull { it.globalIndex == globalIndex && it.widgetType == WIDGET_COMP &&
+                it.sequenceId == sequenceId && it.x == x && it.y == y }
+        }
+        fun allowed(record: WidgetRecord) = angle == 0 ||
+            dev.fitface.studio.core.model.canRotateText(record.storedWidth ?: 0, record.storedHeight ?: 0)
+        if (!allowed(resolved.first().second)) throw Fit3FormatException(
+            "This text box is too large to rotate safely. Its angle can still be reset to zero.")
+        val output = source.toByteArray()
+        var changed = 0
+        val entries = resolved.filter { allowed(it.second) }.mapNotNull { (entry, record) ->
+            val offset = entry.offset + record.recordOffset + requireNotNull(WidgetSchema.spec(record.widgetType).rotation).offset
+            if (output.u16(offset) == angle) null else {
+                val before = output.copyOfRange(offset, offset + 2)
+                output.putU16(offset, angle)
+                changed += (0..1).count { before[it] != output[offset + it] }
+                entry
+            }
+        }
+        if (changed == 0) throw Fit3FormatException("This widget already uses that rotation.")
+        return finalize(source, output, entries, changed)
+    }
+
     fun replaceBackgrounds(
         source: Fit3Container,
         entryBasenames: List<String>,

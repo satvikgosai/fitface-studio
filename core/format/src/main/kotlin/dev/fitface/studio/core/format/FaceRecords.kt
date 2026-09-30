@@ -970,6 +970,9 @@ object FaceRecordParser {
                 },
                 hasOpaqueBackdrop = opaqueBackdrop && placement == WidgetPlacement.CANVAS,
                 colorArgb = pairColor.takeIf { canEditPair },
+                rotationTenths = WidgetSchema.spec(it.widgetType).rotation?.let { field ->
+                    entry.data.u16(it.recordOffset + field.offset)
+                },
                 supportMessage = when {
                     !place.isMovable ->
                         "This widget’s position cannot be measured safely, so moving is disabled. " +
@@ -1123,8 +1126,10 @@ object FaceRecordParser {
         add("type=${record.widgetType}")
         add("seq=${record.sequenceId}")
         add(images[record.unknown20]?.let { "u20=img${it.index}" } ?: "u20=${record.unknown20}")
-        record.words.forEach { word ->
-            add(images[word]?.let { "img${it.index}" } ?: "raw$word")
+        record.words.forEachIndexed { index, word ->
+            val rotation = WidgetSchema.spec(record.widgetType).rotation
+            val stableWord = if (rotation?.offset == WIDGET_FIXED_SIZE + index * 4) word and 0xFFFF0000L else word
+            add(images[stableWord]?.let { "img${it.index}" } ?: "raw$stableWord")
         }
     }
 

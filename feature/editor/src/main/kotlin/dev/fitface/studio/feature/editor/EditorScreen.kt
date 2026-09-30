@@ -1,5 +1,9 @@
 package dev.fitface.studio.feature.editor
 
+import dev.fitface.studio.core.model.visualBounds
+import dev.fitface.studio.core.model.visualOffsetX
+import dev.fitface.studio.core.model.visualOffsetY
+
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
@@ -286,6 +290,7 @@ fun EditorRoute(
         onBackgroundImported = viewModel::acceptBackgroundImport,
         onResizeWidget = viewModel::resizeSelectedWidget,
         onWidgetColor = viewModel::setSelectedWidgetColor,
+        onRotateWidget = viewModel::rotateSelectedWidget,
         onSyncThumbnail = viewModel::refreshThumbnail,
         onTintCyan = viewModel::tintCyan,
         onTintMagenta = viewModel::tintMagenta,
@@ -388,6 +393,7 @@ private fun EditorScreen(
     onBackgroundImported: (EditorSnapshot) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
+    onRotateWidget: (Int) -> Unit,
     onSyncThumbnail: () -> Unit,
     onTintCyan: () -> Unit,
     onTintMagenta: () -> Unit,
@@ -430,6 +436,11 @@ private fun EditorScreen(
     val selected = snapshot?.widgets?.singleOrNull {
         it.globalIndex == state.selectedWidgetIndex
     }
+    var rotating by rememberSaveable(snapshot?.selectedVariant?.basename, selected?.globalIndex) { mutableStateOf(false) }
+    if (rotating && snapshot != null && selected != null) RotationDialog(
+        selected, snapshot, state.applyWidgetEditsToAllStyles, !state.isWorking,
+        onRotate = { rotating = false; onRotateWidget(it) }, onDismiss = { rotating = false },
+    )
     // No redirect any more: Install is one page, so there is nowhere to be quietly sent
     // instead. Arriving marks the preview reviewed, which is what arms the send button,
     // and `InstallWorkspace` re-marks it on every snapshot so an edit made on the page
@@ -522,6 +533,7 @@ private fun EditorScreen(
                         onImportBackground = { importingBackground = true },
                         onResizeWidget = onResizeWidget,
                         onWidgetColor = onWidgetColor,
+                        onOpenRotation = { rotating = true },
                         onSyncThumbnail = onSyncThumbnail,
                         onTintCyan = onTintCyan,
                         onTintMagenta = onTintMagenta,
@@ -1011,6 +1023,7 @@ private fun EditorPageContent(
     onImportBackground: () -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
+    onOpenRotation: () -> Unit,
     onSyncThumbnail: () -> Unit,
     onTintCyan: () -> Unit,
     onTintMagenta: () -> Unit,
@@ -1040,7 +1053,7 @@ private fun EditorPageContent(
     when (page) {
         EditorPage.Canvas -> CanvasWorkspace(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
-            onResizeWidget, onWidgetColor, onDuplicateWidget, onRemoveWidget, onApplyAll,
+            onResizeWidget, onWidgetColor, onOpenRotation, onDuplicateWidget, onRemoveWidget, onApplyAll,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
             selection, modifier,
         )
@@ -1070,7 +1083,7 @@ private fun EditorPageContent(
         )
         EditorPage.Inspector -> InspectorWorkspace(
             state, snapshot, selected, onNudgeWidget, onApplyAll, onRemoveWidget,
-            onDuplicateWidget, onResizeWidget, onWidgetColor, modifier,
+            onDuplicateWidget, onResizeWidget, onWidgetColor, onOpenRotation, modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
@@ -1123,6 +1136,7 @@ private fun CanvasWorkspace(
     onTransformImage: (Float, Float, Float) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
+    onOpenRotation: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRemoveWidget: () -> Unit,
     onApplyAll: (Boolean) -> Unit,
@@ -1156,6 +1170,7 @@ private fun CanvasWorkspace(
                 onNudgeWidget = onNudgeWidget,
                 onResize = onResizeWidget,
                 onColor = onWidgetColor,
+                onRotate = onOpenRotation,
                 onDuplicate = onDuplicateWidget,
                 onRemove = onRemoveWidget,
                 onApplyAll = onApplyAll,
@@ -1368,6 +1383,7 @@ private fun SelectionActionBar(
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onResize: (Boolean) -> Unit,
     onColor: (Int) -> Unit,
+    onRotate: () -> Unit,
     onDuplicate: () -> Unit,
     onRemove: () -> Unit,
     onApplyAll: (Boolean) -> Unit,
@@ -1420,6 +1436,7 @@ private fun SelectionActionBar(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            RotationControl(enabled, onRotate)
             FitIconButton(
                 glyph = "▦",
                 contentDescription = stringResource(R.string.editor_select_multiple),
@@ -2662,6 +2679,7 @@ private fun InspectorWorkspace(
     onDuplicate: () -> Unit,
     onResize: (Boolean) -> Unit,
     onColor: (Int) -> Unit,
+    onRotate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (widget == null) {
@@ -2836,6 +2854,7 @@ private fun InspectorWorkspace(
                 )
             }
         }
+        RotationControl(!state.isWorking, onRotate, labelled = true)
         WidgetSizeControls(widget, !state.isWorking, onResize)
         widget.colorArgb?.let { currentColor ->
             val colors = WidgetColors.map { (labelId, argb) -> stringResource(labelId) to argb }
@@ -4313,17 +4332,17 @@ private fun DirectWatchCanvas(
                                     track = dragTrack.x,
                                     delta = amount.x * current.preview.width / size.width,
                                     starting = startX,
-                                    extent = widget.width,
+                                    extent = widget.visualBounds.width,
                                     canvasExtent = current.preview.width,
-                                    drawOffset = widget.drawOffsetX,
+                                    drawOffset = widget.visualOffsetX,
                                 )
                                 val vertical = stepDragAxis(
                                     track = dragTrack.y,
                                     delta = amount.y * current.preview.height / size.height,
                                     starting = startY,
-                                    extent = widget.height,
+                                    extent = widget.visualBounds.height,
                                     canvasExtent = current.preview.height,
-                                    drawOffset = widget.drawOffsetY,
+                                    drawOffset = widget.visualOffsetY,
                                 )
                                 dragTrack = Offset(horizontal.track, vertical.track)
                                 draggingPosition = Offset(horizontal.position, vertical.position)
@@ -4455,19 +4474,19 @@ private fun DirectWatchCanvas(
                     // same offset the resting position gets.
                     val setTarget = setTargets[widget.globalIndex]
                     val x = when {
-                        setTarget != null -> setTarget.displayX + widget.drawOffsetX
-                        visualMoveIndex == widget.globalIndex -> visualMovePosition.x + widget.drawOffsetX
-                        else -> widget.drawLeft.toFloat()
+                        setTarget != null -> setTarget.displayX + widget.visualOffsetX
+                        visualMoveIndex == widget.globalIndex -> visualMovePosition.x + widget.visualOffsetX
+                        else -> (widget.drawLeft + widget.visualBounds.left).toFloat()
                     }
                     val y = when {
-                        setTarget != null -> setTarget.displayY + widget.drawOffsetY
-                        visualMoveIndex == widget.globalIndex -> visualMovePosition.y + widget.drawOffsetY
-                        else -> widget.drawTop.toFloat()
+                        setTarget != null -> setTarget.displayY + widget.visualOffsetY
+                        visualMoveIndex == widget.globalIndex -> visualMovePosition.y + widget.visualOffsetY
+                        else -> (widget.drawTop + widget.visualBounds.top).toFloat()
                     }
                     drawRect(
                         color = if (selected) selectedGuideColor else guideColor,
                         topLeft = Offset(x * scaleX, y * scaleY),
-                        size = Size(widget.width * scaleX, widget.height * scaleY),
+                        size = Size(widget.visualBounds.width * scaleX, widget.visualBounds.height * scaleY),
                         style = Stroke(if (selected) 2.dp.toPx() else 1.dp.toPx()),
                     )
                     if (order >= 0) {
@@ -5209,21 +5228,22 @@ internal fun hitWidget(
     val candidates = widgets.asSequence()
         .filter { it.placement.isVisibleOnCanvas && it.canEditPosition }
         .filter {
-            val left = it.drawLeft
-            val top = it.drawTop
+            val bounds = it.visualBounds
+            val left = it.drawLeft + bounds.left
+            val top = it.drawTop + bounds.top
             // Half-open on purpose. Testing `x <= left + width` made the rectangle
             // width+1 px wide, so two abutting widgets shared a one-pixel column and
             // the right and bottom edges belonged to both of them.
-            x >= left && x < left + it.width && y >= top && y < top + it.height
+            x >= left && x < left + bounds.width && y >= top && y < top + bounds.height
         }
         .toList()
     val specific = candidates.minWithOrNull(
-        compareBy<WidgetGuide> { it.width.toLong() * it.height }
+        compareBy<WidgetGuide> { it.visualBounds.width.toLong() * it.visualBounds.height }
             .thenByDescending(WidgetGuide::globalIndex),
     ) ?: return null
     val preferred = candidates.singleOrNull { it.globalIndex == preferredGlobalIndex }
-    val specificArea = specific.width.toLong() * specific.height
-    val preferredArea = preferred?.let { it.width.toLong() * it.height }
+    val specificArea = specific.visualBounds.width.toLong() * specific.visualBounds.height
+    val preferredArea = preferred?.let { it.visualBounds.width.toLong() * it.visualBounds.height }
     return preferred?.takeIf {
         preferredArea != null && preferredArea <= specificArea * 5 / 4
     } ?: specific
@@ -5524,3 +5544,65 @@ private fun DeleteProjectDialog(
         },
     )
 }
+
+
+@Composable
+private fun RotationControl(enabled: Boolean, onOpen: () -> Unit, labelled: Boolean = false) {
+    if (labelled) FitButton(stringResource(R.string.editor_rotation), onOpen,
+        Modifier.fillMaxWidth(), enabled, style = FitButtonStyle.Secondary)
+    else FitIconButton("↻", stringResource(R.string.editor_rotation), onOpen, enabled = enabled)
+}
+
+@Composable
+private fun RotationDialog(widget: WidgetGuide, snapshot: EditorSnapshot, allStyles: Boolean,
+    enabled: Boolean, onRotate: (Int) -> Unit, onDismiss: () -> Unit) {
+    val current = widget.rotationTenths
+    var angle by rememberSaveable(widget.globalIndex, current) { mutableStateOf(rotationInput(current ?: 0)) }
+    val parsed = parseRotationInput(angle)
+    val safe = parsed != null && (parsed == 0 || dev.fitface.studio.core.model.canRotateText(widget.width, widget.height))
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.editor_rotation)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (current == null) {
+                    Text(stringResource(R.string.editor_rotation_unsupported))
+                } else {
+                    Text(stringResource(R.string.editor_rotation_current, rotationInput(current),
+                        rotationInput(widget.originalRotationTenths ?: current)))
+                    Text(if (!snapshot.isAodSelected && allStyles && widget.importedFromFaceId == null)
+                        stringResource(R.string.editor_rotation_scope_all)
+                        else stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename)))
+                    OutlinedTextField(angle, { angle = it }, Modifier.fillMaxWidth(), singleLine = true,
+                        label = { Text(stringResource(R.string.editor_rotation_degrees)) }, isError = parsed == null)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FitChip("−15°", false, { angle = rotationInput((parsed ?: current) - 150) })
+                        FitChip("+15°", false, { angle = rotationInput((parsed ?: current) + 150) })
+                        FitChip(stringResource(R.string.editor_rotation_reset), false,
+                            { angle = rotationInput(widget.originalRotationTenths ?: current) })
+                    }
+                    if (!safe) Text(stringResource(if (parsed == null) R.string.editor_rotation_invalid
+                        else R.string.editor_rotation_too_large), color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.editor_rotation_backdrop), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.fitText.secondary)
+                }
+            }
+        },
+        confirmButton = {
+            if (current != null) TextButton(onClick = { parsed?.let(onRotate) },
+                enabled = enabled && safe && parsed != current) { Text(stringResource(R.string.editor_rotation_apply)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) } },
+    )
+}
+
+internal fun rotationInput(tenths: Int): String {
+    val angle = dev.fitface.studio.core.model.normalizedRotation(tenths)
+    return if (angle % 10 == 0) (angle / 10).toString() else "${angle / 10}.${angle % 10}"
+}
+
+/** Accept decimal degrees to tenths, including negative/full turns; never truncate precision. */
+internal fun parseRotationInput(input: String): Int? = runCatching {
+    val value = input.trim().replace(',', '.').toBigDecimal().movePointRight(1).intValueExact()
+    dev.fitface.studio.core.model.normalizedRotation(value)
+}.getOrNull()

@@ -1379,6 +1379,19 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
         }
 
+    override suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
+        x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot =
+        withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                val targets = current.widgetEditTargets(styleName, applyToAllStyles, globalIndex)
+                val edit = FaceEditor.rotateWidget(current.currentContainer, targets, globalIndex,
+                    sequenceId, x, y, angleTenths)
+                commit(current, edit.container, EditAuditSummary(edit.changedPayloadBytes,
+                    edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName)
+            }
+        }
+
     override suspend fun resizeWidget(
         styleName: String,
         globalIndex: Int,
@@ -2595,6 +2608,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     originalWidth = original?.width ?: widget.width,
                     originalHeight = original?.height ?: widget.height,
                     originalColorArgb = original?.colorArgb ?: widget.colorArgb,
+                    originalRotationTenths = original?.rotationTenths ?: widget.rotationTenths,
                     duplicateSourceGlobalIndex = duplicateSource,
                     importedFromFaceId = imported?.faceId,
                 )

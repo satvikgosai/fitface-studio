@@ -82,6 +82,51 @@ class WidgetImportRepositoryTest {
     private fun exportFile() = File(context.cacheDir, "widget-import-tests/out.zip").also { it.parentFile!!.mkdirs() }
     private suspend fun export(id: Long): File = exportFile().also { repository.exportProject(id, Uri.fromFile(it).toString()) }
 
+    @Test fun compositeRotationPreservesOriginalThroughDuplicateReopenAndReset() = runBlocking {
+        val pristine = repository.openPackage(face("00105"))
+        val widget = pristine.widgets.first { it.rotationTenths != null }
+        assertEquals(3180, widget.rotationTenths)
+        var s = repository.rotateWidget("style0.bin", widget.globalIndex, widget.sequenceId,
+            widget.x, widget.y, 900, false)
+        assertEquals(900, s.widgets.single { it.globalIndex == widget.globalIndex }.rotationTenths)
+        assertEquals(3180, s.widgets.single { it.globalIndex == widget.globalIndex }.originalRotationTenths)
+        val sibling = repository.currentSnapshot("style1.bin")
+        assertEquals(3180, sibling.widgets.single { it.globalIndex == widget.globalIndex }.rotationTenths)
+        s = repository.currentSnapshot("style0.bin")
+        s = repository.duplicateWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, false)
+        val duplicate = s.widgets.last()
+        s = repository.rotateWidget("style0.bin", duplicate.globalIndex, duplicate.sequenceId,
+            duplicate.x, duplicate.y, 1234, false)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(1234, s.widgets.last().rotationTenths)
+        assertEquals(3180, s.widgets.last().originalRotationTenths)
+        s = repository.resetEdits()
+        assertEquals(pristine.widgets.size, s.widgets.size)
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun importedCompositeAndAodRotationStayIsolatedEvenWithAllStylesRequested() = runBlocking {
+        val donorIndex = FaceRecordParser.scanWidgets(Fit3Container.parse(bin("00105")).entryByBasename("style0.bin"))
+            .first { it.widgetType == 13 }.globalIndex
+        var s = add(repository.openPackage(face("00106")), "00105", donorIndex)
+        val widget = s.widgets.last()
+        assertEquals(13, widget.type)
+        s = repository.rotateWidget(s.selectedVariant.basename, widget.globalIndex, widget.sequenceId,
+            widget.x, widget.y, -900, true)
+        assertEquals(listOf("style0.bin"), s.audit?.changedStyles)
+        assertEquals(widget.rotationTenths, s.widgets.last().originalRotationTenths)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(2700, s.widgets.last().rotationTenths)
+        assertEquals(widget.rotationTenths, s.widgets.last().originalRotationTenths)
+        s = add(repository.currentSnapshot("aod.bin"), "00105", donorIndex)
+        val aod = s.widgets.last()
+        s = repository.rotateWidget("aod.bin", aod.globalIndex, aod.sequenceId, aod.x, aod.y, 1800, true)
+        assertEquals(listOf("aod.bin"), s.audit?.changedStyles)
+        assertEquals("style0.bin", s.activeStyleName)
+        assertEquals(2700, repository.currentSnapshot("style0.bin").widgets.last().rotationTenths)
+    }
+
     @Test fun allNineTypesImportRenderEditAndReopenWithoutADonorProject() = runBlocking {
         val native = repository.openPackage(face("00106"))
         var s = native

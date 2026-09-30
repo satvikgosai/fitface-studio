@@ -15,6 +15,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WidgetHitTest {
+    @Test fun rotatedCornersAreSelectableAndMovementClampsTheirVisualBounds() {
+        val rotated = guide(3, 50, 60, 80, 30).copy(type = 13, rotationTenths = 900)
+        // 90 degrees extends above and below the unrotated 80x30 box.
+        assertEquals(3, hitWidget(listOf(rotated), Offset(90f, 40f), 256, 402, 256, 402)?.globalIndex)
+        assertNull(hitWidget(listOf(rotated), Offset(55f, 70f), 256, 402, 256, 402))
+        val bounds = dev.fitface.studio.core.model.rotationBounds(80, 30, 40, 15, 90.0)
+        assertEquals((-bounds.top).toFloat(), constrainDragCoordinate(-100f, 60f,
+            bounds.height, 402, bounds.top), 0f)
+        assertEquals((256 - bounds.width - bounds.left).toFloat(), constrainDragCoordinate(999f, 50f,
+            bounds.width, 256, bounds.left), 0f)
+    }
+
+    @Test fun decimalRotationInputNormalizesWithoutDroppingPrecision() {
+        assertEquals(3180, parseRotationInput("-42"))
+        assertEquals(1, parseRotationInput("360.1"))
+        assertEquals(3181, parseRotationInput("318,1"))
+        assertEquals("318.1", rotationInput(3181))
+        for (value in listOf("", "NaN", "1.11", "214748365", "--5")) assertNull(parseRotationInput(value))
+    }
+
     @Test
     fun choosingEveryFitModeCreatesAFreshCenteredPlacement() {
         ImageFit.entries.forEach { fit ->

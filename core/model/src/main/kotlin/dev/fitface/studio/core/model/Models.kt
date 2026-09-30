@@ -640,6 +640,9 @@ data class WidgetGuide(
     val hasOpaqueBackdrop: Boolean = false,
     val colorArgb: Int?,
     val originalColorArgb: Int? = colorArgb,
+    /** Raw native angle; null when this type has no supported rotation field. */
+    val rotationTenths: Int? = null,
+    val originalRotationTenths: Int? = rotationTenths,
     val duplicateSourceGlobalIndex: Int? = null,
     /** Imports are edited only in the variant where they were added. */
     val importedFromFaceId: String? = null,
@@ -1232,6 +1235,10 @@ interface WatchFaceRepository {
         y: Int,
         applyToAllStyles: Boolean,
     ): EditorSnapshot
+
+    suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
+        x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot =
+        throw UnsupportedOperationException("Widget rotation is unavailable")
 
     suspend fun resizeBackground(width: Int, height: Int): EditorSnapshot
 

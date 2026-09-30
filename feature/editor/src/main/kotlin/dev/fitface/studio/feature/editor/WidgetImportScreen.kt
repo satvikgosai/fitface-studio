@@ -617,15 +617,15 @@ private fun DonorFaceCanvas(
                 val order = picks.indexOf(widget.globalIndex)
                 drawRect(
                     color = if (order >= 0) selectedColor else guideColor.copy(alpha = .55f),
-                    topLeft = Offset(widget.drawLeft * scaleX, widget.drawTop * scaleY),
-                    size = Size(widget.width * scaleX, widget.height * scaleY),
+                    topLeft = Offset((widget.drawLeft + widget.visualBounds.left) * scaleX, (widget.drawTop + widget.visualBounds.top) * scaleY),
+                    size = Size(widget.visualBounds.width * scaleX, widget.visualBounds.height * scaleY),
                     style = Stroke(if (order >= 0) 2.dp.toPx() else 1.dp.toPx()),
                 )
                 if (order < 0) return@forEach
                 // The pick's number, because pick order is the order they are added and so
                 // the z-order they end up in. A ring that only says "chosen" cannot say
                 // which of three was chosen first.
-                drawPickBadge(order + 1, Offset(widget.drawLeft * scaleX, widget.drawTop * scaleY),
+                drawPickBadge(order + 1, Offset((widget.drawLeft + widget.visualBounds.left) * scaleX, (widget.drawTop + widget.visualBounds.top) * scaleY),
                     selectedColor, textMeasurer)
             }
         }
@@ -1450,8 +1450,8 @@ private fun ImportReviewFace(
                 val scaleX = size.width / after.width
                 val scaleY = size.height / after.height
                 val rects = additions.map {
-                    Rect(Offset(it.drawLeft * scaleX, it.drawTop * scaleY),
-                        Size(it.width * scaleX, it.height * scaleY))
+                    Rect(Offset((it.drawLeft + it.visualBounds.left) * scaleX, (it.drawTop + it.visualBounds.top) * scaleY),
+                        Size(it.visualBounds.width * scaleX, it.visualBounds.height * scaleY))
                 }
                 // One sheet with a hole cut for each addition, rather than a translucent
                 // sheet over everything: the additions keep their own pixels untouched,

@@ -949,6 +949,32 @@ one widget per style, 58 serve 2–5, and 32 are shared between numbered styles 
 AOD. Changing one needs a separate shared-resource model and supported-family sizes.
 The preview approximates ROM fonts with Android fonts; it does not justify box-only scaling.
 
+### Rotating Composite text
+
+The editor changes only the native unsigned tenths-degree angle at Composite
+`+0x5C`, declared by `WidgetSchema.rotation`, then rebuilds both CRC layers and
+validates. Reads retain raw vendor values; requests normalize to `[0, 3600)`.
+Position, alignment, text programs, font, resources and container size stay intact.
+Selected-style matching is strict; requested siblings are best effort. AOD and
+imports remain variant-local. The original native/donor angle survives reopening
+and is offered as Reset rotation. Payload identity excludes this mutable angle
+while retaining the neighbouring fields.
+
+Nonzero angles use the firmware's **opaque black RGB888 text canvas**, rotated
+about the integer centre of the stored box. The preview mirrors that behaviour
+with an approximate Android font. Shared rotation geometry supplies rendered
+bounds, selection outlines, hit tests and drag/nudge clamps without changing the
+stored layout box or alignment origin. Off-panel starting positions can still be
+moved gradually inward.
+
+The editor limits each newly rotated box to 102,912 pixels (308,736 RGB888 bytes)
+and at most 1,024 pixels per side. This is an editor allocation policy, **not a
+measured total watch RAM budget**. Oversized boxes can still be set to zero.
+Hand sweeps, arc ranges and raster transforms are different capabilities and are
+not exposed as text rotation. Rotation editing has software/corpus coverage;
+physical-watch checks of changed live text, clipping and wake behaviour remain
+unperformed.
+
 ### Adding or replacing backgrounds
 
 Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.

@@ -60,6 +60,40 @@ class CanvasIntegrityTest {
         assumeTrue("corpus holds no containers", containers.isNotEmpty())
     }
 
+    @Test fun rotatingCompositeSharesItsVisualBoundsAndRetainsTheOpaqueCanvas() {
+        val path = containers.first { it.fileName.toString().contains("00105") }
+        val original = Fit3Container.parse(Files.readAllBytes(path))
+        val entry = original.entryByBasename("style0.bin")
+        val widget = FaceRecordParser.widgetGuides(entry).first { it.rotationTenths != null }
+        val baseline = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
+        for (angle in listOf(0, 900, 1800, 2700, 3181)) {
+            val edited = FaceEditor.rotateWidget(original, listOf(entry.basename), widget.globalIndex,
+                widget.sequenceId, widget.x, widget.y, angle).container
+            val guide = FaceRecordParser.widgetGuides(edited.entryByBasename(entry.basename))
+                .single { it.globalIndex == widget.globalIndex }
+            val preview = WidgetPreviewComposer.compose(edited.entryByBasename(entry.basename),
+                edited.entries, WidgetTextRasterizer::render)
+            val layer = preview.widgetImageLayers.single { it.globalIndex == widget.globalIndex }
+            baseline.widgetImageLayers.filter { it.globalIndex != widget.globalIndex }.forEach { untouched ->
+                val after = preview.widgetImageLayers.single { it.globalIndex == untouched.globalIndex }
+                org.junit.Assert.assertArrayEquals(untouched.frame.argb, after.frame.argb)
+                org.junit.Assert.assertEquals(untouched.offsetX, after.offsetX)
+                org.junit.Assert.assertEquals(untouched.offsetY, after.offsetY)
+            }
+            val bounds = dev.fitface.studio.core.model.rotationBounds(guide.width, guide.height,
+                guide.width / 2, guide.height / 2, angle / 10.0)
+            org.junit.Assert.assertEquals(bounds.left, layer.offsetX)
+            org.junit.Assert.assertEquals(bounds.top, layer.offsetY)
+            org.junit.Assert.assertEquals(bounds.width, layer.frame.width)
+            org.junit.Assert.assertEquals(bounds.height, layer.frame.height)
+            if (angle == 0) assertTrue(layer.frame.argb.any { it ushr 24 == 0 })
+            else assertTrue(layer.frame.argb.any { it == 0xFF000000.toInt() })
+            assertTrue(layer.frame.argb.any { it ushr 24 != 0 })
+            org.junit.Assert.assertEquals(widget.x, guide.x)
+            org.junit.Assert.assertEquals(widget.y, guide.y)
+        }
+    }
+
     /** One face's canvas, assembled exactly the way `WatchFaceRepositoryImpl` does. */
     private class Canvas(
         val guides: List<WidgetGuide>,

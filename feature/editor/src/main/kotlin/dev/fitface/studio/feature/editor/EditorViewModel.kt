@@ -1,5 +1,9 @@
 package dev.fitface.studio.feature.editor
 
+import dev.fitface.studio.core.model.visualBounds
+import dev.fitface.studio.core.model.visualOffsetX
+import dev.fitface.studio.core.model.visualOffsetY
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -722,9 +726,9 @@ class EditorViewModel @Inject constructor(
                 display = constrainDragCoordinate(
                     proposed = storedToDisplay(x, widget.originX).toFloat(),
                     starting = storedToDisplay(widget.x, widget.originX).toFloat(),
-                    extent = widget.width,
+                    extent = widget.visualBounds.width,
                     canvasExtent = snapshot.preview.width,
-                    drawOffset = widget.drawOffsetX,
+                    drawOffset = widget.visualOffsetX,
                 ).roundToInt(),
                 origin = widget.originX,
             ),
@@ -732,9 +736,9 @@ class EditorViewModel @Inject constructor(
                 display = constrainDragCoordinate(
                     proposed = storedToDisplay(y, widget.originY).toFloat(),
                     starting = storedToDisplay(widget.y, widget.originY).toFloat(),
-                    extent = widget.height,
+                    extent = widget.visualBounds.height,
                     canvasExtent = snapshot.preview.height,
-                    drawOffset = widget.drawOffsetY,
+                    drawOffset = widget.visualOffsetY,
                 ).roundToInt(),
                 origin = widget.originY,
             ),
@@ -900,6 +904,19 @@ class EditorViewModel @Inject constructor(
                 height = next.height,
                 applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
             )
+        }
+    }
+
+    fun rotateSelectedWidget(angleTenths: Int) {
+        val current = mutableState.value
+        if (current.isWorking) return
+        val snapshot = current.snapshot ?: return
+        val widget = snapshot.widgets.singleOrNull { it.globalIndex == current.selectedWidgetIndex } ?: return
+        val angle = dev.fitface.studio.core.model.normalizedRotation(angleTenths)
+        if (widget.rotationTenths == null || widget.rotationTenths == angle) return
+        operate {
+            repository.rotateWidget(snapshot.selectedVariant.basename, widget.globalIndex,
+                widget.sequenceId, widget.x, widget.y, angle, current.applyWidgetEditsToAllStyles)
         }
     }
 

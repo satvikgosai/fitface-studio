@@ -47,9 +47,11 @@ the app. The watch photo shows a real Bluetooth install.
 ## What you can do
 
 - Search and sort the catalogue, or reopen saved projects without downloading again.
-- Replace, tint or add a background where the face has room for it.
+- Replace, tint or add a background where the face has room for it, including
+  copying the background from another face.
 - Move, resize, recolour, duplicate and remove supported widgets; restore removed
-  stock widgets and add widgets from other faces.
+  stock widgets and add widgets from other faces. Rotate Composite text widgets
+  with degree controls and an original-angle reset.
 - Edit the selected style, opt into matching widgets across styles, or edit the
   always-on display separately.
 - Start a custom face with a clock on an empty panel. It uses the downloaded Info_4

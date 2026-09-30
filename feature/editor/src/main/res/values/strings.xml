@@ -482,4 +482,15 @@
     <string name="editor_bg_import_scope_styles">Numbered styles</string>
     <string name="editor_bg_import_replace">Replace background</string>
     <string name="editor_bg_import_add">Add background</string>
+    <string name="editor_rotation">Rotate widget</string>
+    <string name="editor_rotation_unsupported">Rotation is available for composite text. This widget type has no supported rotation control yet.</string>
+    <string name="editor_rotation_current">Current: %1$s° · Original: %2$s°</string>
+    <string name="editor_rotation_degrees">Angle in degrees</string>
+    <string name="editor_rotation_reset">Reset rotation</string>
+    <string name="editor_rotation_apply">Apply rotation</string>
+    <string name="editor_rotation_scope_all">Matching widgets in all numbered styles</string>
+    <string name="editor_rotation_scope">Applies to: %1$s</string>
+    <string name="editor_rotation_invalid">Enter degrees with at most one decimal place.</string>
+    <string name="editor_rotation_too_large">This text box is too large to rotate safely. You can set its angle to zero.</string>
+    <string name="editor_rotation_backdrop">Tilted text has a black rectangular backdrop. Check the canvas after applying. The sample font may differ from your watch.</string>
 </resources>

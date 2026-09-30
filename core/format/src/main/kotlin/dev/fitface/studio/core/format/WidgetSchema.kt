@@ -123,6 +123,8 @@ object WidgetSchema {
         data object Endpoint : ResizeModel
     }
 
+    data class RotationField(val offset: Int)
+
     data class Spec(
         val type: Int,
         val name: String,
@@ -158,6 +160,8 @@ object WidgetSchema {
         val inert: Boolean = false,
         /** How this type changes size, or null for one this app will not resize. */
         val resize: ResizeModel? = null,
+        /** Native clockwise angle, unsigned tenths of a degree. Null means unsupported. */
+        val rotation: RotationField? = null,
     ) {
         /** The exact size a record of this type must have, given its own bytes. */
         fun expectedSize(record: ByteArray, base: Int): Int? = when (val layout = pointers) {
@@ -312,6 +316,7 @@ object WidgetSchema {
         // word is not consumed.
         sources = null,
         followsCommonSource = false,
+        rotation = RotationField(0x5C),
     )
 
     private val IMAGE_ARC = Spec(

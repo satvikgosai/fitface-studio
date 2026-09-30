@@ -68,6 +68,28 @@ class EditorSelectionSetTest {
         return viewModel to repository
     }
 
+    @Test fun rotationKeepsSelectionClearsReviewAndHonoursScopeAndNoOp() {
+        val (vm, repo) = opened(listOf(widget(1, 20, 20).copy(type = 13, rotationTenths = 0)))
+        vm.selectWidget(1)
+        vm.rotateSelectedWidget(3600); settle()
+        assertTrue(repo.rotations.isEmpty())
+        vm.markPreviewReviewed()
+        assertTrue(vm.state.value.previewReviewed)
+        vm.rotateSelectedWidget(-421); settle()
+        assertEquals(listOf(3179), repo.rotations)
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        assertFalse(vm.state.value.previewReviewed)
+        assertFalse(vm.state.value.isWorking)
+        vm.beginSelection(1); vm.rotateSelectedWidget(900); settle()
+        assertEquals(listOf(3179), repo.rotations)
+    }
+
+    @Test fun unsupportedWidgetsDoNotSendRotationEdits() {
+        val (vm, repo) = opened()
+        vm.selectWidget(1); vm.rotateSelectedWidget(900); settle()
+        assertTrue(repo.rotations.isEmpty())
+    }
+
     // -- choosing a set -------------------------------------------------------
 
     @Test fun firstHoldStartsSelectionAndAnotherTapAddsAWidget() {
@@ -386,6 +408,15 @@ class EditorSelectionSetTest {
      */
     private class FakeRepository(private var current: EditorSnapshot) :
         WatchFaceRepository by mockk(relaxed = true) {
+        val rotations = mutableListOf<Int>()
+        override suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
+            x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot {
+            rotations += angleTenths
+            current = current.copy(widgets = current.widgets.map {
+                if (it.globalIndex == globalIndex) it.copy(rotationTenths = angleTenths) else it
+            }, isDirty = true)
+            return current
+        }
         val removed = mutableListOf<Int>()
         val duplicated = mutableListOf<Int>()
         val moves = mutableMapOf<Int, MutableList<Pair<Int, Int>>>()
