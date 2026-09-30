@@ -112,25 +112,22 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/catalog-cache/uneditable.json` | App IDs whose package carries no container |
 | `filesDir/catalog-cache/packages/<appId>@<versionCode>.apk` | Downloaded packages; older versions evicted |
 | `filesDir/projects/<id>/source.apk` | The package a project was opened from |
-| `filesDir/projects/<id>/edited.bin` | The current edited container |
-| `filesDir/projects/<id>/session.json` | Removed widget records, base64, so restore survives process death |
-| `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state for imported artwork; the row names the committed file |
+| `filesDir/projects/<id>/edited.bin` | Legacy edited container, read for backward compatibility |
+| `filesDir/projects/<id>/session.json` | Legacy removed records and thumbnail state |
+| `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state and original widget identities; the row names the committed file |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
 
 ### Commits and file ownership
 
 `WatchFaceRepositoryImpl.commit` restores all session state if producing or saving
-an edit fails. Persistence differs by storage shape:
-
-- **Native projects:** update the database pointer first, then atomically write
-  `edited.bin`, then `session.json`. This prevents a cancelled DAO call from leaving
-  a newer BIN behind an unchanged row. Missing edited files load as no edit;
-  `persistSessionState` failures propagate instead of silently losing restorable records.
-- **Imported-resource projects:** under `NonCancellable`, write a new immutable
-  `edit-<UUID>.checkpoint` containing BIN plus session, then swap the Room pointer.
-  Delete the new file if the swap fails; sweep the old checkpoint after success.
-  BIN and pristine donor provenance cannot commit independently.
+an edit fails. Every new edit writes a new immutable `edit-<UUID>.checkpoint`
+under `NonCancellable`, containing the BIN, native identities, donor provenance,
+removed records and thumbnail state, then swaps the Room pointer. A failed swap
+removes the candidate file; success sweeps the previous checkpoint. No BIN can
+commit independently of the metadata needed to interpret or restore it. Reset
+clears the pointer before removing old files. Legacy BIN/session pairs remain
+readable and migrate on their next edit; missing checkpoints fail closed.
 
 Project creation inserts a row to obtain its directory ID, then writes files and
 updates paths under `NonCancellable`. On failure remove files and call
@@ -212,7 +209,14 @@ resize/install paths then work unchanged. DEX, resources, manifest, signatures a
 locale-specific preview copies are omitted. Recorded vendor exports shrink 333 MiB
 to 31.5 MiB; a 571-member package becomes five to eight archive members.
 
-Schema 1 handles ordinary projects; schema 2 carries imported artwork. Vendor
+Schemas 1 and 2 remain readable. New edited projects use schema 3, which requires
+`SessionLineage` and an edited BIN together. It binds the original container digest,
+current-to-original variant names and every non-imported widget to its original
+index (or an explicit unknown/generated origin), including duplicate status.
+Insertion, removal and restore supply index changes; subsequent edits never infer
+identity from the new index. Legacy projects use the existing matching algorithm
+once when upgrading; historical ambiguity cannot be reconstructed. Saved removals
+retain original identities per variant. Database schema remains 5. Vendor
 pristine bytes remain unchanged; Reset removes imports. `WidgetImportOrigins` tracks
 an explicit origin ID, donor face, target variant, current indices and compact pristine
 entry with original rasters. Removal/insertion remaps indices; restore/duplicate
@@ -235,7 +239,7 @@ those names earlier, but neither behaviour is the containment mechanism.
 | Unopenable pristine container | Same validation/error funnel as package download |
 | Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
 | Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions |
-| Missing/inconsistent schema-2 origins | Never fall back to unrelated native artwork |
+| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities, the original digest and valid saved removals |
 
 Clamp manifest strings; an invalid selected-style name becomes no saved selection.
 After validation, creation uses the row/files cleanup contract above. Failed import

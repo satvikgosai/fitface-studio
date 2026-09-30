@@ -843,7 +843,7 @@ Imports and raster growth can also cross the ceiling.
 | Exact type schemas, not a generic minimum size | All 4,034 producer records have their type's exact size; a 40-byte Composite is not a valid 100-byte record |
 | Four alignment-reference fields only | Static/Hand `+0x1E`, Value/Composite `+0x22`, enabled by the adjacent code; see §7 |
 | Renumber real targets, preserve unresolved producer values | `remapAlignmentTarget`; refuse removal of a widget others reference; survivor checks compare referents, not integer values |
-| Original identity survives index changes | `originalWidgetSources` resolves through `payloadKey`/record indices, not raw byte offsets or `originalRecords[globalIndex]` |
+| Original identity survives index changes | Schema-3 checkpoints persist `SessionLineage` native sources and duplicate status; operations remap current indices explicitly. Legacy migration uses `originalWidgetSources` once. Unknown originals cannot be resized. Never use raw offsets or `originalRecords[globalIndex]` as identity. |
 | Source IDs are not identities | Static source is zero in 678/681 records; Sprite `(type, source)` happens to be unique in 1,486/1,518, not universally |
 | Every declared raster pointer is relocated | Static `+0x20`, Sprite's exact frame-count words, Hand `words[1]`, Arc `words[4]` (30/30), LineBar `words[2]` (16/16) |
 | Empty widget tables are valid | Removing the last widget retains the image section; snapshot, restore, preview and installer accept zero widgets |

@@ -82,6 +82,120 @@ class WidgetImportRepositoryTest {
     private fun exportFile() = File(context.cacheDir, "widget-import-tests/out.zip").also { it.parentFile!!.mkdirs() }
     private suspend fun export(id: Long): File = exportFile().also { repository.exportProject(id, Uri.fromFile(it).toString()) }
 
+    @Test fun nativeCheckpointCarriesIdentitiesAndRemovalAtomicallyThroughCopyAndArchive() = runBlocking {
+        var s = repository.openPackage(face("00003"))
+        val anchors = s.widgets.mapNotNull { it.alignedToGlobalIndex }.toSet()
+        val native = s.widgets.first { it.type == 1 && it.globalIndex !in anchors && it.placement == WidgetPlacement.CANVAS }
+        val expected = pixels(s, native.globalIndex)
+        s = repository.duplicateWidget("style0.bin", native.globalIndex, native.type, native.sequenceId, native.x, native.y, false)
+        val duplicate = s.widgets.last()
+        s = move(s, duplicate, 15)
+        s = repository.removeWidget("style0.bin", duplicate.globalIndex, duplicate.type, duplicate.sequenceId,
+            s.widgets.last().x, s.widgets.last().y, false, false)
+        val checkpoint = File(requireNotNull(dao.findById(s.projectId)?.editedBinPath))
+        val state = Json.parseToJsonElement(checkpoint.readText()).jsonObject
+        assertEquals(3, state.getValue("schema").jsonPrimitive.int)
+        assertTrue("native edits must have no fabricated donor", state["importOrigins"] == null)
+        assertTrue(state.getValue("lineage").jsonObject.getValue("widgets").jsonObject.isNotEmpty())
+        val archive = export(s.projectId)
+        val imported = repository.importProject(Uri.fromFile(archive).toString())
+        repository = repository()
+        s = repository.openProject(imported.id)
+        val restored = repository.restoreWidget(s.removedWidgets.single().id)
+        assertEquals(native.globalIndex, restored.widgets.last().duplicateSourceGlobalIndex)
+        assertEquals(native.originalX, restored.widgets.last().originalX)
+        assertArrayEquals(expected, pixels(restored, restored.widgets.last().globalIndex))
+        repository.resetEdits()
+        assertArrayEquals(bin("00003"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun legacyRemovedWidgetGetsAnIdentityBeforeTheNextEditChangesIndices() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val native = s.widgets.first { it.rotationTenths != null }
+        s = repository.duplicateWidget("style0.bin", native.globalIndex, native.type, native.sequenceId, native.x, native.y, false)
+        val copy = s.widgets.last()
+        s = repository.removeWidget("style0.bin", copy.globalIndex, copy.type, copy.sequenceId, copy.x, copy.y, false, false)
+        val source = export(s.projectId).readBytes()
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
+            while (true) {
+                val entry = input.nextEntry ?: break
+                var bytes = input.readBytes()
+                if (entry.name in setOf(ProjectArchive.ManifestEntry, ProjectArchive.SessionEntry)) {
+                    val obj = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.toMutableMap()
+                    obj["schema"] = JsonPrimitive(1); obj.remove("lineage")
+                    obj["removed"]?.let { list -> obj["removed"] = JsonArray(list.jsonArray.map { record ->
+                        JsonObject(record.jsonObject.filterKeys { it !in setOf("nativeIdentityRecorded", "nativeSourceIndices", "duplicateSourceVariants") })
+                    }) }
+                    bytes = JsonObject(obj).toString().encodeToByteArray()
+                }
+                zip.putNextEntry(ZipEntry(entry.name)); zip.write(bytes); zip.closeEntry()
+            }
+        } }
+        val file = exportFile().apply { writeBytes(out.toByteArray()) }
+        val imported = repository.importProject(Uri.fromFile(file).toString())
+        s = repository.openProject(imported.id)
+        assertFalse(s.removedWidgets.single().nativeIdentityRecorded)
+        s = move(s, s.widgets.last())
+        assertTrue(s.removedWidgets.single().nativeIdentityRecorded)
+        assertEquals(native.globalIndex, s.removedWidgets.single().nativeSourceIndices["style0.bin"])
+        repository = repository(); s = repository.openProject(s.projectId)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertEquals(native.globalIndex, s.widgets.last().duplicateSourceGlobalIndex)
+        assertEquals(native.originalRotationTenths, s.widgets.last().originalRotationTenths)
+    }
+
+    @Test fun missingNativeIdentityIsRejectedBeforeCreatingAnyProject() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        s = move(s, s.widgets.last())
+        val source = export(s.projectId).readBytes()
+        val inserts = dao.insertCalls
+        for (replacement in listOf<JsonElement?>(null, JsonObject(emptyMap()))) {
+            val out = ByteArrayOutputStream()
+            ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
+                while (true) {
+                    val entry = input.nextEntry ?: break
+                    var bytes = input.readBytes()
+                    if (entry.name == ProjectArchive.SessionEntry) {
+                        val obj = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.toMutableMap()
+                        if (replacement == null) obj.remove("lineage") else obj["lineage"] = replacement
+                        bytes = JsonObject(obj).toString().encodeToByteArray()
+                    }
+                    zip.putNextEntry(ZipEntry(entry.name)); zip.write(bytes); zip.closeEntry()
+                }
+            } }
+            val file = exportFile().apply { writeBytes(out.toByteArray()) }
+            assertTrue(runCatching { repository.importProject(Uri.fromFile(file).toString()) }.isFailure)
+            assertEquals(inserts, dao.insertCalls)
+        }
+    }
+
+    @Test fun legacyImportedArchiveUpgradesOnItsNextEdit() = runBlocking {
+        val s = add(repository.openPackage(face("00106")), "00008", 1)
+        val source = export(s.projectId).readBytes()
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
+            while (true) {
+                val entry = input.nextEntry ?: break
+                var bytes = input.readBytes()
+                if (entry.name in setOf(ProjectArchive.ManifestEntry, ProjectArchive.SessionEntry)) {
+                    val obj = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.toMutableMap()
+                    obj["schema"] = JsonPrimitive(2); obj.remove("lineage")
+                    bytes = JsonObject(obj).toString().encodeToByteArray()
+                }
+                zip.putNextEntry(ZipEntry(entry.name)); zip.write(bytes); zip.closeEntry()
+            }
+        } }
+        val file = exportFile().apply { writeBytes(out.toByteArray()) }
+        val imported = repository.importProject(Uri.fromFile(file).toString())
+        var loaded = repository.openProject(imported.id)
+        assertEquals("00008", loaded.widgets.last().importedFromFaceId)
+        loaded = move(loaded, loaded.widgets.last())
+        assertEquals(3, ProjectArchive.read(export(loaded.projectId).readBytes()).manifest.schema)
+        repository = repository()
+        assertEquals("00008", repository.openProject(loaded.projectId).widgets.last().importedFromFaceId)
+    }
+
     @Test fun compositeRotationPreservesOriginalThroughDuplicateReopenAndReset() = runBlocking {
         val pristine = repository.openPackage(face("00105"))
         val widget = pristine.widgets.first { it.rotationTenths != null }
@@ -216,7 +330,7 @@ class WidgetImportRepositoryTest {
         val added = add(native, "00003", 3) // Dictionary and new font resources.
         val file = export(added.projectId)
         val archived = ProjectArchive.read(file.readBytes())
-        assertEquals(2, archived.manifest.schema)
+        assertEquals(3, archived.manifest.schema)
         assertArrayEquals(bin("00106"), Fit3Apk.parse(file.readBytes()).binary)
         val imported = repository.importProject(Uri.fromFile(file).toString())
         val copy = repository.duplicateProject(added.projectId)
@@ -398,7 +512,7 @@ class WidgetImportRepositoryTest {
                 }
             } }
             val file = exportFile().apply { writeBytes(output.toByteArray()) }
-            if (caseIndex == 2) assertEquals(2, ProjectArchive.read(file.readBytes()).manifest.schema)
+            if (caseIndex == 2) assertEquals(3, ProjectArchive.read(file.readBytes()).manifest.schema)
             assertTrue(runCatching { repository.importProject(Uri.fromFile(file).toString()) }.isFailure)
             assertEquals(originalCount, dao.findByFaceId("00106").size)
             assertEquals(originalInserts, dao.insertCalls)

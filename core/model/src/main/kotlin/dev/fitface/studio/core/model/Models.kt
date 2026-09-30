@@ -745,6 +745,9 @@ data class RemovedWidget(
     val followsReading: Boolean = false,
     val recordsByVariant: Map<String, ByteArray>,
     val importOriginId: String? = null,
+    val nativeIdentityRecorded: Boolean = false,
+    val nativeSourceIndices: Map<String, Int> = emptyMap(),
+    val duplicateSourceVariants: Set<String> = emptySet(),
 ) {
     /** What it draws, named — the same label the widget list shows for a live record. */
     val category: WidgetCategory get() = WidgetCategory.forWidgetType(widgetType)

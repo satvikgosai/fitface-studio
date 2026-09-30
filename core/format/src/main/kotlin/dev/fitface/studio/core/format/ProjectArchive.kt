@@ -97,7 +97,7 @@ data class ProjectArchiveContents(
  * fresh one instead of nesting them.
  */
 object ProjectArchive {
-    const val Schema = 2
+    const val Schema = 3
 
     const val ManifestEntry = "fitface/project.json"
     const val EditedEntry = "fitface/edited.bin"
@@ -161,7 +161,7 @@ object ProjectArchive {
         require(manifest.schema in 1..Schema) {
             "a manifest is written at schema $Schema, not ${manifest.schema}"
         }
-        require(manifest.schema != 2 || (editedContainer != null && sessionState != null)) {
+        require(manifest.schema < 2 || (editedContainer != null && sessionState != null)) {
             "imported-widget archives require both the edit and its artwork metadata"
         }
         var containers = 0
@@ -268,7 +268,7 @@ object ProjectArchive {
                 "that project was exported by a newer version of this app",
             )
         }
-        if (manifest.schema == 2 && (edited == null || session == null))
+        if (manifest.schema >= 2 && (edited == null || session == null))
             throw ProjectArchiveException("that project's imported artwork or saved edit is missing")
         // A session with no edit describes removals from a container nothing removed
         // anything from. `pack` will not write that pair; an archive that carries it was
