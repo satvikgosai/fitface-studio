@@ -223,6 +223,22 @@ entry with original rasters. Removal/insertion remaps indices; restore/duplicate
 retain origin links. Native matching excludes import indices. Donor cache eviction
 cannot affect a saved import, and resize always uses donor originals.
 
+Style deletion composes an injective, ordered survivor map from current variant
+names to pristine names. Schema 3 validates that map, consecutive current names,
+the retained AOD/non-style paths, picker count and bounded font-resource additions.
+It records the digest of each added font or extended dictionary independently of
+widget origins, so deleting the last donor-owning style does not require a fake
+origin pointing at a missing variant. Native bindings and dictionary prefixes stay
+unchanged. Earlier schema-3 checkpoints without this resource closure retain their
+original identity-only path contract and upgrade on their next edit.
+
+The same checkpoint commits survivor identities, filtered/remapped removed records
+and active-style fallback with the edited BIN. Packaged PNG files retain pristine
+names; the editor and library resolve them through the survivor map. The library
+caches only the small map by immutable checkpoint path, bounded to 64 checkpoints.
+Reset restores the pristine variant identities and bytes. No database version
+change or extra storage permission is required.
+
 ### What an import refuses
 
 Validate before inserting a row. File output uses fixed names under a fresh row ID,
@@ -238,7 +254,7 @@ those names earlier, but neither behaviour is the containment mechanism.
 | Missing, invalid or newer manifest schema | Unknown-key decoding must not silently discard required future data |
 | Unopenable pristine container | Same validation/error funnel as package download |
 | Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
-| Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions |
+| Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions; schema 3: declared ordered style survivors and validated shared-resource closure |
 | Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities, the original digest and valid saved removals |
 
 Clamp manifest strings; an invalid selected-style name becomes no saved selection.

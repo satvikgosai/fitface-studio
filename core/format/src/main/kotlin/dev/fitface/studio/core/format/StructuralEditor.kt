@@ -259,6 +259,38 @@ object StructuralEditor {
         return edit
     }
 
+    /** Removes numbered styles only, keeping every survivor payload byte-for-byte. */
+    fun deleteStyles(source: Fit3Container, names: Set<String>): StructuralEdit {
+        requireValidAndTight(source)
+        val styles = FaceResources.selectableStyles(source)
+        val mapping = dev.fitface.studio.core.model.survivingStyleNames(styles.map { it.basename }, names)
+        require(styles.map { it.basename } == styles.indices.map { "style$it.bin" }) { "Styles are not consecutive." }
+        val setting = source.entryByBasename("setting.bin")
+        val preview = source.entryByBasename("preview.bin")
+        require(SettingRecord.parse(setting).styleCount == styles.size &&
+            PreviewStream.recordCount(preview) == styles.size && PreviewStream.isCanonical(preview)) {
+            "The style picker cannot be safely renumbered."
+        }
+        val defaultName = "style${setting.data[0x35].toInt() and 255}.bin"
+        val survivors = styles.filter { it.basename in mapping }
+        val frames = ByteArrayOutputStream()
+        survivors.forEach { entry ->
+            val index = styles.indexOf(entry)
+            frames.write(preview.data, index * PreviewStream.RECORD_STRIDE, PreviewStream.RECORD_STRIDE)
+        }
+        val replacements = mapOf(setting.index to setting.data.copyOf().also {
+            it[0x34] = survivors.size.toByte()
+            it[0x35] = survivors.indexOfFirst { entry -> entry.basename == defaultName }.coerceAtLeast(0).toByte()
+        }, preview.index to frames.toByteArray())
+        val edit = rebuild(source, replacements,
+            removedEntries = styles.filter { it.basename in names }.map { it.index }.toSet(),
+            renamedEntries = survivors.associate { it.index to (it.path.substringBeforeLast('/') + "/" + mapping.getValue(it.basename)) })
+        val introduced = crossResourceIssues(edit.container).map { it.code }.toSet() - crossResourceIssues(source).map { it.code }.toSet()
+        require(introduced.isEmpty()) { "Style deletion introduced $introduced" }
+        survivors.forEach { check(it.data.contentEquals(edit.container.entryByBasename(mapping.getValue(it.basename)).data)) }
+        return edit.copy(changedStyles = names.toList())
+    }
+
     /**
      * Deletes image records that nothing draws, and moves every pointer after them.
      *
@@ -463,11 +495,7 @@ object StructuralEditor {
         }
         val projected = source.fileSize + entryBasenames.size * addedBackgroundBytes(width, height)
         if (projected > WATCH_CONTAINER_BYTE_CEILING) {
-            throw Fit3FormatException(
-                "a ${width}x$height background in ${entryBasenames.size} styles would make " +
-                    "this container $projected bytes, over the " +
-                    "$WATCH_CONTAINER_BYTE_CEILING the watch accepts",
-            )
+            throw Fit3CapacityException(source.fileSize, projected)
         }
         val replacements = linkedMapOf<Int, ByteArray>()
         selectedEntries(source, entryBasenames).forEach { entry ->
@@ -2204,8 +2232,9 @@ object StructuralEditor {
         source: Fit3Container,
         replacements: Map<Int, ByteArray>,
         addedResources: Map<String, ByteArray> = emptyMap(),
-        /** Entries to leave out, by index. Only [keepFirstStyles] removes any. */
+        /** Entries to leave out, by index. */
         removedEntries: Set<Int> = emptySet(),
+        renamedEntries: Map<Int, String> = emptyMap(),
     ): StructuralEdit {
         val original = source.toByteArray()
         val header = original.copyOfRange(0, CONTAINER_HEADER_SIZE)
@@ -2215,6 +2244,12 @@ object StructuralEditor {
         var cursor = CONTAINER_HEADER_SIZE + (kept.size + addedResources.size) * DIRECTORY_ENTRY_SIZE
         kept.forEachIndexed { position, entry ->
             val payload = replacements[entry.index] ?: entry.data
+            renamedEntries[entry.index]?.let { path ->
+                val encoded = path.toByteArray(Charsets.UTF_8)
+                require(encoded.size < DIRECTORY_PATH_SIZE) { "Resource path is too long." }
+                directory[position].fill(0, 0, DIRECTORY_PATH_SIZE)
+                encoded.copyInto(directory[position])
+            }
             directory[position].putU32(0x40, cursor)
             directory[position].putU32(0x44, payload.size)
             directory[position].putU16(0x48, Crc16.ccittFalse(payload))
@@ -2260,11 +2295,7 @@ object StructuralEditor {
         // here, for all of them. Only growth is refused: a container that is already over
         // the limit must still be shrinkable back under it.
         if (assembled.size > WATCH_CONTAINER_BYTE_CEILING && assembled.size > original.size) {
-            throw Fit3FormatException(
-                "the edit would make this container ${assembled.size} bytes, over the " +
-                    "$WATCH_CONTAINER_BYTE_CEILING the watch accepts — it would install and " +
-                    "the watch would keep showing the old face",
-            )
+            throw Fit3CapacityException(original.size, assembled.size)
         }
         val changed = replacements.entries.sumOf { (index, bytes) ->
             val before = source.entries[index].data

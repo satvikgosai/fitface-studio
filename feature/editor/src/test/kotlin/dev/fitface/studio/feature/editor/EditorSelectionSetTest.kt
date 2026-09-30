@@ -58,6 +58,30 @@ class EditorSelectionSetTest {
 
     private fun settle() = scope.advanceUntilIdle()
 
+    @Test fun styleDeletionKeepsPendingPhotoPlacementAndSelectionOnTheSamePristineVariant() {
+        val variants = (0..2).map { EditorVariant("style$it.bin", VariantKind.STYLE, it) }
+        val original = snapshot(listOf(widget(1, x = 20, y = 20))).copy(
+            styleNames = variants.map { it.basename }, variants = variants, selectedVariant = variants.last(),
+            activeStyleName = "style2.bin", originalVariants = variants.associate { it.basename to it.basename })
+        val repository = FakeRepository(original)
+        val vm = EditorViewModel(repository, installer, DiagnosticsLog(), mockk(relaxed = true))
+        vm.loadProject(1); settle(); vm.selectWidget(1)
+        vm.prepareBackground("content://test/photo"); settle(); vm.transformImage(1.2f, .1f, .2f)
+        vm.markPreviewReviewed()
+        val pending = vm.state.value.pendingImage
+        val placement = vm.state.value.placement
+        val after = original.copy(styleNames = listOf("style0.bin"), variants = listOf(variants.first()),
+            selectedVariant = variants.first(), activeStyleName = "style0.bin",
+            originalVariants = mapOf("style0.bin" to "style2.bin"), isDirty = true)
+        vm.acceptStyleDeletion(after)
+        assertEquals(pending, vm.state.value.pendingImage)
+        assertEquals(placement, vm.state.value.placement)
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        assertFalse(vm.state.value.previewReviewed)
+        vm.acceptStyleDeletion(after.copy(originalVariants = mapOf("style0.bin" to "style1.bin")))
+        assertNull(vm.state.value.selectedWidgetIndex)
+    }
+
     private fun opened(widgets: List<WidgetGuide> = listOf(
         widget(1, x = 20, y = 20), widget(2, x = 60, y = 120), widget(3, x = 100, y = 220),
     )): Pair<EditorViewModel, FakeRepository> {
@@ -439,6 +463,8 @@ class EditorSelectionSetTest {
      */
     private class FakeRepository(private var current: EditorSnapshot) :
         WatchFaceRepository by mockk(relaxed = true) {
+        override suspend fun prepareReplacementImage(imageUri: String) =
+            dev.fitface.studio.core.model.ReplacementImage(imageUri, current.preview)
         val reorders = mutableListOf<Pair<Int, Int>>()
         var failReorder = false
         override suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,

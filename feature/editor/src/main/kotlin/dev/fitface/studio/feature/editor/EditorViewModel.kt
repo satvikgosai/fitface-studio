@@ -1,6 +1,7 @@
 package dev.fitface.studio.feature.editor
 
 import dev.fitface.studio.core.model.visualBounds
+import dev.fitface.studio.core.model.containerCapacity
 import dev.fitface.studio.core.model.visualOffsetX
 import dev.fitface.studio.core.model.visualOffsetY
 
@@ -157,6 +158,7 @@ data class EditorUiState(
     val pendingSetMove: List<WidgetMovePreview> = emptyList(),
     val directInstall: DirectInstallState = DirectInstallState(),
     val error: UserMessage? = null,
+    val capacity: dev.fitface.studio.core.model.ContainerCapacity? = null,
     /** The pasteable report, non-null while the dialog is open. */
     val diagnosticsReport: String? = null,
 )
@@ -314,6 +316,7 @@ class EditorViewModel @Inject constructor(
      */
     fun selectVariant(variant: EditorVariant) {
         mutableState.value = mutableState.value.copy(
+            capacity = null,
             selectedWidgetIndex = null,
             // A global index means something different in every entry.
             multiSelection = emptyList(),
@@ -468,6 +471,7 @@ class EditorViewModel @Inject constructor(
                 pendingWidgetMove = null,
                 pendingSetMove = emptyList(),
                 previewReviewed = false,
+                capacity = null,
                 error = null,
             )
             var latest = snapshot
@@ -544,6 +548,21 @@ class EditorViewModel @Inject constructor(
     fun acceptWidgetImport(snapshot: EditorSnapshot) = acceptImport(snapshot, selectLastWidget = true)
 
     fun acceptBackgroundImport(snapshot: EditorSnapshot) = acceptImport(snapshot, selectLastWidget = false)
+
+    /** Deletion is already committed. Keep any pending image and placement for a fresh review. */
+    fun acceptStyleDeletion(snapshot: EditorSnapshot) {
+        if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
+        val previous = mutableState.value.snapshot
+        val sameVariant = previous?.originalVariants?.get(previous.selectedVariant.basename) ==
+            snapshot.originalVariants[snapshot.selectedVariant.basename]
+        clearPendingMoves()
+        directInstaller.payloadChanged()
+        mutableState.value = mutableState.value.copy(snapshot = snapshot,
+            selectedWidgetIndex = mutableState.value.selectedWidgetIndex.takeIf { sameVariant },
+            multiSelection = mutableState.value.multiSelection.takeIf { sameVariant }.orEmpty(),
+            pendingWidgetMove = null, pendingSetMove = emptyList(),
+            previewReviewed = false, capacity = null, error = null)
+    }
 
     private fun acceptImport(snapshot: EditorSnapshot, selectLastWidget: Boolean) {
         if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
@@ -1117,6 +1136,7 @@ class EditorViewModel @Inject constructor(
                 pendingWidgetMove = null,
                 pendingSetMove = emptyList(),
                 previewReviewed = false,
+                capacity = null,
                 error = null,
             )
             runCatching { block() }
@@ -1172,6 +1192,7 @@ class EditorViewModel @Inject constructor(
             isWorking = false,
             pendingWidgetMove = null,
             pendingSetMove = emptyList(),
+            capacity = error.containerCapacity(),
             error = UserMessage(messageIds.incrementAndGet(), text),
         )
     }

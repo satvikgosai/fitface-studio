@@ -60,6 +60,21 @@ class CanvasIntegrityTest {
         assumeTrue("corpus holds no containers", containers.isNotEmpty())
     }
 
+    @Test fun deletingFirstAndMiddleStylesPreservesEverySurvivorsCurrentResourceRender() {
+        containers.forEach { path ->
+            val source = Fit3Container.parse(Files.readAllBytes(path))
+            val styles = dev.fitface.studio.core.format.FaceResources.selectableStyles(source)
+            val removed = setOf(styles.first().basename, styles[styles.size / 2].basename)
+            val after = StructuralEditor.deleteStyles(source, removed).container
+            val mapping = dev.fitface.studio.core.model.survivingStyleNames(styles.map { it.basename }, removed)
+            mapping.forEach { (old, next) ->
+                val beforeFrame = WidgetPreviewComposer.compose(source.entryByBasename(old), source.entries).composed
+                val afterFrame = WidgetPreviewComposer.compose(after.entryByBasename(next), after.entries).composed
+                org.junit.Assert.assertArrayEquals("${path.fileName}: $old -> $next", beforeFrame.argb, afterFrame.argb)
+            }
+        }
+    }
+
     @Test fun reorderingOpaqueOverlappingWidgetsChangesCoverageWithoutChangingAnyArtwork() {
         val path = containers.first { it.fileName.toString().contains("00112") }
         val source = Fit3Container.parse(Files.readAllBytes(path))

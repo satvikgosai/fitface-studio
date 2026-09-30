@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -67,9 +68,12 @@ import dev.fitface.studio.core.ui.*
 import kotlin.math.roundToInt
 
 @Composable
-internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
-    onImported: (EditorSnapshot) -> Unit, backgroundMode: Boolean = false, viewModel: WidgetImportViewModel = hiltViewModel()) {
+internal fun WidgetImportRoute(initialSnapshot: EditorSnapshot, onDismiss: () -> Unit,
+    onImported: (EditorSnapshot) -> Unit, onStylesDeleted: (EditorSnapshot) -> Unit = {},
+    backgroundMode: Boolean = false, viewModel: WidgetImportViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val snapshot = state.targetSnapshot ?: initialSnapshot
+    var managingStyles by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(backgroundMode) { viewModel.start(snapshot, backgroundMode) }
     LaunchedEffect(state.imported) { state.imported?.let { viewModel.close(); onImported(it) } }
     val back = { if (viewModel.back()) { viewModel.close(); onDismiss() } }
@@ -121,6 +125,13 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
                 // and its Cancel button sat at the top of a list someone had scrolled far
                 // down to tap a face — a transfer with no visible way to stop it.
                 ImportNotices(state, viewModel)
+                if (state.stylesDeleted) Text(stringResource(R.string.editor_style_delete_saved),
+                    Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
+                if (state.capacity != null || state.backgroundPreview?.skippedVariants?.isNotEmpty() == true) {
+                    TextButton(onClick = { managingStyles = true }, enabled = !state.busy, modifier = Modifier.padding(horizontal = 8.dp)) {
+                        Text(stringResource(R.string.editor_manage_styles))
+                    }
+                }
                 when (state.stage) {
                     WidgetImportStage.FACES -> DonorFacesPage(state, viewModel, Modifier.weight(1f))
                     WidgetImportStage.WIDGETS -> if (state.backgroundMode) {
@@ -135,6 +146,9 @@ internal fun WidgetImportRoute(snapshot: EditorSnapshot, onDismiss: () -> Unit,
             }
         }
     }
+    if (managingStyles) StyleManagementRoute(snapshot.projectId, protectedVariant = snapshot.selectedVariant.basename,
+        capacity = state.capacity, onDismiss = { managingStyles = false },
+        onDeleted = { managingStyles = false; viewModel.acceptStyleDeletion(it); onStylesDeleted(it) })
 }
 
 /**

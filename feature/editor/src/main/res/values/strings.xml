@@ -501,4 +501,21 @@
     <string name="editor_arrange_backward">Send backward</string>
     <string name="editor_arrange_back">Send to back</string>
     <string name="editor_arrange_boundaries">Full-face background layers stay fixed. Unavailable actions are at a layer boundary. A move that changes widget alignment will be refused.</string>
+    <string name="editor_manage_styles">Manage styles</string>
+    <string name="editor_style_delete_action">Delete %1$s</string>
+    <string name="editor_styles_delete_title">Delete selected styles?</string>
+    <string name="editor_styles_review_deletion">Review deletion</string>
+    <string name="editor_styles_delete_confirm">Delete styles</string>
+    <string name="editor_style_capacity_usage">Watch-face storage: %1$s of 4 MiB</string>
+    <string name="editor_style_capacity_deficit">This edit needs %1$,d more bytes of free space.</string>
+    <string name="editor_style_delete_explanation">Choose styles you do not use. These previews show their current edits. Keep at least one style.</string>
+    <string name="editor_style_reclaims">Frees %1$,d bytes</string>
+    <string name="editor_style_keep_one">The last style must be kept.</string>
+    <string name="editor_style_protected">Kept for your pending edit.</string>
+    <string name="editor_style_delete_savings">Frees %1$,d bytes · Styles remaining: %2$d</string>
+    <string name="editor_style_renumbering">Remaining styles will be numbered in this order:</string>
+    <string name="editor_style_active_after">Active after deletion: %1$s</string>
+    <string name="editor_style_delete_warning">This permanently removes the selected styles and their edits from this project. Reset project restores the original styles but discards all other edits too.</string>
+    <string name="editor_style_delete_saved">Style deletion is saved separately. Cancelling the pending edit will not restore deleted styles.</string>
+    <string name="editor_style_aod_kept">AOD is kept separately and cannot be deleted here.</string>
 </resources>

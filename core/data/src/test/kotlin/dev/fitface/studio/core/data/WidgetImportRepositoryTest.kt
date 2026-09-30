@@ -82,6 +82,105 @@ class WidgetImportRepositoryTest {
     private fun exportFile() = File(context.cacheDir, "widget-import-tests/out.zip").also { it.parentFile!!.mkdirs() }
     private suspend fun export(id: Long): File = exportFile().also { repository.exportProject(id, Uri.fromFile(it).toString()) }
 
+    @Test fun deletingAndRenumberingStylesPreservesNativeArtworkRestoreArchiveAndReset() = runBlocking {
+        var s = repository.openPackage(face("00112"))
+        s = repository.currentSnapshot("style2.bin")
+        val originalStyle = s.originalVariants.getValue(s.selectedVariant.basename)
+        val native = s.widgets.first { it.type == 3 }
+        val expected = pixels(s, native.globalIndex)
+        s = repository.resizeWidget("style2.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, native.width - 2, native.height - 3, false)
+        val current = s.widgets.single { it.globalIndex == native.globalIndex }
+        s = repository.duplicateWidget("style2.bin", current.globalIndex, current.type, current.sequenceId, current.x, current.y, false)
+        val duplicate = s.widgets.last()
+        s = repository.removeWidget("style2.bin", duplicate.globalIndex, duplicate.type, duplicate.sequenceId,
+            duplicate.x, duplicate.y, true, false)
+        val review = repository.styleManagement()
+        val beforeBytes = s.containerBytes
+        s = repository.deleteStyles(setOf("style0.bin", "style1.bin"), review.revision)
+        assertEquals(beforeBytes - review.reclaimableBytes.getValue("style0.bin") - review.reclaimableBytes.getValue("style1.bin"), s.containerBytes)
+        assertEquals("style0.bin", s.activeStyleName)
+        assertEquals(originalStyle, s.originalVariants.getValue("style0.bin"))
+        assertArrayEquals(review.previews.getValue("style2.bin").argb, s.composedPreview.argb)
+        assertEquals(setOf("style0.bin"), s.removedWidgets.single().recordsByVariant.keys)
+        val copy = repository.duplicateProject(s.projectId)
+        s = repository.openProject(copy.id)
+        val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
+        repository = repository(); s = repository.openProject(imported.id)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        val restored = s.widgets.last()
+        assertEquals(native.width, restored.originalWidth)
+        s = repository.resizeWidget("style0.bin", restored.globalIndex, restored.type, restored.sequenceId,
+            restored.x, restored.y, native.width, native.height, false)
+        assertArrayEquals(expected, pixels(s, restored.globalIndex))
+        val reset = repository.resetEdits()
+        assertEquals("style2.bin", reset.activeStyleName)
+        assertArrayEquals(bin("00112"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun deletingTheOnlyImportedStyleRetainsSharedFontResourcesWithoutAFakeOrigin() = runBlocking {
+        var s = repository.openPackage(face("00008"))
+        s = add(s, "00028", 13)
+        val added = s.widgets.last()
+        assertNotNull(added.importedFromFaceId)
+        s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        assertFalse(s.widgets.any { it.importedFromFaceId != null })
+        repository = repository(); s = repository.openProject(s.projectId)
+        val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
+        s = repository.openProject(imported.id)
+        s = add(s, "00028", 13)
+        assertNotNull(s.widgets.last().importedFromFaceId)
+        assertTrue(repository.prepareDirectInstall().copyBytes().isNotEmpty())
+    }
+
+    @Test fun importedArtworkMovesToRenumberedStyleAndStillResizesFromDonor() = runBlocking {
+        var s = repository.openPackage(face("00008"))
+        s = repository.currentSnapshot("style2.bin")
+        s = add(s, "00023", 2)
+        val hand = s.widgets.last()
+        val expected = pixels(s, hand.globalIndex)
+        s = repository.deleteStyles(setOf("style0.bin", "style1.bin"), repository.styleManagement().revision)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals("00023", s.widgets.last().importedFromFaceId)
+        s = repository.resizeWidget("style0.bin", hand.globalIndex, hand.type, hand.sequenceId,
+            hand.x, hand.y, hand.width - 1, hand.height - 1, false)
+        val small = s.widgets.last()
+        s = repository.resizeWidget("style0.bin", small.globalIndex, small.type, small.sequenceId,
+            small.x, small.y, hand.width, hand.height, false)
+        assertArrayEquals(expected, pixels(s, hand.globalIndex))
+    }
+
+    @Test fun deletionReviewCannotDeleteADifferentProjectWithIdenticalBytes() = runBlocking {
+        repository.openPackage(face("00112"))
+        val review = repository.styleManagement()
+        val other = repository.openPackage(face("00112"))
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), review.revision) }.isFailure)
+        assertEquals(other.projectId, repository.currentSnapshot().projectId)
+        assertArrayEquals(bin("00112"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun deletionRefusalAndFailedCommitLeaveBytesSelectionAndCheckpointUnchanged() = runBlocking {
+        var s = repository.openPackage(face("00112"))
+        s = repository.currentSnapshot("aod.bin")
+        val review = repository.styleManagement()
+        val bytes = repository.prepareDirectInstall().copyBytes()
+        dao.fail = true
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), review.revision) }.isFailure)
+        dao.fail = false
+        assertEquals("aod.bin", repository.currentSnapshot().selectedVariant.basename)
+        assertArrayEquals(bytes, repository.prepareDirectInstall().copyBytes())
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertArrayEquals(bytes, repository.prepareDirectInstall().copyBytes())
+        repository.currentSnapshot("aod.bin")
+        s = repository.deleteStyles(setOf("style0.bin"), review.revision)
+        assertEquals("aod.bin", s.selectedVariant.basename)
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), review.revision) }.isFailure)
+        s = repository.deleteStyles(s.styleNames.drop(1).toSet(), repository.styleManagement().revision)
+        assertEquals(1, s.styleNames.size)
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision) }.isFailure)
+        assertTrue(runCatching { repository.deleteStyles(setOf("aod.bin"), repository.styleManagement().revision) }.isFailure)
+    }
+
     @Test fun reorderedTwinsKeepTheirOriginalThroughResizeAllStylesRemoveRestoreAndArchive() = runBlocking {
         val original = repository.openPackage(face("00003"))
         val native = original.widgets.first { it.type == 1 && it.placement == WidgetPlacement.CANVAS }

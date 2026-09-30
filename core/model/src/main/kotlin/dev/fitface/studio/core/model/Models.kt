@@ -829,6 +829,8 @@ data class EditorSnapshot(
     val activeStyleName: String,
     /** Face entries whose payload actually differs from the pristine container. */
     val editedVariantNames: Set<String> = emptySet(),
+    /** Current name to pristine name, stable across style deletions. */
+    val originalVariants: Map<String, String> = variants.associate { it.basename to it.basename },
     /**
      * The always-on display's own generated thumbnail, for its Styles-page row when it
      * is not [selectedVariant] — there is no packaged AOD preview to show instead, the
@@ -1100,6 +1102,8 @@ class DirectInstallPayload(
 }
 
 interface WatchFaceRepository {
+    suspend fun styleManagement(): StyleManagement = throw UnsupportedOperationException()
+    suspend fun deleteStyles(names: Set<String>, revision: String): EditorSnapshot = throw UnsupportedOperationException()
     /** Loads an independent catalogue package without creating/opening a donor project. */
     suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = throw UnsupportedOperationException()
     suspend fun widgetDonorVariant(handle: String, variant: String): WidgetDonorVariant = throw UnsupportedOperationException()

@@ -12,6 +12,8 @@ data class SessionLineage(
     val originalSha256: String,
     val variants: Map<String, String>,
     val widgets: Map<String, Map<Int, NativeWidgetOrigin>>,
+    /** Added font/dictionary closure survives deletion of its last widget-owning style. */
+    val sharedResources: Map<String, String>? = null,
 ) {
     fun remap(variant: String, mapping: (Int) -> Int?) = copy(widgets = widgets +
         (variant to widgets.getValue(variant).mapNotNull { (index, origin) ->
@@ -45,16 +47,43 @@ data class SessionLineage(
     fun validate(original: Fit3Container, current: Fit3Container, imports: WidgetImportOrigins?) {
         require(originalSha256 == WidgetImportOrigins.digest(original.toByteArray())) { "Widget identities belong to another face." }
         val names = FaceResources.variantEntries(current).map { it.basename }.toSet()
-        // Deleting/renaming variants is introduced separately; do not grant it implicitly.
-        require(variants.keys == names && variants.values.toSet() == names && variants.all { it.key == it.value }) {
-            "Invalid original variant identities."
-        }
+        val originalStyles = FaceResources.selectableStyles(original).map { it.basename }
+        val styles = FaceResources.selectableStyles(current).map { it.basename }
+        require(styles.isNotEmpty() && styles == styles.indices.map { "style$it.bin" } &&
+            variants.keys == names && variants.values.distinct().size == variants.size &&
+            styles.map { variants[it] } == originalStyles.filter { it in variants.values } &&
+            (names - styles.toSet()) == FaceResources.variantEntries(original).map { it.basename }.toSet() - originalStyles.toSet() &&
+            (names - styles.toSet()).all { variants[it] == it }) { "Invalid original variant identities." }
         require(widgets.keys == names) { "Missing widget identities." }
-        require(current.entries.take(original.entries.size).map { it.path } == original.entries.map { it.path }) {
+        val inverse = variants.entries.associate { it.value to it.key }
+        val expectedPaths = original.entries.mapNotNull { entry ->
+            if (entry.basename in originalStyles) inverse[entry.basename]?.let {
+                entry.path.substringBeforeLast('/') + "/" + it
+            } else entry.path
+        }
+        require(current.entries.take(expectedPaths.size).map { it.path } == expectedPaths) {
             "The edited entry paths do not belong to this face."
         }
-        if (imports == null) require(current.entries.size == original.entries.size) { "Unexpected added resources." }
-        imports?.validate(original, current)
+        if (sharedResources == null) {
+            // Schema-3 checkpoints written before style deletion still require origins.
+            require(styles == originalStyles && variants.all { it.key == it.value }) {
+                "Style deletion requires its shared resource metadata."
+            }
+            if (imports == null) require(current.entries.size == expectedPaths.size) { "Unexpected added resources." }
+        } else {
+            require(sharedResources == resourceClosure(original, current)) { "Shared imported resources are missing or inconsistent." }
+        }
+        WidgetImportOrigins.validateResources(original, current, expectedPaths)
+        imports?.validate(original, current, expectedPaths)
+        if (styles.size != originalStyles.size) {
+            val setting = current.entryByBasename("setting.bin")
+            require(SettingRecord.parse(setting).styleCount == styles.size &&
+                (setting.data[0x35].toInt() and 255) in styles.indices &&
+                PreviewStream.isCanonical(current.entryByBasename("preview.bin")) &&
+                PreviewStream.recordCount(current.entryByBasename("preview.bin")) == styles.size) {
+                "The saved style picker does not match its surviving styles."
+            }
+        }
         names.forEach { variant ->
             val before = FaceRecordParser.scanWidgets(originalEntry(original, variant)).associateBy { it.globalIndex }
             val records = FaceRecordParser.scanWidgets(current.entryByBasename(variant)).associateBy { it.globalIndex }
@@ -75,7 +104,21 @@ data class SessionLineage(
         }
     }
 
+    fun retainVariants(mapping: Map<String, String>): SessionLineage = copy(
+        variants = variants.mapNotNull { (old, original) -> mapping[old]?.let { it to original } }.toMap(),
+        widgets = widgets.mapNotNull { (old, origins) -> mapping[old]?.let { it to origins } }.toMap(),
+    )
+
+    fun withResources(original: Fit3Container, current: Fit3Container) =
+        copy(sharedResources = resourceClosure(original, current))
+
     companion object {
+        private fun resourceClosure(original: Fit3Container, current: Fit3Container): Map<String, String> =
+            current.entries.filter { entry ->
+                entry.basename.matches(Regex("font_[A-Za-z0-9_]+\\.bin")) &&
+                    original.entries.singleOrNull { it.path == entry.path }?.data?.contentEquals(entry.data) != true
+            }.associate { it.basename to WidgetImportOrigins.digest(it.data) }
+
         /** One-time migration of legacy edits; subsequent edits never re-infer identity. */
         fun capture(original: Fit3Container, current: Fit3Container, imports: WidgetImportOrigins?): SessionLineage {
             val variants = FaceResources.variantEntries(current).associate { it.basename to it.basename }

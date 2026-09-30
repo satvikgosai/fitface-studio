@@ -26,8 +26,8 @@ object BackgroundImporter {
         val adding = existing.isEmpty()
         val targets = if (adding) StructuralEditor.backgroundStylesThatFit(target,
             scope.map { it.basename }, targetVariant) else existing.map { it.basename }
-        if (targets.isEmpty()) throw Fit3FormatException(
-            "There is not enough space to add a background. Free space before trying again.")
+        if (targets.isEmpty()) throw Fit3CapacityException(target.fileSize, target.fileSize +
+            StructuralEditor.addedBackgroundBytes(background.width, background.height))
         targets.forEach { name ->
             val panel = FaceRecordParser.panelSize(target.entryByBasename(name))
             if (panel.width != background.width || panel.height != background.height)

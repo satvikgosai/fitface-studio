@@ -32,6 +32,9 @@ data class WidgetImportStep(
     val reason: String? = null,
 )
 data class WidgetImportUiState(
+    val targetSnapshot: EditorSnapshot? = null,
+    val capacity: ContainerCapacity? = null,
+    val stylesDeleted: Boolean = false,
     val stage: WidgetImportStage = WidgetImportStage.FACES,
     val backgroundMode: Boolean = false,
     val backgroundContent: BackgroundDonorVariant? = null,
@@ -128,6 +131,7 @@ class WidgetImportViewModel @Inject constructor(
     private var projectId = 0L
     private var target = ""
     private var opened = false
+    private var targetOriginal: String? = null
 
     fun start(snapshot: EditorSnapshot, backgroundMode: Boolean = false) {
         if (opened && projectId == snapshot.projectId && target == snapshot.selectedVariant.basename &&
@@ -136,11 +140,28 @@ class WidgetImportViewModel @Inject constructor(
         opened = true
         projectId = snapshot.projectId
         target = snapshot.selectedVariant.basename
+        targetOriginal = snapshot.originalVariants[target]
         mutable.value = WidgetImportUiState(backgroundMode = backgroundMode)
         loadCatalog()
     }
 
     fun setQuery(query: String) { mutable.update { it.copy(query = query) } }
+
+    /** Keep donor choices, but all review tickets must be rebuilt against the new bytes. */
+    fun acceptStyleDeletion(snapshot: EditorSnapshot) {
+        val current = mutable.value
+        if (current.busy || snapshot.projectId != projectId) return
+        target = snapshot.originalVariants.entries.single { it.value == targetOriginal }.key
+        val remaining = if (current.batch.isEmpty()) current.picks else current.batch
+            .filter { it.outcome != WidgetImportOutcome.ADDED }.map { it.globalIndex }
+        mutable.update { it.copy(targetSnapshot = snapshot, capacity = null, stylesDeleted = true,
+            preview = null, backgroundPreview = null, pickError = null, error = null,
+            batchSnapshot = snapshot.takeIf { current.batch.isNotEmpty() }, picks = remaining,
+            stage = WidgetImportStage.WIDGETS) }
+        if (current.backgroundMode) reviewBackground()
+        else if (remaining.size == 1) priceSingle(remaining.single(), reviewAfter = true)
+        else if (remaining.isNotEmpty()) mutable.update { it.copy(stage = WidgetImportStage.REVIEW) }
+    }
     fun loadCatalog() = run {
         val faces = (catalog.cachedCatalog()?.takeIf { it.faces.isNotEmpty() } ?: catalog.loadCatalog()).faces
         val unavailable = catalog.uneditableAppIds()
@@ -275,18 +296,25 @@ class WidgetImportViewModel @Inject constructor(
             // already moved past, and `add()` would happily commit it.
             cancelWork()
             mutable.update {
-                it.copy(picks = picks, preview = null, pickError = null, error = null,
+                it.copy(picks = picks, preview = null, pickError = null, error = null, capacity = null,
                     busy = false, progress = null)
             }
             return
         }
         mutable.update { it.copy(picks = picks, preview = null, pickError = null, error = null) }
+        priceSingle(only)
+    }
+
+    private fun priceSingle(only: Int, reviewAfter: Boolean = false) {
+        val current = mutable.value
+        val picks = current.picks
         val donor = current.donor ?: return
         val variant = current.variant ?: return
         run {
             try {
                 val preview = repository.previewWidgetImport(donor.handle, variant.basename, only, projectId, target)
-                mutable.update { it.copy(preview = preview) }
+                mutable.update { it.copy(preview = preview, capacity = null,
+                    stage = if (reviewAfter) WidgetImportStage.REVIEW else it.stage) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -296,7 +324,7 @@ class WidgetImportViewModel @Inject constructor(
                 // moved on would disable a button for a widget that never failed.
                 mutable.update {
                     if (it.picks != picks) it
-                    else it.copy(pickError = (error as? WatchFaceException)?.userMessage
+                    else it.copy(capacity = error.containerCapacity(), pickError = (error as? WatchFaceException)?.userMessage
                         ?: error.message ?: "This widget could not be added.")
                 }
             }
@@ -324,7 +352,10 @@ class WidgetImportViewModel @Inject constructor(
         mutable.update { it.copy(saving = true) }
         run {
             val snapshot = repository.importWidget(preview.ticket)
-            mutable.update { it.copy(imported = snapshot) }
+            mutable.update { state -> if (state.batch.isEmpty()) state.copy(imported = snapshot) else
+                state.copy(stage = WidgetImportStage.BATCH, batchSnapshot = snapshot,
+                    batch = state.batch.filter { it.outcome == WidgetImportOutcome.ADDED } +
+                        WidgetImportStep(state.picks.single(), WidgetImportOutcome.ADDED)) }
         }
     }
 
@@ -351,7 +382,8 @@ class WidgetImportViewModel @Inject constructor(
         val current = mutable.value
         if (current.busy || current.imported != null || current.picks.size < 2) return
         mutable.update {
-            it.copy(stage = WidgetImportStage.BATCH, batch = it.picks.map(::WidgetImportStep))
+            it.copy(stage = WidgetImportStage.BATCH, batch = it.batch.filter { step -> step.outcome == WidgetImportOutcome.ADDED } +
+                it.picks.map(::WidgetImportStep))
         }
         runBatch()
     }
@@ -381,6 +413,7 @@ class WidgetImportViewModel @Inject constructor(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
+                    mutable.update { it.copy(capacity = error.containerCapacity()) }
                     diagnostics.warn("WidgetImport", "Batch import failed",
                         (error as? WatchFaceException)?.technicalDetail, error)
                     mark(index, WidgetImportOutcome.FAILED, (error as? WatchFaceException)?.userMessage
@@ -444,6 +477,7 @@ class WidgetImportViewModel @Inject constructor(
                 releaseDonor()
                 mutable.update { it.copy(stage = WidgetImportStage.FACES, donor = null, content = null,
                     backgroundContent = null, backgroundPreview = null, contentVariant = null, variant = null, picks = emptyList(), preview = null,
+                    batch = emptyList(), batchSnapshot = null, capacity = null,
                     pickError = null, showList = false, error = null) }
             }
             WidgetImportStage.FACES -> return true
@@ -473,7 +507,7 @@ class WidgetImportViewModel @Inject constructor(
     private fun run(block: suspend () -> Unit) {
         cancelWork()
         val own = generation
-        mutable.update { it.copy(busy = true, error = null) }
+        mutable.update { it.copy(busy = true, error = null, capacity = null) }
         work = viewModelScope.launch {
             try {
                 block()
@@ -489,7 +523,7 @@ class WidgetImportViewModel @Inject constructor(
                         mutable.update { it.copy(uneditable = it.uneditable + face.appId) }
                     }
                     diagnostics.warn("WidgetImport", "Widget import failed", (error as? WatchFaceException)?.technicalDetail, error)
-                    mutable.update { it.copy(error = (error as? WatchFaceException)?.userMessage
+                    mutable.update { it.copy(capacity = error.containerCapacity(), error = (error as? WatchFaceException)?.userMessage
                         ?: error.message ?: "The widget could not be imported. Try again.") }
                 }
             } finally {

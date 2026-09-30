@@ -288,6 +288,7 @@ fun EditorRoute(
         onRestoreWidget = viewModel::restoreWidget,
         onWidgetImported = viewModel::acceptWidgetImport,
         onBackgroundImported = viewModel::acceptBackgroundImport,
+        onStylesDeleted = viewModel::acceptStyleDeletion,
         onResizeWidget = viewModel::resizeSelectedWidget,
         onWidgetColor = viewModel::setSelectedWidgetColor,
         onRotateWidget = viewModel::rotateSelectedWidget,
@@ -392,6 +393,7 @@ private fun EditorScreen(
     onRestoreWidget: (Long) -> Unit,
     onWidgetImported: (EditorSnapshot) -> Unit,
     onBackgroundImported: (EditorSnapshot) -> Unit,
+    onStylesDeleted: (EditorSnapshot) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onRotateWidget: (Int) -> Unit,
@@ -426,8 +428,16 @@ private fun EditorScreen(
     var importingBackground by rememberSaveable { mutableStateOf(false) }
 
     val snapshot = state.snapshot
+    var managingStyles by rememberSaveable { mutableStateOf(false) }
+    var deletingStyle by rememberSaveable { mutableStateOf<String?>(null) }
+    if (managingStyles && snapshot != null) StyleManagementRoute(snapshot.projectId,
+        initial = deletingStyle, capacity = state.capacity,
+        protectedVariant = snapshot.selectedVariant.basename.takeIf { deletingStyle == null || state.pendingImage != null },
+        onDismiss = { managingStyles = false },
+        onDeleted = { managingStyles = false; onStylesDeleted(it) })
     if ((importing || importingBackground) && snapshot != null) WidgetImportRoute(snapshot,
         backgroundMode = importingBackground,
+        onStylesDeleted = onStylesDeleted,
         onDismiss = { importing = false; importingBackground = false },
         onImported = { result ->
             if (importingBackground) onBackgroundImported(result) else onWidgetImported(result)
@@ -514,6 +524,15 @@ private fun EditorScreen(
                     Modifier.fillMaxWidth().height(1.dp)
                         .background(MaterialTheme.colorScheme.outlineVariant),
                 )
+                state.capacity?.let { capacity ->
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        Text(stringResource(R.string.editor_style_capacity_deficit, capacity.deficit),
+                            style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { deletingStyle = null; managingStyles = true }, enabled = !state.isWorking) {
+                            Text(stringResource(R.string.editor_manage_styles))
+                        }
+                    }
+                }
                 // The wide layout keeps a canvas beside every page but Canvas itself, so a
                 // page that also renders the face renders it twice, side by side, at two
                 // sizes. Send is the one where that is pure duplication: both are the same
@@ -538,6 +557,7 @@ private fun EditorScreen(
                         onRestoreWidget = onRestoreWidget,
                         onImportWidget = { importing = true },
                         onImportBackground = { importingBackground = true },
+                        onManageStyles = { deletingStyle = it; managingStyles = true },
                         onResizeWidget = onResizeWidget,
                         onWidgetColor = onWidgetColor,
                         onOpenRotation = { rotating = true },
@@ -672,7 +692,7 @@ private fun EditorUnavailable(
  * reaching the screen.
  */
 @Composable
-private fun variantLabel(basename: String): String =
+internal fun variantLabel(basename: String): String =
     EditorVariant.styleNumberOf(basename)
         ?.let { styleLabel(it) }
         ?: if (basename == AOD_ENTRY_NAME) {
@@ -1029,6 +1049,7 @@ private fun EditorPageContent(
     onRestoreWidget: (Long) -> Unit,
     onImportWidget: () -> Unit,
     onImportBackground: () -> Unit,
+    onManageStyles: (String?) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
     onOpenRotation: () -> Unit,
@@ -1097,10 +1118,10 @@ private fun EditorPageContent(
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
             onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage, onTintCyan,
-            onTintMagenta, modifier,
+            onTintMagenta, { onManageStyles(null) }, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(
-            snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, modifier,
+            snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, onManageStyles, modifier,
         )
         EditorPage.Install -> InstallWorkspace(
             snapshot = snapshot,
@@ -3151,6 +3172,7 @@ private fun BackgroundWorkspace(
     onApply: () -> Unit,
     onTintCyan: () -> Unit,
     onTintMagenta: () -> Unit,
+    onManageStyles: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -3178,10 +3200,16 @@ private fun BackgroundWorkspace(
         )
         if (!snapshot.canReplaceBackground && !adding) {
             NoBackgroundRasterNotice(snapshot)
+            if (snapshot.backgroundWouldNotFit) TextButton(onClick = onManageStyles, enabled = !state.isWorking) {
+                Text(stringResource(R.string.editor_manage_styles))
+            }
             return@Column
         }
         if (adding) {
             AddBackgroundNotice(snapshot)
+            if (snapshot.backgroundAddSkipped.isNotEmpty()) TextButton(onClick = onManageStyles, enabled = !state.isWorking) {
+                Text(stringResource(R.string.editor_manage_styles))
+            }
         }
         if (state.pendingImage == null) {
             Column(
@@ -3520,6 +3548,7 @@ private fun StylesWorkspace(
     working: Boolean,
     onVariant: (EditorVariant) -> Unit,
     onSyncThumbnail: () -> Unit,
+    onManageStyles: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -3599,8 +3628,14 @@ private fun StylesWorkspace(
                 }
                 if (selected) Text("●", color = MaterialTheme.colorScheme.primary)
             }
+            if (!isAod) TextButton(onClick = { onManageStyles(variant.basename) },
+                enabled = enabled && snapshot.styleNames.size > 1) {
+                Text(stringResource(R.string.editor_style_delete_action, label))
+            }
         }
         item {
+            if (snapshot.styleNames.size == 1) Text(stringResource(R.string.editor_style_keep_one),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
             FitDetails(label = stringResource(R.string.editor_styles_details)) {
                 Text(
                     stringResource(R.string.editor_styles_footnote),
@@ -3630,7 +3665,7 @@ private fun StylesWorkspace(
  * otherwise the package's preview image at [imagePath], otherwise an empty plate.
  */
 @Composable
-private fun FacePreview(
+internal fun FacePreview(
     frame: PreviewFrame?,
     imagePath: String?,
     contentDescription: String?,

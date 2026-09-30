@@ -880,6 +880,42 @@ RGB565 precision, or safely change the panel identity/geometry. The two referenc
 files contain no unreferenced raster or compression stage; shrinking artwork and
 bounded imported-resource deletion are separate editing mechanisms.
 
+### Deleting numbered styles
+
+`StructuralEditor.deleteStyles` removes any chosen numbered styles, retaining at
+least one in the same relative order. It refuses unknown names and AOD. Survivors
+are renamed consecutively from `style0.bin` in their original directory; their
+payloads, including widgets and image pointers, remain byte-identical. Shared
+fonts, dictionaries and AOD remain unchanged. Update `setting.bin +0x34` to the
+survivor count and map `+0x35` to the surviving default, or zero if it was removed.
+Select the corresponding complete `PreviewStream.RECORD_STRIDE` frames from
+`preview.bin`; refuse noncanonical picker streams. Each deletion reclaims exactly
+the style payload, one 74-byte directory record and one 99,696-byte picker frame.
+
+Session metadata composes current-to-pristine variant identities through repeated
+deletions. Remap native/donor origins and saved removed records; discard records
+owned only by deleted styles. Pristine resizing, original-angle resets, shipped
+image counts and packaged PNG lookup all resolve through that mapping. The active
+style follows its survivor; deleting it selects the next survivor, otherwise the
+previous one. AOD selection stays AOD. Reset restores the project's full pristine
+package, including the stripped original of a custom template.
+
+Capacity failures carry current/proposed/limit byte counts. Only the BIN ceiling
+offers capacity recovery; font-slot and provenance limits do not. Confirm deletion
+as an independent edit, keep the pending edit's target style, then rebuild its
+review against the new container. Never reuse a previous import ticket or retry
+widgets already committed in a partial batch. Partial background additions also
+offer style management. Persistence and archive contracts are in
+[Architecture](architecture.md#the-project-archive).
+
+`StyleDeletionTest` sweeps corpus deletion candidates and survivor shapes, alongside
+synthetic default, path and invalid-selection cases. `CanvasIntegrityTest` compares
+survivor renders; repository tests cover resize/restore, shared imported resources,
+rollback, reopening, archives, copies, previews and Reset. These software checks do
+not establish arbitrary style deletion on hardware. Verify middle/active removal,
+remaining picker frames, AOD, wake/reboot and subsequent installs on a watch; the
+existing custom-template hardware result has narrower scope.
+
 ### Arranging widget layers
 
 Later records draw above earlier records; there is no independent z-index field.

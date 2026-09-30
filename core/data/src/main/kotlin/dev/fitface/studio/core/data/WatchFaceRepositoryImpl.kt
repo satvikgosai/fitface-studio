@@ -16,6 +16,9 @@ import dev.fitface.studio.core.format.BackgroundImportEdit
 import dev.fitface.studio.core.model.BackgroundDonorVariant
 import dev.fitface.studio.core.model.BackgroundImportPreview
 import dev.fitface.studio.core.format.CONTAINER_HEADER_SIZE
+import dev.fitface.studio.core.format.DIRECTORY_ENTRY_SIZE
+import dev.fitface.studio.core.format.PreviewStream
+import dev.fitface.studio.core.format.Fit3CapacityException
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.CustomFaceTemplate
 import dev.fitface.studio.core.format.FaceEditor
@@ -59,6 +62,9 @@ import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.ProjectNaming
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.RemovedWidget
+import dev.fitface.studio.core.model.StyleManagement
+import dev.fitface.studio.core.model.survivingStyleNames
+import dev.fitface.studio.core.model.survivingActiveStyle
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
@@ -176,7 +182,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val result = WidgetImporter.importWidget(current.currentContainer, targetVariant,
                 source.container, donorVariant, index)
             val origins = current.originsWith(source.faceId, targetVariant, result)
-            origins.validate(current.originalContainer, result.edit.container)
+            current.identities().withResources(current.originalContainer, result.edit.container)
+                .validate(current.originalContainer, result.edit.container, origins)
             val entry = result.edit.container.entryByBasename(targetVariant)
             val preview = WidgetPreviewComposer.compose(entry, result.edit.container.entries,
                 WidgetTextRasterizer::render, java.util.Locale.getDefault().toString()).composed
@@ -1153,14 +1160,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 val targets = current.backgroundAddTargets()
                 if (targets.isEmpty()) {
                     val cost = StructuralEditor.addedBackgroundBytes(panel.width, panel.height)
-                    throw WatchFaceException(
-                        "This face is already ${mebibytes(current.currentContainer.fileSize)} " +
-                            "and a full-face background adds ${mebibytes(cost)} each, " +
-                            "which would take it over the " +
-                            "${mebibytes(WATCH_CONTAINER_BYTE_CEILING)} the watch accepts. " +
-                            "Everything else on this face still works.",
-                        "container=${current.currentContainer.fileSize} bare=${bare.size}",
-                    )
+                    throw Fit3CapacityException(current.currentContainer.fileSize,
+                        current.currentContainer.fileSize + cost)
                 }
                 PreparedBackground(
                     session = current,
@@ -1737,6 +1738,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
             current.currentContainer = current.originalContainer
             val previousOrigins = current.importOrigins
             val previousLineage = current.lineage
+            val previousActive = current.activeStyleName
+            val previousVariant = current.selectedVariantName
+            current.activeStyleName = previousLineage?.variants?.get(previousActive) ?: previousActive
+            current.selectedVariantName = previousLineage?.variants?.get(previousVariant) ?: previousVariant
             current.lineage = null
             current.importOrigins = null
             current.audit = null
@@ -1756,6 +1761,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 current.thumbnailContainer = previousThumbnail
                 current.importOrigins = previousOrigins
                 current.lineage = previousLineage
+                current.activeStyleName = previousActive
+                current.selectedVariantName = previousVariant
                 throw error
             }
         }
@@ -1819,6 +1826,38 @@ class WatchFaceRepositoryImpl @Inject constructor(
             mutex.withLock { requireSession().directInstallPayload() }
         }
 
+    override suspend fun styleManagement(): StyleManagement = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val current = requireSession()
+            val styles = current.styleEntries()
+            // Check the picker contract before offering deletion.
+            if (styles.size > 1) StructuralEditor.deleteStyles(current.currentContainer, setOf(styles.last().basename))
+            StyleManagement(current.snapshot(),
+                current.editRevision(),
+                styles.associate { it.basename to WidgetPreviewComposer.compose(it, current.currentContainer.entries,
+                    WidgetTextRasterizer::render, current.previewLocale()).composed },
+                styles.associate { it.basename to (it.size + DIRECTORY_ENTRY_SIZE + PreviewStream.RECORD_STRIDE) })
+        }
+    }
+
+    override suspend fun deleteStyles(names: Set<String>, revision: String): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val current = requireSession()
+            require(current.editRevision() == revision) {
+                "The project changed. Review the styles again before deleting."
+            }
+            val styles = current.styleEntries().map { it.basename }
+            val mapping = survivingStyleNames(styles, names) +
+                current.variantEntries().filter { it.basename !in styles }.associate { it.basename to it.basename }
+            val edit = StructuralEditor.deleteStyles(current.currentContainer, names)
+            val origins = current.importOrigins?.let { table -> table.copy(widgets = table.widgets.mapNotNull { origin ->
+                mapping[origin.variant]?.let { origin.copy(variant = it) }
+            }).takeIf { it.widgets.isNotEmpty() } }
+            commit(current, edit.container, edit.audit("Unused styles deleted"), importOrigins = origins,
+                lineage = current.identities().retainVariants(mapping), variantMappings = mapping)
+        }
+    }
+
     private suspend fun commit(
         current: Session,
         container: Fit3Container,
@@ -1829,6 +1868,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         droppedImages: Map<String, Set<Int>> = emptyMap(),
         lineage: SessionLineage = current.identities(),
         indexMappings: Map<String, Map<Int, Int>> = emptyMap(),
+        variantMappings: Map<String, String>? = null,
     ): EditorSnapshot {
         val previousContainer = current.currentContainer
         val previousAudit = current.audit
@@ -1838,19 +1878,31 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val previousLineage = current.lineage
         val previousRemoved = current.removedWidgets.toList()
         val identifiedRemoved = previousRemoved.map(current::identifyLegacyRemoval)
+        val candidateLineage = lineage.withResources(current.originalContainer, container)
         current.currentContainer = container
         current.importOrigins = importOrigins
-        current.lineage = lineage
+        current.lineage = candidateLineage
         current.audit = audit
         return try {
-            lineage.validate(current.originalContainer, container, importOrigins)
-            val relocated = identifiedRemoved.map { removed ->
-                removed.copy(recordsByVariant = removed.recordsByVariant.mapValues { (variant, raw) ->
+            current.lineage!!.validate(current.originalContainer, container, importOrigins)
+            val mapping = variantMappings ?: FaceResources.variantEntries(previousContainer).associate { it.basename to it.basename }
+            val relocated = identifiedRemoved.mapNotNull { removed ->
+                val records = removed.recordsByVariant.mapNotNull record@{ (variant, raw) ->
+                    val next = mapping[variant] ?: return@record null
                     val relocated = StructuralEditor.relocateSavedWidget(previousContainer.entryByBasename(variant),
-                        container.entryByBasename(variant), raw, droppedImages[variant].orEmpty())
-                    StructuralEditor.remapSavedAlignmentTargets(container.entryByBasename(variant), relocated,
+                        container.entryByBasename(next), raw, droppedImages[variant].orEmpty())
+                    next to StructuralEditor.remapSavedAlignmentTargets(container.entryByBasename(next), relocated,
                         indexMappings[variant].orEmpty())
-                })
+                }.toMap()
+                if (records.isEmpty()) null else removed.copy(recordsByVariant = records,
+                    nativeSourceIndices = removed.nativeSourceIndices.mapNotNull { (old, index) -> mapping[old]?.let { it to index } }.toMap(),
+                    duplicateSourceVariants = removed.duplicateSourceVariants.mapNotNull(mapping::get).toSet())
+            }
+            if (variantMappings != null) {
+                val styles = FaceResources.selectableStyles(previousContainer).map { it.basename }
+                current.activeStyleName = survivingActiveStyle(styles, mapping,
+                    previousActiveStyle ?: styles.first())
+                current.selectedVariantName = mapping[previousVariant] ?: current.activeStyleName
             }
             current.removedWidgets.clear()
             current.removedWidgets += relocated
@@ -2074,6 +2126,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
      * The preview the projects list shows for [project]: the style it was last left
      * on, falling back to the first one the package shipped.
      */
+    private val previewVariantCache = linkedMapOf<String, Map<String, String>>()
+
     private fun projectPreviewImage(project: ProjectEntity): String? {
         val previews = previewsDirectory(project.id)
             .listFiles()
@@ -2088,7 +2142,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
             ?.sortedBy { it.first }
             ?: return null
         if (previews.isEmpty()) return null
-        val selected = project.selectedStyle?.let(::styleIndexOf)
+        val originalVariant = project.editedBinPath?.let { path ->
+            synchronized(previewVariantCache) {
+                previewVariantCache.getOrPut(path) {
+                    runCatching { File(path).takeIf(::isCheckpoint)?.let(::readCheckpoint)?.lineage?.variants.orEmpty() }
+                        .getOrDefault(emptyMap())
+                }.also { while (previewVariantCache.size > 64) previewVariantCache.remove(previewVariantCache.keys.first()) }
+            }
+        }?.get(project.selectedStyle) ?: project.selectedStyle
+        val selected = originalVariant?.let(::styleIndexOf)
         val chosen = previews.firstOrNull { it.first == selected } ?: previews.first()
         return chosen.second.absolutePath
     }
@@ -2204,6 +2266,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         var thumbnailContainer: Fit3Container? = null,
     ) {
         fun identities(): SessionLineage = lineage ?: SessionLineage.capture(originalContainer, currentContainer, importOrigins)
+
+        fun editRevision(): String = "$projectId:${WidgetImportOrigins.digest(currentContainer.toByteArray())}"
 
         fun originalEntry(variant: String): ContainerEntry =
             originalContainer.entryByBasename(lineage?.variants?.get(variant) ?: variant)
@@ -2537,7 +2601,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
         private var cachedAodPreview: AodRender? = null
 
-        private fun previewLocale(): String = java.util.Locale.getDefault().let {
+        fun previewLocale(): String = java.util.Locale.getDefault().let {
             when (it.language) {
                 "zh" -> if (it.script == "Hant" || it.country in setOf("TW", "HK", "MO")) "cn2" else "cn0"
                 "pt" -> "pt_rPT"
@@ -2597,7 +2661,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
             val names = variants.mapNotNullTo(mutableSetOf()) { entry ->
                 val pristine = originalContainer.entries
-                    .singleOrNull { it.basename == entry.basename }
+                    .singleOrNull { it.basename == (lineage?.variants?.get(entry.basename) ?: entry.basename) }
                 entry.basename.takeIf {
                     pristine == null || !pristine.data.contentEquals(entry.data)
                 }
@@ -2616,7 +2680,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         private val originalStyleCache = mutableMapOf<String, Map<Int, WidgetGuide>>()
 
         private fun originalGuidesFor(styleName: String): Map<Int, WidgetGuide> =
-            originalStyleCache.getOrPut(styleName) {
+            originalStyleCache.getOrPut(lineage?.variants?.get(styleName) ?: styleName) {
                 FaceRecordParser.widgetGuides(originalEntry(styleName))
                     .associateBy { it.globalIndex }
             }
@@ -2736,6 +2800,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 selectedVariant = variantModels.first { it.basename == selected.basename },
                 activeStyleName = activeStyleName ?: styles.first().basename,
                 editedVariantNames = editedVariantNames(variants),
+                originalVariants = lineage?.variants ?: variants.associate { it.basename to it.basename },
                 aodThumbnail = aodComposition?.composed,
                 selectedVariantApproximate = composition.isApproximate,
                 preview = currentBackground,
@@ -2745,7 +2810,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 widgets = widgets,
                 removedWidgets = removedWidgets.toList(),
                 stylePreviewPaths = styles.mapNotNull { entry ->
-                    styleIndexOf(entry.basename)
+                    styleIndexOf(lineage?.variants?.get(entry.basename) ?: entry.basename)
                         ?.let(stylePreviewFiles::get)
                         ?.let { entry.basename to it }
                 }.toMap(),

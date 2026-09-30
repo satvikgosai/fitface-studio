@@ -55,6 +55,8 @@ the app. The watch photo shows a real Bluetooth install.
   with degree controls and an original-angle reset.
 - Edit the selected style, opt into matching widgets across styles, or edit the
   always-on display separately.
+- Delete unused styles with an exact space-saving review, including when an edit
+  needs more room under the watch's 4 MiB limit.
 - Start a custom face with a clock on an empty panel. It uses the downloaded Info_4
   face as its base and replaces that face's slot on the watch.
 - Review the preview and checks on **Install**, then send to a paired watch.

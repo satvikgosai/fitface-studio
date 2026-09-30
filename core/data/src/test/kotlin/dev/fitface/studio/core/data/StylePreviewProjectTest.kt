@@ -92,6 +92,30 @@ class StylePreviewProjectTest {
         assertEquals("style2.png", File(preview).name)
     }
 
+    @Test fun previewsFollowPristineIdentityAcrossRepeatedDeletionReopenCopyAndReset() = runBlocking {
+        val original = repository.openPackage(facePackage(styleId = 2))
+        val expected = original.stylePreviewPaths.getValue("style2.bin")
+        var s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        assertEquals("style1.bin", s.activeStyleName)
+        assertEquals(expected, s.stylePreviewPaths.getValue("style1.bin"))
+        assertEquals(expected, repository.observeProjects().first().single().previewImagePath)
+        s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        assertEquals("style0.bin", s.activeStyleName)
+        assertEquals(expected, s.stylePreviewPaths.getValue("style0.bin"))
+        s = repository.openProject(s.projectId)
+        assertEquals(expected, s.stylePreviewPaths.getValue("style0.bin"))
+        val copy = repository.duplicateProject(s.projectId)
+        val copied = repository.openProject(copy.id)
+        val copiedPath = copied.stylePreviewPaths.getValue("style0.bin")
+        assertTrue(copiedPath != expected)
+        org.junit.Assert.assertArrayEquals(File(expected).readBytes(), File(copiedPath).readBytes())
+        val summary = repository.observeProjects().first().single { it.id == copy.id }
+        assertEquals(copiedPath, summary.previewImagePath)
+        s = repository.resetEdits()
+        assertEquals("style2.bin", s.activeStyleName)
+        assertEquals(original.styleNames.size, s.styleNames.size)
+    }
+
     @Test
     fun reopeningAProjectRewritesNothingAndStillResolves() = runBlocking {
         val first = repository.openPackage(facePackage(styleId = 1))

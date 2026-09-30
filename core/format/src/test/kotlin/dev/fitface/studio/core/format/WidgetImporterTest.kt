@@ -117,10 +117,12 @@ class WidgetImporterTest {
     @Test fun oversizeImportFailsWithoutChangingTheTarget() {
         val target = face("00022")
         val before = target.toByteArray()
-        val error = assertThrows(Fit3FormatException::class.java) {
+        val error = assertThrows(Fit3CapacityException::class.java) {
             WidgetImporter.importWidget(target, "style0.bin", face("00002"), "style0.bin", 2)
         }
-        assertTrue(error.message.orEmpty(), error.message.orEmpty().contains("4194304"))
+        assertEquals(4 * 1024 * 1024, error.capacity.limit)
+        assertEquals(target.fileSize, error.capacity.currentBytes)
+        assertTrue(error.capacity.proposedBytes > error.capacity.limit)
         assertArrayEquals(before, target.toByteArray())
     }
 
