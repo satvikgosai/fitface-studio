@@ -7,6 +7,7 @@ import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.ReplacementImage
@@ -15,10 +16,12 @@ import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.UserMessage
+import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WatchFaceException
-import dev.fitface.studio.core.model.encodeCoordinate
 import dev.fitface.studio.core.model.WidgetGuide
-import dev.fitface.studio.core.model.spriteResizeLimit
+import dev.fitface.studio.core.model.WidgetResizeStepPercent
+import dev.fitface.studio.core.model.nextWidgetSize
+import dev.fitface.studio.core.model.widgetSizePercent
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
@@ -35,28 +38,56 @@ data class WidgetMovePreview(
     val displayY: Float,
 )
 
-/** Where a widget is being moved to, in stored coordinate space. */
-internal data class PendingWidgetTarget(val x: Int, val y: Int)
+/**
+ * Where a widget is being moved to, in stored coordinate space.
+ *
+ * [widgetType] and [sequenceId] are captured at enqueue time, from the widget on the
+ * variant that was on canvas then — not re-read from whatever the canvas shows when this
+ * finally commits, which by then may be a different variant entirely. A style's widget 3
+ * and AOD's widget 3 are unrelated records; reading the wrong one's type back would send
+ * the repository the wrong widget's move.
+ */
+internal data class PendingWidgetTarget(
+    val x: Int,
+    val y: Int,
+    val widgetType: Int,
+    val sequenceId: Int,
+)
+
+/** Which variant's widget a queued move targets — see [PendingWidgetTarget]. */
+private data class PendingMoveKey(val variantBasename: String, val globalIndex: Int)
 
 /**
- * Display position of a stored coordinate whose anchoring is already known — the exact
- * inverse of [encodeCoordinate].
+ * Display position of a stored coordinate, and its inverse.
  *
- * `displayCoordinate` infers the anchoring from the sign, which is right for a value read
- * out of a container and wrong for a coordinate a nudge is still accumulating: a widget
- * stored at `x = 0` stepped one pixel left reaches `-1`, which the sign rule reads as
- * "anchored to the far edge" and places at the opposite side of the face. The anchoring
- * belongs to the widget, so it is passed in rather than guessed.
+ * A widget's coordinates are measured from [WidgetGuide.originX]/[WidgetGuide.originY],
+ * so both directions are one addition. The pair used to infer the anchoring from the
+ * sign of the value, which broke a nudge in a way worth remembering: a widget stored at
+ * `x = 0` stepped one pixel left reaches `-1`, and the sign rule read that as "anchored
+ * to the far edge" and threw the widget across the face.
  */
-internal fun storedToDisplay(
-    stored: Int,
-    extent: Int,
-    canvasExtent: Int,
-    anchoredFromEnd: Boolean,
-): Int = if (anchoredFromEnd) canvasExtent + stored - extent else stored
+internal fun storedToDisplay(stored: Int, origin: Int): Int = origin + stored
+
+internal fun displayToStored(display: Int, origin: Int): Int = display - origin
 
 /** A copy was made and named. The screen turns it into a sentence. */
 data class DuplicateNotice(val id: Long, val name: String)
+
+/** What a set of widgets can have done to all of them at once. Moves go through the nudge. */
+enum class SelectionAction { DUPLICATE, REMOVE }
+
+/**
+ * A set edit that stopped partway. Each widget is its own commit, so the ones before the
+ * failure are done and saved — and the screen has to say how many, in words, rather than
+ * show a bare error over a face that visibly changed.
+ */
+data class SelectionStop(
+    val id: Long,
+    val action: SelectionAction,
+    val done: Int,
+    val total: Int,
+    val reason: String,
+)
 
 data class EditorUiState(
     val snapshot: EditorSnapshot? = null,
@@ -65,6 +96,17 @@ data class EditorUiState(
     val pendingImage: ReplacementImage? = null,
     val placement: ImagePlacement = ImagePlacement(),
     val selectedWidgetIndex: Int? = null,
+    /**
+     * Widgets picked together, in pick order: two or more, or empty.
+     *
+     * Never exactly one. A set that falls to one widget becomes the ordinary selection,
+     * because the single tray does everything a set can and more — the same rule the
+     * import picker follows, where one pick is the single flow unchanged. So "is a set
+     * selected" is `isNotEmpty()`, and [selectedWidgetIndex] is null whenever it is.
+     */
+    val multiSelection: List<Int> = emptyList(),
+    /** A set edit stopped partway; see [SelectionStop]. */
+    val selectionStopped: SelectionStop? = null,
     /**
      * How many widget removals have committed.
      *
@@ -91,9 +133,27 @@ data class EditorUiState(
      * `strings.xml` with the rest of the editor's copy.
      */
     val duplicated: DuplicateNotice? = null,
-    val applyWidgetEditsToAllStyles: Boolean = true,
+    /**
+     * Whether a widget edit reaches every style that has the same widget. **Off until asked
+     * for.** Each style carries its own copy of the artwork, so an edit that grows it — a
+     * larger widget, a duplicate that brings frames — costs its bytes once per style it
+     * reaches: on a four-style face, four times the room under the 4 MiB the watch accepts,
+     * for styles the reader may never install. Widening an edit is the tray's scope toggle.
+     */
+    val applyWidgetEditsToAllStyles: Boolean = false,
     val previewReviewed: Boolean = false,
     val pendingWidgetMove: WidgetMovePreview? = null,
+    /**
+     * Where every member of a set being nudged is headed, all at once.
+     *
+     * The commits are still one widget each, through the same worker as any move, and a
+     * commit is slower than a held arrow repeats. With only [pendingWidgetMove] to draw
+     * from, the canvas could show one member gliding while the rest waited for their own
+     * commits, so a set stuttered across the face one widget at a time and never seemed to
+     * accelerate together. This holds every member's target, updated on each step, and the
+     * canvas draws all of them from it until the last commit has caught up.
+     */
+    val pendingSetMove: List<WidgetMovePreview> = emptyList(),
     val directInstall: DirectInstallState = DirectInstallState(),
     val error: UserMessage? = null,
     /** The pasteable report, non-null while the dialog is open. */
@@ -123,7 +183,11 @@ class EditorViewModel @Inject constructor(
     // widget A and then replaced by one for widget B lost A's move outright, so two
     // back-to-back drags of different widgets only landed the second. Access is guarded
     // because the worker drains it from its own coroutine.
-    private val pendingMoves = LinkedHashMap<Int, PendingWidgetTarget>()
+    private val pendingMoves = LinkedHashMap<PendingMoveKey, PendingWidgetTarget>()
+    // Taking a target out of the queue must not forget its position while the save
+    // suspends. Repeats build on the newest queued target, then this in-flight one,
+    // and only then the committed snapshot. Guarded by pendingMoves as well.
+    private var inFlightMove: Pair<PendingMoveKey, PendingWidgetTarget>? = null
     /** Whether a worker is committing [pendingMoves]. Guarded by that map's own lock. */
     private var moveWorkerDraining = false
 
@@ -238,19 +302,247 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun selectStyle(style: String) {
+    /**
+     * Switches what the canvas shows and edits — a numbered style or `aod.bin`.
+     *
+     * A pending background image is dropped rather than carried across: it was decoded
+     * and framed against whichever variant's panel was on screen when it was prepared, so
+     * applying it after a switch would place a style's draft background onto AOD, or the
+     * reverse. Dropping it here is simpler and stricter than carrying it and checking its
+     * origin later.
+     */
+    fun selectVariant(variant: EditorVariant) {
         mutableState.value = mutableState.value.copy(
             selectedWidgetIndex = null,
+            // A global index means something different in every entry.
+            multiSelection = emptyList(),
             previewReviewed = false,
+            pendingImage = null,
+            // Never carried into AOD. The repository already refuses to let it reach
+            // AOD, but leaving the switch on would still *read* as though it applied —
+            // in the canvas hint, in the remove-confirmation body, anywhere that asks
+            // this flag without also asking what is selected.
+            applyWidgetEditsToAllStyles = when (variant.kind) {
+                VariantKind.AOD -> false
+                VariantKind.STYLE -> mutableState.value.applyWidgetEditsToAllStyles
+            },
         )
-        operate { repository.currentSnapshot(style) }
+        operate { repository.currentSnapshot(variant.basename) }
     }
 
     fun selectWidget(globalIndex: Int?) {
-        mutableState.value = mutableState.value.copy(selectedWidgetIndex = globalIndex)
+        // With a set picked, a tap changes the set: on a widget it toggles that widget, on
+        // bare canvas it lets go of all of them — the same two gestures the import picker
+        // uses, so choosing several is learned once.
+        if (mutableState.value.multiSelection.isNotEmpty()) {
+            if (globalIndex == null) clearSelection() else toggleInSelection(globalIndex)
+            return
+        }
+        val imported = mutableState.value.snapshot?.widgets?.singleOrNull { it.globalIndex == globalIndex }
+            ?.importedFromFaceId != null
+        mutableState.value = mutableState.value.copy(selectedWidgetIndex = globalIndex,
+            applyWidgetEditsToAllStyles = !imported && mutableState.value.applyWidgetEditsToAllStyles)
+    }
+
+    /**
+     * Adds a widget to the set, or takes it out — what holding a widget on the canvas does.
+     *
+     * Starting from a single selection carries it in, so holding a second widget makes a
+     * set of two rather than throwing the first one away. A set that falls to one becomes
+     * that one's ordinary selection; see [EditorUiState.multiSelection].
+     */
+    fun toggleInSelection(globalIndex: Int) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        if (current.isWorking || snapshot.widgets.none { it.globalIndex == globalIndex }) return
+        val base = current.multiSelection.ifEmpty { listOfNotNull(current.selectedWidgetIndex) }
+        val next = if (globalIndex in base) base - globalIndex else base + globalIndex
+        mutableState.value = when (next.size) {
+            0 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = null)
+            1 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = next.single())
+            else -> current.copy(multiSelection = next, selectedWidgetIndex = null)
+        }
+    }
+
+    fun clearSelection() {
+        mutableState.value = mutableState.value.copy(
+            multiSelection = emptyList(),
+            selectedWidgetIndex = null,
+        )
+    }
+
+    fun clearSelectionStopped(id: Long) {
+        if (mutableState.value.selectionStopped?.id == id) {
+            mutableState.value = mutableState.value.copy(selectionStopped = null)
+        }
+    }
+
+    /**
+     * Moves every widget of the set by the same step, through the same queue a single
+     * nudge uses — one target per widget, each committed by the one worker.
+     *
+     * The step is shared, and it is as far as the most constrained widget can go: each
+     * member is clamped to the panel exactly as a lone nudge would clamp it, and the set
+     * takes the smallest of those steps. Clamping each on its own would let a widget at the
+     * edge stop while the rest carried on, shearing the arrangement the reader built.
+     */
+    fun nudgeSelection(deltaX: Int, deltaY: Int) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        val variant = snapshot.selectedVariant.basename
+        val moves = current.multiSelection
+            .mapNotNull { index -> snapshot.widgets.firstOrNull { it.globalIndex == index } }
+            .filter { it.canEditPosition }
+            .map { widget ->
+                val base = pendingTarget(variant, widget.globalIndex)
+                    ?: PendingWidgetTarget(widget.x, widget.y, widget.type, widget.sequenceId)
+                Triple(widget, base, clampToPanel(snapshot, widget, base.x + deltaX, base.y + deltaY))
+            }
+        if (moves.isEmpty()) return
+        val stepX = sharedNudgeStep(moves.map { (_, base, next) -> next.x - base.x }, deltaX)
+        val stepY = sharedNudgeStep(moves.map { (_, base, next) -> next.y - base.y }, deltaY)
+        if (stepX == 0 && stepY == 0) return
+        val targets = moves.map { (widget, base, _) -> Triple(widget, base.x + stepX, base.y + stepY) }
+        if (targets.any { (_, x, y) -> x !in Short.MIN_VALUE..Short.MAX_VALUE || y !in Short.MIN_VALUE..Short.MAX_VALUE }) {
+            return
+        }
+        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false) }
+        // Published once, for every member, after they are all queued: the canvas moves the
+        // set as one picture on this step, whatever order the commits then land in.
+        mutableState.value = mutableState.value.copy(
+            pendingSetMove = targets.map { (widget, x, y) ->
+                WidgetMovePreview(
+                    globalIndex = widget.globalIndex,
+                    displayX = storedToDisplay(x, widget.originX).toFloat(),
+                    displayY = storedToDisplay(y, widget.originY).toFloat(),
+                )
+            },
+        )
+    }
+
+    fun duplicateSelection() = runOnSelection(SelectionAction.DUPLICATE)
+
+    fun removeSelection() = runOnSelection(SelectionAction.REMOVE)
+
+    /**
+     * Duplicates or removes every widget of the set, one at a time, through the same
+     * single-widget repository call the tray's own buttons make. Nothing below this knows
+     * a set exists.
+     *
+     * Removal goes **highest index first**. Removing a widget renumbers only the ones after
+     * it, so taking them from the top leaves every index still to go naming the widget it
+     * was picked as. Duplicates append at the end and renumber nothing, so they go in pick
+     * order, which is the order the copies stack in.
+     *
+     * **There is no rollback across commits** — the same honest limit as importing a set.
+     * It stops at the first refusal, keeps what committed, publishes the snapshot that
+     * produced, and says how far it got.
+     */
+    private fun runOnSelection(action: SelectionAction) {
+        val start = mutableState.value
+        val snapshot = start.snapshot ?: return
+        if (start.isWorking || start.multiSelection.size < 2) return
+        val order = when (action) {
+            SelectionAction.REMOVE -> start.multiSelection.sortedDescending()
+            SelectionAction.DUPLICATE -> start.multiSelection
+        }
+        val variant = snapshot.selectedVariant.basename
+        val allStyles = start.applyWidgetEditsToAllStyles
+        viewModelScope.launch {
+            // A structural edit renumbers global indices and a queued move names one, the
+            // reason `operate` drops them too.
+            clearPendingMoves()
+            mutableState.value = mutableState.value.copy(
+                isWorking = true,
+                pendingWidgetMove = null,
+                pendingSetMove = emptyList(),
+                previewReviewed = false,
+                error = null,
+            )
+            var latest = snapshot
+            val copies = mutableListOf<Int>()
+            var done = 0
+            var failure: Throwable? = null
+            for (index in order) {
+                val widget = latest.widgets.firstOrNull { it.globalIndex == index }
+                if (widget == null) {
+                    failure = WatchFaceException("A selected widget is no longer on the face.")
+                    break
+                }
+                try {
+                    latest = when (action) {
+                        SelectionAction.DUPLICATE -> repository.duplicateWidget(
+                            variant, widget.globalIndex, widget.type, widget.sequenceId,
+                            widget.x, widget.y, applyToAllStyles = allStyles,
+                        )
+                        SelectionAction.REMOVE -> repository.removeWidget(
+                            variant, widget.globalIndex, widget.type, widget.sequenceId,
+                            widget.x, widget.y, requireFinal = false, applyToAllStyles = allStyles,
+                        )
+                    }
+                    if (action == SelectionAction.DUPLICATE) {
+                        latest.widgets.maxByOrNull { it.ordinal }?.globalIndex?.let(copies::add)
+                    }
+                    done++
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    failure = error
+                    break
+                }
+            }
+            if (done == 0) {
+                failure?.let(::showFailure)
+                return@launch
+            }
+            directInstaller.payloadChanged()
+            val remaining = order.drop(done)
+            val selection = when {
+                // The copies sit exactly on their originals, so they are what the arrows
+                // should move next.
+                action == SelectionAction.DUPLICATE && failure == null -> copies
+                action == SelectionAction.DUPLICATE -> start.multiSelection
+                // What was not removed keeps its index, because removal went from the top.
+                else -> start.multiSelection.filter { it in remaining }
+            }
+            mutableState.value = mutableState.value.copy(
+                snapshot = latest,
+                isWorking = false,
+                pendingWidgetMove = null,
+                pendingSetMove = emptyList(),
+                multiSelection = selection.takeIf { it.size >= 2 }.orEmpty(),
+                selectedWidgetIndex = selection.singleOrNull(),
+                widgetRemovals = mutableState.value.widgetRemovals +
+                    if (action == SelectionAction.REMOVE) done else 0,
+                selectionStopped = failure?.let { error ->
+                    diagnostics.warn(TAG, "Set edit stopped", (error as? WatchFaceException)?.technicalDetail, error)
+                    SelectionStop(
+                        id = messageIds.incrementAndGet(),
+                        action = action,
+                        done = done,
+                        total = order.size,
+                        reason = (error as? WatchFaceException)?.userMessage
+                            ?: error.message?.takeIf(String::isNotBlank)
+                            ?: "The operation could not be applied",
+                    )
+                },
+            )
+        }
+    }
+
+    fun acceptWidgetImport(snapshot: EditorSnapshot) {
+        if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
+        mutableState.value = mutableState.value.copy(snapshot = snapshot,
+            multiSelection = emptyList(),
+            selectedWidgetIndex = snapshot.widgets.lastOrNull()?.globalIndex,
+            applyWidgetEditsToAllStyles = false, previewReviewed = false, pendingWidgetMove = null,
+            pendingSetMove = emptyList())
     }
 
     fun setApplyWidgetEditsToAllStyles(value: Boolean) {
+        if (value && mutableState.value.snapshot?.widgets?.singleOrNull {
+            it.globalIndex == mutableState.value.selectedWidgetIndex
+        }?.importedFromFaceId != null) return
         mutableState.value = mutableState.value.copy(applyWidgetEditsToAllStyles = value)
     }
 
@@ -358,7 +650,9 @@ class EditorViewModel @Inject constructor(
     fun moveWidget(globalIndex: Int, x: Int, y: Int) {
         val snapshot = mutableState.value.snapshot ?: return
         val selected = snapshot.widgets.singleOrNull { it.globalIndex == globalIndex } ?: return
-        if (selected.x == x && selected.y == y) return
+        val base = pendingTarget(snapshot.selectedVariant.basename, globalIndex)
+            ?: PendingWidgetTarget(selected.x, selected.y, selected.type, selected.sequenceId)
+        if (base.x == x && base.y == y) return
         queueWidgetMove(snapshot, selected, x, y)
     }
 
@@ -376,7 +670,8 @@ class EditorViewModel @Inject constructor(
         val snapshot = mutableState.value.snapshot ?: return
         val widget = snapshot.widgets.firstOrNull { it.globalIndex == globalIndex } ?: return
         if (!widget.canEditPosition) return
-        val base = pendingTarget(globalIndex) ?: PendingWidgetTarget(widget.x, widget.y)
+        val base = pendingTarget(snapshot.selectedVariant.basename, globalIndex)
+            ?: PendingWidgetTarget(widget.x, widget.y, widget.type, widget.sequenceId)
         val next = clampToPanel(snapshot, widget, base.x + deltaX, base.y + deltaY)
         if (next.x !in Short.MIN_VALUE..Short.MAX_VALUE ||
             next.y !in Short.MIN_VALUE..Short.MAX_VALUE
@@ -392,12 +687,13 @@ class EditorViewModel @Inject constructor(
      * Holds a nudged widget's rectangle on the panel.
      *
      * A nudge works in *stored* coordinates, and a stored coordinate is legitimately
-     * negative: a widget anchored to the far edge is stored as `x < 0`. Clamping the stored
-     * value to `>= 0` would therefore fling every end-anchored widget across the face. So
-     * the clamp is applied in display space — by the same [constrainDragCoordinate] the
-     * drag uses, offset by `drawOffset` so it is the drawn rectangle that is held, and
-     * widened to admit where the widget already is so one that starts outside can still
-     * walk back in — and the result is re-encoded with the anchoring it came in with.
+     * negative — it is an offset from whatever the widget is positioned against, and a
+     * widget aligned to the right edge of something is stored as `x < 0`. Clamping the
+     * stored value to `>= 0` would therefore fling those widgets across the face. So the
+     * clamp is applied in display space — by the same [constrainDragCoordinate] the drag
+     * uses, offset by `drawOffset` so it is the drawn rectangle that is held, and widened
+     * to admit where the widget already is so one that starts outside can still walk back
+     * in — and the result is converted back through the widget's own origin.
      *
      * Without this the nudge had no bound but the Short range, so a held press walked a
      * widget clean off the canvas, after which it could not be tapped at all and only the
@@ -409,41 +705,29 @@ class EditorViewModel @Inject constructor(
         x: Int,
         y: Int,
     ): PendingWidgetTarget {
-        val anchoredX = widget.x < 0
-        val anchoredY = widget.y < 0
         return PendingWidgetTarget(
-            x = encodeCoordinate(
+            x = displayToStored(
                 display = constrainDragCoordinate(
-                    proposed = storedToDisplay(
-                        x, widget.width, snapshot.preview.width, anchoredX,
-                    ).toFloat(),
-                    starting = storedToDisplay(
-                        widget.x, widget.width, snapshot.preview.width, anchoredX,
-                    ).toFloat(),
+                    proposed = storedToDisplay(x, widget.originX).toFloat(),
+                    starting = storedToDisplay(widget.x, widget.originX).toFloat(),
                     extent = widget.width,
                     canvasExtent = snapshot.preview.width,
                     drawOffset = widget.drawOffsetX,
                 ).roundToInt(),
-                extent = widget.width,
-                canvasExtent = snapshot.preview.width,
-                anchoredFromEnd = anchoredX,
+                origin = widget.originX,
             ),
-            y = encodeCoordinate(
+            y = displayToStored(
                 display = constrainDragCoordinate(
-                    proposed = storedToDisplay(
-                        y, widget.height, snapshot.preview.height, anchoredY,
-                    ).toFloat(),
-                    starting = storedToDisplay(
-                        widget.y, widget.height, snapshot.preview.height, anchoredY,
-                    ).toFloat(),
+                    proposed = storedToDisplay(y, widget.originY).toFloat(),
+                    starting = storedToDisplay(widget.y, widget.originY).toFloat(),
                     extent = widget.height,
                     canvasExtent = snapshot.preview.height,
                     drawOffset = widget.drawOffsetY,
                 ).roundToInt(),
-                extent = widget.height,
-                canvasExtent = snapshot.preview.height,
-                anchoredFromEnd = anchoredY,
+                origin = widget.originY,
             ),
+            widgetType = widget.type,
+            sequenceId = widget.sequenceId,
         )
     }
 
@@ -452,12 +736,18 @@ class EditorViewModel @Inject constructor(
         widget: WidgetGuide,
         x: Int,
         y: Int,
+        /** False for a set's members, whose preview is [EditorUiState.pendingSetMove]. */
+        previewAlone: Boolean = true,
     ) {
+        // The variant is captured now, from the canvas this drag/nudge is actually on —
+        // never re-read at commit time, when the user may have switched to a different
+        // one entirely. See `PendingWidgetTarget`.
+        val key = PendingMoveKey(snapshot.selectedVariant.basename, widget.globalIndex)
         // Queueing the target and deciding whether a worker is needed happen together, or
         // a target queued in the instant a worker is finishing would sit there with nobody
         // left to commit it.
         val startMoveWorker = synchronized(pendingMoves) {
-            pendingMoves[widget.globalIndex] = PendingWidgetTarget(x, y)
+            pendingMoves[key] = PendingWidgetTarget(x, y, widget.type, widget.sequenceId)
             val alreadyDraining = moveWorkerDraining
             moveWorkerDraining = true
             !alreadyDraining
@@ -465,15 +755,15 @@ class EditorViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(
             previewReviewed = false,
             error = null,
-            pendingWidgetMove = WidgetMovePreview(
-                globalIndex = widget.globalIndex,
-                displayX = storedToDisplay(
-                    x, widget.width, snapshot.preview.width, widget.x < 0,
-                ).toFloat(),
-                displayY = storedToDisplay(
-                    y, widget.height, snapshot.preview.height, widget.y < 0,
-                ).toFloat(),
-            ),
+            pendingWidgetMove = if (previewAlone) {
+                WidgetMovePreview(
+                    globalIndex = widget.globalIndex,
+                    displayX = storedToDisplay(x, widget.originX).toFloat(),
+                    displayY = storedToDisplay(y, widget.originY).toFloat(),
+                )
+            } else {
+                mutableState.value.pendingWidgetMove
+            },
         )
         if (startMoveWorker) {
             viewModelScope.launch { drainWidgetMoves() }
@@ -489,22 +779,32 @@ class EditorViewModel @Inject constructor(
      */
     private suspend fun drainWidgetMoves() {
         while (true) {
-            val (globalIndex, target) = takePendingMove() ?: break
-            val snapshot = mutableState.value.snapshot
-            if (snapshot == null) {
+            val (key, target) = takePendingMove() ?: break
+            val liveSnapshot = mutableState.value.snapshot
+            if (liveSnapshot == null) {
                 clearPendingMoves()
                 break
             }
-            val widget = snapshot.widgets.firstOrNull { it.globalIndex == globalIndex }
-            // The widget is gone, or the snapshot has already caught up with the target.
-            if (widget == null) continue
-            if (widget.x == target.x && widget.y == target.y) continue
+            // The snapshot can only answer for the variant it is *of*: this target may
+            // have been queued against a style the canvas has since switched away from,
+            // and a global index means something different in every entry, so comparing
+            // against the wrong one would skip a real move or commit a stale one. Where
+            // it can answer, the two questions it settles are whether the widget is still
+            // there and whether the container has already caught up with the target.
+            // Where it cannot, the commit goes ahead: `moveWidget` resolves its target by
+            // variant and global index, never by what is on screen.
+            if (liveSnapshot.selectedVariant.basename == key.variantBasename) {
+                val widget = liveSnapshot.widgets
+                    .firstOrNull { it.globalIndex == key.globalIndex }
+                    ?: continue
+                if (widget.x == target.x && widget.y == target.y) continue
+            }
             val updated = runCatching {
                 repository.moveWidget(
-                    styleName = snapshot.selectedStyle,
-                    globalIndex = widget.globalIndex,
-                    widgetType = widget.type,
-                    sequenceId = widget.sequenceId,
+                    styleName = key.variantBasename,
+                    globalIndex = key.globalIndex,
+                    widgetType = target.widgetType,
+                    sequenceId = target.sequenceId,
                     x = target.x,
                     y = target.y,
                     applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
@@ -525,14 +825,23 @@ class EditorViewModel @Inject constructor(
         if (mutableState.value.pendingWidgetMove != null) {
             mutableState.value = mutableState.value.copy(pendingWidgetMove = null)
         }
+        if (mutableState.value.pendingSetMove.isNotEmpty()) {
+            mutableState.value = mutableState.value.copy(pendingSetMove = emptyList())
+        }
     }
 
-    private fun pendingTarget(globalIndex: Int): PendingWidgetTarget? =
-        synchronized(pendingMoves) { pendingMoves[globalIndex] }
+    private fun pendingTarget(variantBasename: String, globalIndex: Int): PendingWidgetTarget? =
+        synchronized(pendingMoves) {
+            val key = PendingMoveKey(variantBasename, globalIndex)
+            pendingMoves[key] ?: inFlightMove?.takeIf { it.first == key }?.second
+        }
 
     /** The next target to commit, or null — which also retires the worker asking. */
-    private fun takePendingMove(): Pair<Int, PendingWidgetTarget>? {
+    private fun takePendingMove(): Pair<PendingMoveKey, PendingWidgetTarget>? {
         synchronized(pendingMoves) {
+            // The previous commit has published its snapshot (or failed) before
+            // the worker asks for another target.
+            inFlightMove = null
             // Every exit that returns null must retire the worker. Leaving
             // `moveWorkerDraining` true on the way out would convince `queueWidgetMove`
             // that a drain is still running, and no later move would ever start one.
@@ -541,19 +850,22 @@ class EditorViewModel @Inject constructor(
                 moveWorkerDraining = false
                 return null
             }
-            val globalIndex = entry.key
+            val key = entry.key
             val target = entry.value
-            pendingMoves.remove(globalIndex)
-            return globalIndex to target
+            pendingMoves.remove(key)
+            return (key to target).also { inFlightMove = it }
         }
     }
 
     private fun clearPendingMoves() {
-        synchronized(pendingMoves) { pendingMoves.clear() }
+        synchronized(pendingMoves) {
+            pendingMoves.clear()
+            inFlightMove = null
+        }
     }
 
     /**
-     * Steps the selected widget one rung along its resize ladder — see [spriteResizeLadder]
+     * Steps the selected widget one rung along its resize ladder — see [widgetResizeLadder]
      * for why the sizes come from a ladder rather than from scaling what is on screen.
      */
     fun resizeSelectedWidget(grow: Boolean) {
@@ -562,12 +874,16 @@ class EditorViewModel @Inject constructor(
             it.globalIndex == mutableState.value.selectedWidgetIndex
         } ?: return
         if (!selected.canResize) return
-        val next = nextSpriteSize(selected, grow) ?: return
+        val next = nextWidgetSize(selected, grow) ?: return
         if (next.width == selected.width && next.height == selected.height) return
         operate {
-            repository.resizeSprite(
-                styleName = snapshot.selectedStyle,
+            repository.resizeWidget(
+                styleName = snapshot.selectedVariant.basename,
+                globalIndex = selected.globalIndex,
+                widgetType = selected.type,
                 sequenceId = selected.sequenceId,
+                x = selected.x,
+                y = selected.y,
                 width = next.width,
                 height = next.height,
                 applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
@@ -583,7 +899,7 @@ class EditorViewModel @Inject constructor(
         if (selected.colorArgb == null || selected.colorArgb == colorArgb) return
         operate {
             repository.recolorPairWidget(
-                styleName = snapshot.selectedStyle,
+                styleName = snapshot.selectedVariant.basename,
                 globalIndex = selected.globalIndex,
                 sequenceId = selected.sequenceId,
                 x = selected.x,
@@ -608,7 +924,7 @@ class EditorViewModel @Inject constructor(
             },
         ) {
             repository.removeWidget(
-                snapshot.selectedStyle,
+                snapshot.selectedVariant.basename,
                 selected.globalIndex,
                 selected.type,
                 selected.sequenceId,
@@ -635,7 +951,7 @@ class EditorViewModel @Inject constructor(
             },
         ) {
             repository.duplicateWidget(
-                snapshot.selectedStyle,
+                snapshot.selectedVariant.basename,
                 selected.globalIndex,
                 selected.type,
                 selected.sequenceId,
@@ -679,7 +995,7 @@ class EditorViewModel @Inject constructor(
 
     fun reset() = operate(
         onSuccess = {
-            it.copy(selectedWidgetIndex = null, pendingImage = null)
+            it.copy(selectedWidgetIndex = null, multiSelection = emptyList(), pendingImage = null)
         },
     ) { repository.resetEdits() }
 
@@ -758,6 +1074,7 @@ class EditorViewModel @Inject constructor(
             mutableState.value = mutableState.value.copy(
                 isWorking = true,
                 pendingWidgetMove = null,
+                pendingSetMove = emptyList(),
                 previewReviewed = false,
                 error = null,
             )
@@ -770,13 +1087,18 @@ class EditorViewModel @Inject constructor(
                     val selectedStillExists = mutableState.value.selectedWidgetIndex?.let { index ->
                         snapshot.widgets.any { it.globalIndex == index }
                     } ?: true
+                    val stillSelected = mutableState.value.multiSelection.filter { index ->
+                        snapshot.widgets.any { it.globalIndex == index }
+                    }
                     mutableState.value = onSuccess(
                         mutableState.value.copy(
                             snapshot = snapshot,
+                            multiSelection = stillSelected.takeIf { it.size >= 2 }.orEmpty(),
                             selectedWidgetIndex = mutableState.value.selectedWidgetIndex
                                 .takeIf { selectedStillExists },
                             isWorking = false,
                             pendingWidgetMove = null,
+                            pendingSetMove = emptyList(),
                             error = null,
                         ),
                     )
@@ -808,6 +1130,7 @@ class EditorViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(
             isWorking = false,
             pendingWidgetMove = null,
+            pendingSetMove = emptyList(),
             error = UserMessage(messageIds.incrementAndGet(), text),
         )
     }
@@ -857,84 +1180,6 @@ class EditorViewModel @Inject constructor(
 }
 
 /** One rung of a widget's resize ladder. */
-internal data class SpriteSize(val percentOfOriginal: Int, val width: Int, val height: Int) {
-    val area: Long get() = width.toLong() * height
-}
-
-/** How much of the original extent one Smaller or Larger tap is worth. */
-internal const val SpriteResizeStepPercent = 5
-
-/**
- * Percentages of the *original* extent a resize is allowed to land on, 20% to 200%.
- *
- * Scaling the current extent by a factor instead is what made resizing unpredictable:
- * ×0.875 then ×1.125 does not come back, so 60×60 went to 52×52, back up to 58×58, down
- * to 50×50 — every round trip a little smaller, and no size reachable twice. Each rung
- * here is a fixed fraction of the extent the face shipped with, and
- * [dev.fitface.studio.core.model.WatchFaceRepository.resizeSprite] resamples the pristine
- * frames every time, so the same rung always produces the same pixels and Smaller then
- * Larger is exactly the size it started from.
- */
-private val SpriteResizePercents: List<Int> =
-    (20..200 step SpriteResizeStepPercent).toList()
-
-/**
- * Every size the selected widget can be resized to, smallest first.
- *
- * The top is [spriteResizeLimit] per side: a sprite can always be taken back to the extent
- * its face shipped — `00022`'s digits are 114×136 — and 128 px is how far past that it may
- * grow. Rungs over that are **dropped, not clamped**, because clamping one side of an
- * aspect-locked pair squashes the sprite: growing 57×68 repeatedly used to end at 128×128.
- * So a face with oversized frames tops out at exactly 100%.
- */
-internal fun spriteResizeLadder(originalWidth: Int, originalHeight: Int): List<SpriteSize> {
-    if (originalWidth <= 0 || originalHeight <= 0) return emptyList()
-    val widthLimit = spriteResizeLimit(originalWidth)
-    val heightLimit = spriteResizeLimit(originalHeight)
-    return SpriteResizePercents
-        .map { percent ->
-            SpriteSize(
-                percentOfOriginal = percent,
-                width = scaledExtent(originalWidth, percent),
-                height = scaledExtent(originalHeight, percent),
-            )
-        }
-        .filter { it.width <= widthLimit && it.height <= heightLimit }
-        // A small sprite's rungs round to the same pixel size — at 5% steps a 4×4 sprite is
-        // 4×4 anywhere from 90% to 110%. Keep one rung per size so a tap always changes
-        // something, and label it with the percentage nearest 100 so the extent the face
-        // shipped with is always the one that reads "100%".
-        .groupBy { it.width to it.height }
-        .map { (_, rungs) -> rungs.minBy { abs(it.percentOfOriginal - 100) } }
-        .sortedBy { it.area }
-}
-
-private fun scaledExtent(extent: Int, percent: Int): Int =
-    ((extent * percent + 50) / 100).coerceAtLeast(1)
-
-/**
- * The rung a Smaller or Larger tap moves to, or null at the end of the ladder.
- *
- * Chosen by area rather than by index so an extent that is not on the ladder — a project
- * resized by an earlier build, whose sizes came from repeated multiplication — snaps onto
- * it in the direction of the tap instead of jumping.
- */
-internal fun nextSpriteSize(widget: WidgetGuide, grow: Boolean): SpriteSize? {
-    val ladder = spriteResizeLadder(widget.originalWidth, widget.originalHeight)
-    val area = widget.width.toLong() * widget.height
-    return if (grow) {
-        ladder.firstOrNull { it.area > area }
-    } else {
-        ladder.lastOrNull { it.area < area }
-    }
-}
-
-/** Where the widget currently sits on its ladder, as a percentage of the original. */
-internal fun spriteSizePercent(widget: WidgetGuide): Int? =
-    spriteResizeLadder(widget.originalWidth, widget.originalHeight)
-        .firstOrNull { it.width == widget.width && it.height == widget.height }
-        ?.percentOfOriginal
-
 /**
  * Zoom for the pending background image, stepped in whole percentage points.
  *
@@ -961,3 +1206,16 @@ internal const val MinZoomPercent = 25
 internal const val MaxZoomPercent = 800
 
 internal fun centeredPlacement(fit: ImageFit): ImagePlacement = ImagePlacement(fit = fit)
+
+/**
+ * The step a whole set takes, given the step each member could take on its own.
+ *
+ * As far as the most constrained member can go in the wanted direction, and never
+ * backwards: a member already past an edge reports a clamp of zero, which holds the set.
+ * Pure so a test can pin it.
+ */
+internal fun sharedNudgeStep(steps: List<Int>, wanted: Int): Int = when {
+    steps.isEmpty() || wanted == 0 -> 0
+    wanted > 0 -> steps.min().coerceIn(0, wanted)
+    else -> steps.max().coerceIn(wanted, 0)
+}

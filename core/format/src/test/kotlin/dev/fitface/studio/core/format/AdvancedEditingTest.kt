@@ -172,7 +172,7 @@ class AdvancedEditingTest {
     @Test
     fun live00106SpriteResizePreservesFrameMapping() {
         val source = Fit3Container.parse(Files.readAllBytes(live00106))
-        val edit = StructuralEditor.resizeSprite(
+        val edit = resizeBySource(
             source,
             source.styleNames(),
             sequenceId = 69,

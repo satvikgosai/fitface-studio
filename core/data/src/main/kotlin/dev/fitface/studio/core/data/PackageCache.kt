@@ -8,6 +8,7 @@ import dev.fitface.studio.core.model.FaceCatalog
 import dev.fitface.studio.core.model.FaceStyleOption
 import java.io.File
 import java.io.IOException
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.Serializable
@@ -161,21 +162,53 @@ class PackageCache @Inject constructor(
 
     private fun safeName(appId: String): String = appId.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
+    /**
+     * Writes [bytes] to [target] through a scratch file of this write's own.
+     *
+     * The scratch name used to be `<target>.tmp`, one path for every writer, and two
+     * writers of one target is not a corner case: nothing serialises a catalogue load
+     * started by the library against one started by the widget importer, and on a cold
+     * start they land about twelve milliseconds apart. Both opened the same scratch file
+     * and interleaved their bytes into it, then the first renamed it away and the second's
+     * `renameTo` failed on a path that no longer existed — reported as "Could not cache the
+     * catalogue", and leaving the next launch to fetch the whole catalogue again. The same
+     * held for two downloads of one package.
+     *
+     * A unique name per write makes each file whole and the last rename the winner. The
+     * sweep replaces what the shared name gave for free: a write killed mid-flight left a
+     * scratch file that the next write to the same target simply truncated and reused,
+     * where a unique name would leave it there for ever. An hour is far longer than any
+     * write takes, so it can never reach one that is still running.
+     */
     private fun writeAtomically(target: File, bytes: ByteArray) {
-        target.parentFile?.mkdirs()
-        val temporary = File(target.parentFile, "${target.name}.tmp")
-        temporary.outputStream().use { output ->
-            output.write(bytes)
-            output.fd.sync()
-        }
-        if (!temporary.renameTo(target)) {
+        val directory = target.parentFile
+        directory?.mkdirs()
+        val scratchPrefix = "${target.name}."
+        val cutoff = System.currentTimeMillis() - StaleScratchMillis
+        directory?.listFiles().orEmpty()
+            .filter {
+                it.name.startsWith(scratchPrefix) && it.name.endsWith(ScratchSuffix) &&
+                    it.lastModified() < cutoff
+            }
+            .forEach { it.delete() }
+        val temporary = File(directory, "$scratchPrefix${UUID.randomUUID()}$ScratchSuffix")
+        try {
+            temporary.outputStream().use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            if (!temporary.renameTo(target)) throw IOException("Could not commit ${target.name}")
+        } finally {
+            // A no-op once the rename has consumed it; the path that matters is the one
+            // where the write or the rename threw.
             temporary.delete()
-            throw IOException("Could not commit ${target.name}")
         }
     }
 
     private companion object {
         const val TAG = "PackageCache"
+        const val ScratchSuffix = ".tmp"
+        const val StaleScratchMillis = 60L * 60 * 1000
 
         /** Exactly what [safeName] and [packageFile] produce, and nothing half-written. */
         val CommittedPackageName = Regex("""[A-Za-z0-9._-]+@\d+\.apk""")

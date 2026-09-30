@@ -2,6 +2,8 @@ package dev.fitface.studio.feature.library
 
 import android.text.format.DateUtils
 import androidx.annotation.StringRes
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,11 +74,13 @@ import coil3.compose.AsyncImage
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.FaceStyleOption
+import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitBadge
+import dev.fitface.studio.core.ui.FitDetails
 import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.AppMenuAction
@@ -89,6 +93,7 @@ import dev.fitface.studio.core.ui.fitText
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
+import dev.fitface.studio.core.ui.styleLabel
 import java.io.File
 
 @Composable
@@ -118,6 +123,25 @@ fun LibraryRoute(
         }
     }
 
+    // The system document picker, on both sides. `CreateDocument` takes the suggested file
+    // name when it is *launched*, not when it is constructed, which is why exporting is two
+    // steps: the tap arms `state.exporting` and the effect below opens the picker with the
+    // name built from it. A cancelled picker returns null, and `finishExport(null)` is what
+    // disarms it — without that the request would sit armed and the next export of the same
+    // project would not reopen the picker.
+    val exportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(ProjectArchiveNaming.MimeType),
+    ) { uri -> viewModel.finishExport(uri?.toString()) }
+    val importPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> viewModel.importProject(uri?.toString()) }
+
+    val export = state.exporting
+    val exportFileName = state.exportFileName
+    LaunchedEffect(export?.id) {
+        if (export != null && exportFileName != null) exportPicker.launch(exportFileName)
+    }
+
     // Same show-then-clear shape as the error above, and for the same reason: clearing
     // first changes this effect's key while `showSnackbar` is still suspended and cancels
     // it, so the message appears for one frame and vanishes.
@@ -131,6 +155,30 @@ fun LibraryRoute(
             snackbar.showSnackbar(duplicatedText)
         } finally {
             viewModel.clearDuplicated(duplicated.id)
+        }
+    }
+
+    val exported = state.exported
+    val exportedText = exported?.let {
+        stringResource(R.string.library_project_exported, it.name, formatBytes(it.byteCount))
+    }
+    LaunchedEffect(exported?.id) {
+        if (exported == null || exportedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(exportedText)
+        } finally {
+            viewModel.clearExported(exported.id)
+        }
+    }
+
+    val imported = state.imported
+    val importedText = imported?.let { stringResource(R.string.library_project_imported, it.name) }
+    LaunchedEffect(imported?.id) {
+        if (imported == null || importedText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(importedText)
+        } finally {
+            viewModel.clearImported(imported.id)
         }
     }
 
@@ -172,7 +220,10 @@ fun LibraryRoute(
         onProjectClick = viewModel::openProject,
         onRenameProject = viewModel::startRename,
         onDuplicateProject = viewModel::duplicateProject,
+        onExportProject = viewModel::startExport,
         onDeleteProject = viewModel::startDelete,
+        onImportProject = { importPicker.launch(ProjectArchiveNaming.ImportMimeTypes) },
+        onStartCustomFace = viewModel::startCustomFace,
     )
 }
 
@@ -208,7 +259,10 @@ private fun LibraryScreen(
     onProjectClick: (ProjectSummary) -> Unit,
     onRenameProject: (ProjectSummary) -> Unit,
     onDuplicateProject: (ProjectSummary) -> Unit,
+    onExportProject: (ProjectSummary) -> Unit,
     onDeleteProject: (ProjectSummary) -> Unit,
+    onImportProject: () -> Unit,
+    onStartCustomFace: (String) -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
     Scaffold(
@@ -227,6 +281,7 @@ private fun LibraryScreen(
                 loading = state.isLoadingCatalog,
                 onPage = { page = it },
                 onRefresh = onRefresh,
+                onImport = onImportProject,
                 onReportProblem = onReportProblem,
                 onAbout = onAbout,
                 onCheckForUpdate = onCheckForUpdate,
@@ -253,7 +308,9 @@ private fun LibraryScreen(
                     onOpen = onProjectClick,
                     onRename = onRenameProject,
                     onDuplicate = onDuplicateProject,
+                    onExport = onExportProject.takeIf { state.developerTools },
                     onRemove = onDeleteProject,
+                    onStartCustomFace = onStartCustomFace,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -295,6 +352,7 @@ internal fun LibraryHeader(
     loading: Boolean,
     onPage: (LibraryPage) -> Unit,
     onRefresh: () -> Unit,
+    onImport: () -> Unit,
     onReportProblem: () -> Unit,
     onAbout: () -> Unit,
     onCheckForUpdate: () -> Unit,
@@ -335,6 +393,13 @@ internal fun LibraryHeader(
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.headlineLarge,
             )
+            // One slot, one page each. REFRESH belongs to the catalogue and IMPORT to the
+            // projects, and neither page ever shows both — so the row's width budget is the
+            // same whichever is in it, and the touch-target floor above already made the two
+            // pages the same height whether or not anything was.
+            //
+            // IMPORT is absent rather than disabled when the tools are locked, which is the
+            // whole of `DeveloperGate`: a greyed-out control is a control to ask about.
             if (page == LibraryPage.WatchFaces) {
                 TextButton(onClick = onRefresh, enabled = !loading) {
                     Text(
@@ -345,6 +410,13 @@ internal fun LibraryHeader(
                                 R.string.library_action_refresh
                             },
                         ),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            } else if (state.developerTools) {
+                TextButton(onClick = onImport, enabled = !state.isWorking) {
+                    Text(
+                        stringResource(R.string.library_action_import),
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -543,11 +615,6 @@ private fun CatalogLoading() {
                 stringResource(R.string.library_loading_title),
                 style = MaterialTheme.typography.titleSmall,
             )
-            Text(
-                stringResource(R.string.library_loading_detail),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.fitText.secondary,
-            )
         }
     }
 }
@@ -726,10 +793,6 @@ private fun FaceDetailsSheet(
                     .padding(start = 20.dp, end = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                MicroLabel(
-                    stringResource(R.string.library_sheet_kind),
-                    color = MaterialTheme.colorScheme.primary,
-                )
                 Text(
                     face.name,
                     modifier = Modifier.padding(top = 8.dp),
@@ -750,7 +813,7 @@ private fun FaceDetailsSheet(
                     contentDescription = stringResource(
                         R.string.library_sheet_preview_a11y,
                         face.name,
-                        selected.id + 1,
+                        styleLabel(selected.id),
                     ),
                     modifier = Modifier
                         .width(176.dp)
@@ -794,11 +857,6 @@ private fun FaceDetailsSheet(
                         modifier = Modifier.padding(top = 20.dp),
                         color = MaterialTheme.colorScheme.outlineVariant,
                     )
-                    MicroLabel(
-                        stringResource(R.string.library_sheet_start_new),
-                        modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                    )
                 }
                 MicroLabel(
                     stringResource(R.string.library_sheet_choose_style),
@@ -835,6 +893,17 @@ private fun FaceDetailsSheet(
                         formatBytes(face.packageSize),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Keep expanding reference inside the scroll, so the action stays reachable.
+                FitDetails(
+                    label = stringResource(R.string.library_download_details),
+                    modifier = Modifier.padding(top = 14.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.library_download_cache_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.fitText.secondary,
                     )
                 }
             }
@@ -890,19 +959,19 @@ private fun FaceDetailsSheet(
                         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     )
                 }
-                Text(
-                    stringResource(
-                        when {
-                            action == FaceAction.UPDATE -> R.string.library_update_note
-                            packageOnDevice && action != FaceAction.NOT_EDITABLE ->
-                                R.string.library_new_project_note
-                            else -> R.string.library_download_cache_note
-                        },
-                    ),
-                    modifier = Modifier.padding(top = 10.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.fitText.secondary,
-                )
+                val actionNote = when {
+                    action == FaceAction.UPDATE -> R.string.library_update_note
+                    packageOnDevice && action != FaceAction.NOT_EDITABLE -> R.string.library_new_project_note
+                    else -> null
+                }
+                actionNote?.let {
+                    Text(
+                        stringResource(it),
+                        modifier = Modifier.padding(top = 10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.fitText.secondary,
+                    )
+                }
             }
         }
     }
@@ -923,7 +992,7 @@ private fun StyleThumbnail(
             R.string.library_style_thumb_a11y
         },
         faceName,
-        style.id + 1,
+        styleLabel(style.id),
     )
     Column(
         modifier = Modifier
@@ -975,10 +1044,15 @@ private fun ProjectsList(
     onOpen: (ProjectSummary) -> Unit,
     onRename: (ProjectSummary) -> Unit,
     onDuplicate: (ProjectSummary) -> Unit,
+    /** Null while the tools are locked, which is what keeps the entry off the menu. */
+    onExport: ((ProjectSummary) -> Unit)?,
     onRemove: (ProjectSummary) -> Unit,
+    onStartCustomFace: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val projects = state.visibleProjects
+    val customFaceName = stringResource(R.string.library_custom_face_name)
+    val startCustomFace = { onStartCustomFace(customFaceName) }
     // Only one menu is ever composed, because only one id can be held here. A DropdownMenu
     // is a Popup — its own window — and one per row would be one window per project.
     var openMenuFor by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -997,6 +1071,7 @@ private fun ProjectsList(
     ) {
         if (state.projects.isEmpty()) {
             item { ProjectsEmptyState(onBrowse) }
+            item { CustomFaceCard(state, startCustomFace) }
             return@LazyColumn
         }
         // The same controls the catalogue has, in the same place, scrolling with the list.
@@ -1030,6 +1105,10 @@ private fun ProjectsList(
                 }
             }
         }
+        // Under the controls, never above them: both pages lay their controls out in the
+        // same place so the search field does not move when the tab changes, and a card
+        // above them on this page alone would move it by its own height.
+        item { CustomFaceCard(state, startCustomFace) }
         if (projects.isEmpty()) {
             item {
                 Column(
@@ -1060,10 +1139,106 @@ private fun ProjectsList(
                     onDismissMenu = { openMenuFor = null },
                     onRename = { onRename(project) },
                     onDuplicate = { onDuplicate(project) },
+                    onExport = onExport?.let { export -> { export(project) } },
                     onRemove = { onRemove(project) },
                 )
             }
         }
+    }
+}
+
+/**
+ * Starts a custom face: a face's clock on an empty panel, to build on.
+ *
+ * It says two things before it is tapped, because both are costs the reader should choose
+ * knowingly. **Whether it downloads**: nothing ships with this app, so the face it is built
+ * from comes from the store like any other, and the card says how big that is or that the
+ * package is already here. **What it replaces on the watch**: it is built on another face's
+ * slot, so installing it takes that face's place, and one custom face replaces another.
+ */
+@Composable
+private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
+    val source = state.customFaceSource
+    val progress = state.customFaceProgress
+    val enabled = source != null && progress == null && !state.isOpeningProject &&
+        state.downloadingProductId == null
+    val sourceName = source?.name ?: stringResource(R.string.library_custom_face_source_fallback)
+    val cost = when {
+        source == null && state.isLoadingCatalog -> stringResource(R.string.library_custom_face_waiting)
+        source == null -> stringResource(R.string.library_custom_face_unavailable)
+        state.customFaceCached -> stringResource(R.string.library_custom_face_cached)
+        else -> stringResource(R.string.library_custom_face_download, formatBytes(source.packageSize))
+    }
+    val slot = stringResource(R.string.library_custom_face_slot, sourceName)
+    val title = stringResource(R.string.library_custom_face_title)
+    val detail = stringResource(R.string.library_custom_face_detail)
+    val description = "$title. $detail $cost. $slot"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (source == null) .6f else 1f)
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = .06f))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .35f), MaterialTheme.shapes.medium)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onStart)
+            .semantics { contentDescription = description }
+            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(13.dp),
+        ) {
+            // The empty state's tile, with the mark for adding one.
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), MaterialTheme.shapes.medium)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), MaterialTheme.shapes.medium),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    detail,
+                    modifier = Modifier.padding(top = 3.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
+        }
+        if (progress != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (progress.building) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator({ progress.fraction }, Modifier.fillMaxWidth())
+                }
+                Text(
+                    if (progress.building) {
+                        stringResource(R.string.library_custom_face_building)
+                    } else {
+                        stringResource(R.string.library_custom_face_downloading, sourceName,
+                            (progress.fraction * 100).toInt())
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
+        } else {
+            Text(
+                cost.uppercase(),
+                style = FitFaceType.micro,
+                color = if (state.customFaceCached && source != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.fitText.secondary
+                },
+            )
+        }
+        Text(slot, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
     }
 }
 
@@ -1126,6 +1301,7 @@ private fun ProjectRow(
     onDismissMenu: () -> Unit,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
+    onExport: (() -> Unit)?,
     onRemove: () -> Unit,
 ) {
     Row(
@@ -1180,6 +1356,7 @@ private fun ProjectRow(
             onDismiss = onDismissMenu,
             onRename = onRename,
             onDuplicate = onDuplicate,
+            onExport = onExport,
             onRemove = onRemove,
         )
         // Unlike the sheet's row, this one builds no description of its own, so the label
@@ -1220,6 +1397,8 @@ private fun ProjectMenu(
     onDismiss: () -> Unit,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
+    /** Null while `DeveloperGate` is locked, and then there is no entry at all. */
+    onExport: (() -> Unit)?,
     onRemove: () -> Unit,
 ) {
     Box {
@@ -1240,6 +1419,15 @@ private fun ProjectMenu(
             FitMenuEntry(stringResource(R.string.library_project_duplicate)) {
                 onDismiss()
                 onDuplicate()
+            }
+            // Above Delete because it is not destructive, and below Duplicate because the
+            // two are the same idea one step apart — a copy that stays here, and a copy that
+            // leaves. Absent entirely while the tools are locked.
+            onExport?.let { export ->
+                FitMenuEntry(stringResource(R.string.library_project_export)) {
+                    onDismiss()
+                    export()
+                }
             }
             // Last, and the only one that is destructive. Nothing above it can lose work,
             // so the entry that can is the one furthest from where the menu opens.
@@ -1322,7 +1510,7 @@ internal fun SheetProjectRow(
                 }
             }
             Text(
-                "${projectFaceLine(project)} · $age",
+                project.styleId?.let { "${styleLabel(it)} · $age" } ?: age,
                 modifier = Modifier.padding(top = 3.dp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1382,10 +1570,12 @@ private fun inertRowAlpha(enabled: Boolean, opening: Boolean): Float =
     if (enabled || opening) 1f else .45f
 
 /**
- * "face 00112 · style 01", or just the face when the style could not be recovered.
+ * "face 00112 · Style 1", or just the face when the style could not be recovered.
  *
- * The style is numbered the way the sheet's thumbnails are — `styleN.bin` is zero-based and
- * the labels beside the previews are not — so the two agree about which colourway is which.
+ * The label comes from `:core:ui`'s [styleLabel], which is the same function the editor's
+ * Styles page uses, so the two screens cannot word the same colourway differently. They had
+ * already drifted once — this line read a zero-padded "style 01" while the editor showed the
+ * container's own "style0" — which is two wrong answers to one question.
  */
 @Composable
 private fun projectFaceLine(project: ProjectSummary): String {
@@ -1393,14 +1583,7 @@ private fun projectFaceLine(project: ProjectSummary): String {
     return if (styleId == null) {
         stringResource(R.string.library_project_face_line_plain, project.faceId)
     } else {
-        stringResource(
-            R.string.library_project_face_line,
-            project.faceId,
-            stringResource(
-                R.string.library_project_style,
-                (styleId + 1).toString().padStart(2, '0'),
-            ),
-        )
+        stringResource(R.string.library_project_face_line, project.faceId, styleLabel(styleId))
     }
 }
 

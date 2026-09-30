@@ -56,6 +56,7 @@ class ProjectDuplicationTest {
             context = context,
             projectDao = dao,
             imageSource = AndroidImageSource(context.contentResolver),
+            contentResolver = context.contentResolver,
             diagnostics = DiagnosticsLog(),
         )
     }
@@ -144,9 +145,15 @@ class ProjectDuplicationTest {
     @Test
     fun aDuplicateCanRestoreAWidgetTheOriginalHadRemoved() = runBlocking {
         val original = repository.openPackage(facePackage())
-        val widget = original.widgets.first { it.width > 0 && it.height > 0 }
+        // Not simply the first drawable widget: that is the style's background, and
+        // every other widget on the face is positioned against it, so cutting it out is
+        // refused rather than allowed to move twelve widgets at once.
+        val widget = original.widgets.first { candidate ->
+            candidate.width > 0 && candidate.height > 0 &&
+                original.widgets.none { it.alignedToGlobalIndex == candidate.globalIndex }
+        }
         val removed = repository.removeWidget(
-            styleName = original.selectedStyle,
+            styleName = original.selectedVariant.basename,
             globalIndex = widget.globalIndex,
             widgetType = widget.type,
             sequenceId = widget.sequenceId,
@@ -236,7 +243,7 @@ class ProjectDuplicationTest {
     private suspend fun nudge(snapshot: EditorSnapshot, by: Int): EditorSnapshot {
         val widget = snapshot.widgets.first { it.width > 0 && it.height > 0 }
         return repository.moveWidget(
-            styleName = snapshot.selectedStyle,
+            styleName = snapshot.selectedVariant.basename,
             globalIndex = widget.globalIndex,
             widgetType = widget.type,
             sequenceId = widget.sequenceId,

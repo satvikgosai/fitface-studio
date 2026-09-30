@@ -34,10 +34,15 @@ someone:
 - **Container parsing and editing** (`:core:format`) — memory-unsafe reads,
   unbounded allocation, or a crafted `.bin`/`.apk` that makes the app write
   something it should have refused.
-- **Download handling** (`:core:data`) — the 32 MiB bound, the declared-size match,
-  the HTTPS-and-trusted-host rule, or XML entity handling.
+- **Download handling** (`:core:data`) — face-package and update bounds, declared
+  size, HTTPS allowlists before/after redirects, or XML entity handling.
+- **Project archives** — ZIP bounds, path handling, schema validation, imported
+  artwork provenance, or persistence that exposes another project's private files.
+- **App updates** — package/version/signature checks, install-status spoofing,
+  permission handoff, cancellation or signed-URL disclosure.
 - **The delivery path** (`:core:delivery`) — anything that lets another app on the
-  phone drive a transfer, or that writes outside app-private storage.
+  phone drive a transfer, or writes outside private storage and the user-selected
+  archive export document.
 
 ### Known and accepted
 

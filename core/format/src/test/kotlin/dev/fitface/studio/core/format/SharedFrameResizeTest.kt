@@ -54,18 +54,23 @@ class SharedFrameResizeTest {
             original.entries
                 .filter { it.basename.matches(STYLE_ENTRY) }
                 .forEach inner@{ style ->
+                    // Sprites specifically: this test is about the shared glyph pool, and
+                    // resize now reaches types that address one raster each.
                     val target = FaceRecordParser.widgetGuides(style)
-                        .firstOrNull { it.canResize && it.width >= 8 && it.height >= 8 }
+                        .firstOrNull {
+                            it.type == WIDGET_SPRITE && it.canResize &&
+                                it.width >= 8 && it.height >= 8
+                        }
                         ?: return@inner
                     val before = frameSizes(style)
-                    val mine = frameIndices(style, target.sequenceId)
+                    val mine = frameIndices(style, target.globalIndex)
                     val owners = owners(style)
                     if (mine.none { owners[it].orEmpty().size > 1 }) return@inner
 
                     val width = (target.width / 2).coerceAtLeast(1)
                     val height = (target.height / 2).coerceAtLeast(1)
                     val edited = runCatching {
-                        StructuralEditor.resizeSprite(
+                        resizeBySource(
                             source = original,
                             entryBasenames = listOf(style.basename),
                             sequenceId = target.sequenceId,
@@ -87,11 +92,11 @@ class SharedFrameResizeTest {
                         return@inner
                     }
                     // The sprite keeps the very records it had — no copies, no repointing.
-                    if (frameIndices(editedStyle, target.sequenceId) != mine) {
+                    if (frameIndices(editedStyle, target.globalIndex) != mine) {
                         failures += "$face/${style.basename}: the sprite was repointed"
                     }
 
-                    val pool = closureOf(style, target.sequenceId)
+                    val pool = closureOf(style, target.globalIndex)
                     pool.forEach { index ->
                         if (after[index] != width to height) {
                             failures += "$face/${style.basename}: pool frame $index is " +
@@ -136,12 +141,12 @@ class SharedFrameResizeTest {
         val units = FaceRecordParser.widgetGuides(style).single { it.globalIndex == 3 }
         assertEquals("expected the shipped 114×136 hour digits", 114, tens.width)
         assertEquals(136, tens.height)
-        val shared = frameIndices(style, tens.sequenceId)
-            .intersect(frameIndices(style, units.sequenceId).toSet())
+        val shared = frameIndices(style, tens.globalIndex)
+            .intersect(frameIndices(style, units.globalIndex).toSet())
         assertTrue("widgets 2 and 3 must share frames", shared.isNotEmpty())
 
         val framesBefore = FaceRecordParser.scanImages(style).size
-        val edited = StructuralEditor.resizeSprite(
+        val edited = resizeBySource(
             source = original,
             entryBasenames = listOf("style0.bin"),
             sequenceId = tens.sequenceId,
@@ -167,7 +172,7 @@ class SharedFrameResizeTest {
             guides.single { it.globalIndex == 3 }.width,
         )
         assertEquals(68, guides.single { it.globalIndex == 3 }.height)
-        val poolSizes = closureOf(style, tens.sequenceId)
+        val poolSizes = closureOf(style, tens.globalIndex)
             .mapTo(mutableSetOf()) { frameSizes(editedStyle)[it] }
         assertEquals("the whole pool is one size", setOf(57 to 68), poolSizes)
         // The battery sprite draws from its own frames and must be untouched.
@@ -188,7 +193,7 @@ class SharedFrameResizeTest {
 
         var container = original
         listOf(100 to 120, 90 to 108, 80 to 96, 70 to 84).forEach { (width, height) ->
-            container = StructuralEditor.resizeSprite(
+            container = resizeBySource(
                 source = container,
                 entryBasenames = listOf("style0.bin"),
                 sequenceId = tens.sequenceId,
@@ -217,7 +222,7 @@ class SharedFrameResizeTest {
         val tens = FaceRecordParser.widgetGuides(original.entryByBasename("style0.bin"))
             .single { it.globalIndex == 2 }
 
-        val edited = StructuralEditor.resizeSprite(
+        val edited = resizeBySource(
             source = original,
             entryBasenames = listOf("style0.bin"),
             sequenceId = tens.sequenceId,
@@ -238,11 +243,14 @@ class SharedFrameResizeTest {
         return images.associateBy { (it.recordOffset - first).toLong() }
     }
 
-    private fun frameIndices(entry: ContainerEntry, sequenceId: Int): List<Int> {
+    /**
+     * Keyed on the global index, not the data source: 32 of the catalogue's 1,518 Sprites
+     * share a source with another Sprite in the same style, and resize no longer requires
+     * the source to be unique because the selector no longer uses it as an identity.
+     */
+    private fun frameIndices(entry: ContainerEntry, globalIndex: Int): List<Int> {
         val relative = byRelative(entry)
-        val record = FaceRecordParser.scanWidgets(entry).single {
-            it.widgetType == WIDGET_SPRITE && it.sequenceId == sequenceId
-        }
+        val record = FaceRecordParser.scanWidgets(entry).single { it.globalIndex == globalIndex }
         return FaceRecordParser.referencedImages(record, relative).map(ImageRecord::index)
     }
 
@@ -252,13 +260,11 @@ class SharedFrameResizeTest {
         return FaceRecordParser.referencedImages(record, relative).map(ImageRecord::index)
     }
 
-    private fun closureOf(entry: ContainerEntry, sequenceId: Int): Set<Int> {
+    private fun closureOf(entry: ContainerEntry, globalIndex: Int): Set<Int> {
         val relative = byRelative(entry)
         val records = FaceRecordParser.scanWidgets(entry)
-        val target = records.single {
-            it.widgetType == WIDGET_SPRITE && it.sequenceId == sequenceId
-        }
-        return FaceRecordParser.sharedFrameClosure(target, records, relative)
+        val target = records.single { it.globalIndex == globalIndex }
+        return FaceRecordParser.rasterPool(target, records, relative).images
     }
 
     private fun frameSizes(entry: ContainerEntry): List<Pair<Int, Int>> =

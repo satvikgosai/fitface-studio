@@ -42,7 +42,7 @@ internal class UpdateDownloads @Inject constructor(
         .build()
 
     /** The releases feed, as text. */
-    fun fetchFeed(): String {
+    suspend fun fetchFeed(): String {
         val url = GitHubReleaseFeed.Endpoint.toHttpUrlOrNull()
             ?: throw WatchFaceException("The update service could not be reached.", "bad endpoint")
         require(isTrustedUpdateHost(url.host)) { "the endpoint is not a trusted host" }
@@ -56,7 +56,7 @@ internal class UpdateDownloads @Inject constructor(
             .get()
             .build()
         return try {
-            client.newCall(request).execute().use { response ->
+            client.newCall(request).useCancellable { response ->
                 if (response.code == 403 || response.code == 429) {
                     throw WatchFaceException(
                         "Update checks are rate-limited right now. Try again later.",
@@ -72,6 +72,8 @@ internal class UpdateDownloads @Inject constructor(
                 response.body.string()
             }
         } catch (error: WatchFaceException) {
+            throw error
+        } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             throw WatchFaceException(
@@ -115,7 +117,7 @@ internal class UpdateDownloads @Inject constructor(
             )
         }
         try {
-            client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+            client.newCall(Request.Builder().url(url).get().build()).useCancellable { response ->
                 if (!response.isSuccessful) {
                     throw WatchFaceException(
                         "The update download failed.",
@@ -210,13 +212,15 @@ internal class UpdateDownloads @Inject constructor(
         File(context.filesDir, UpdatesDirectory).apply { mkdirs() }
 
     /**
-     * Writes through a `.tmp` and renames, so a target file either is the whole download
-     * or does not exist. The same commit discipline as `PackageCache.writeAtomically`,
+     * Writes through a unique `.tmp` and renames, so a target file either is the whole
+     * download or does not exist. A cancelled attempt must not delete the scratch file
+     * of an immediate retry. The same commit discipline as `PackageCache.writeAtomically`,
      * but handed an `OutputStream` rather than a `ByteArray` — see the class comment.
      */
     private fun writeStreaming(target: File, write: (OutputStream) -> Unit) {
-        target.parentFile?.mkdirs()
-        val temporary = File(target.parentFile, "${target.name}.tmp")
+        val directory = target.parentFile ?: throw IOException("Missing update directory")
+        directory.mkdirs()
+        val temporary = File.createTempFile("${target.name}.", ".tmp", directory)
         try {
             FileOutputStream(temporary).use { output ->
                 write(output)

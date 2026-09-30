@@ -60,8 +60,8 @@ object FaceEditor {
             val endpoint = if (record.widgetType == WIDGET_BADGE) {
                 val deltaX = x - record.x
                 val deltaY = y - record.y
-                val endpointX = record.width.toShort().toInt() + deltaX
-                val endpointY = record.height.toShort().toInt() + deltaY
+                val endpointX = record.raw1C.toShort().toInt() + deltaX
+                val endpointY = record.raw1E.toShort().toInt() + deltaY
                 if (endpointX !in Short.MIN_VALUE..Short.MAX_VALUE ||
                     endpointY !in Short.MIN_VALUE..Short.MAX_VALUE
                 ) {
@@ -208,6 +208,7 @@ object FaceEditor {
 
     fun replaceBackgrounds(
         source: Fit3Container,
+        entryBasenames: List<String>,
         width: Int,
         height: Int,
         argb: IntArray,
@@ -221,7 +222,7 @@ object FaceEditor {
         val changedEntries = mutableListOf<ContainerEntry>()
         // Computed once so every style keeps a byte-identical background.
         val indexedPayload by lazy(LazyThreadSafetyMode.NONE) { IndexedImage.quantize(argb) }
-        backgroundRasters(source).forEach { (entry, image) ->
+        backgroundRasters(source, entryBasenames).forEach { (entry, image) ->
             if (image.width != width || image.height != height) {
                 throw Fit3FormatException(
                     "${entry.basename}: background is ${image.width}x${image.height}, " +
@@ -264,6 +265,7 @@ object FaceEditor {
 
     fun tintBackgrounds(
         source: Fit3Container,
+        entryBasenames: List<String>,
         red: Int,
         green: Int,
         blue: Int,
@@ -276,7 +278,7 @@ object FaceEditor {
         val output = source.toByteArray()
         var changedBytes = 0
         val changedEntries = mutableListOf<ContainerEntry>()
-        backgroundRasters(source).forEach { (entry, image) ->
+        backgroundRasters(source, entryBasenames).forEach { (entry, image) ->
             if (image.isIndexed) {
                 // Only the 256-entry palette needs recolouring; the index plane
                 // already describes the picture.
@@ -381,6 +383,40 @@ object FaceEditor {
         return finalize(source, output, listOf(entry), changed)
     }
 
+    /**
+     * The picture the watch's face picker holds for [styleIndex] now, or null where there is
+     * none this app can read — no `preview.bin`, no raster at that index, or one that is not
+     * plain RGB565, which is the only kind [replacePreviewThumbnail] writes.
+     */
+    fun previewThumbnail(source: Fit3Container, styleIndex: Int): PreviewFrame? {
+        val entry = source.entries.singleOrNull { it.basename == "preview.bin" } ?: return null
+        val raster = FaceRecordParser.scanImages(entry).getOrNull(styleIndex) ?: return null
+        if (raster.format != IMAGE_RGB565) return null
+        return FaceRecordParser.decodeImage(entry, raster)
+    }
+
+    /**
+     * Exactly the picture [replacePreviewThumbnail] would write for [composed], as the face
+     * picker will then show it: box-filtered to the raster's own size and quantised to
+     * RGB565 — so what the Styles page shows as "after" is the stored pixels, not the
+     * canvas scaled down by the display. Null where [previewThumbnail] is null.
+     */
+    fun renderedThumbnail(source: Fit3Container, styleIndex: Int, composed: PreviewFrame): PreviewFrame? {
+        val entry = source.entries.singleOrNull { it.basename == "preview.bin" } ?: return null
+        val raster = FaceRecordParser.scanImages(entry).getOrNull(styleIndex) ?: return null
+        if (raster.format != IMAGE_RGB565) return null
+        val scaled = boxFilter(composed, raster.width, raster.height)
+        return PreviewFrame(raster.width, raster.height, IntArray(scaled.size) { index ->
+            val color = scaled[index]
+            val rgb565 = encodeRgb565(color ushr 16 and 0xFF, color ushr 8 and 0xFF, color and 0xFF)
+            // The decoder's own expansion, so this is what reading the raster back gives.
+            val red = (((rgb565 ushr 11) and 0x1F) * 255 + 15) / 31
+            val green = (((rgb565 ushr 5) and 0x3F) * 255 + 31) / 63
+            val blue = ((rgb565 and 0x1F) * 255 + 15) / 31
+            (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
+        })
+    }
+
     /** Area-averaging downscale so thumbnails keep thin glyphs legible. */
     internal fun boxFilter(source: PreviewFrame, width: Int, height: Int): IntArray {
         if (width <= 0 || height <= 0) {
@@ -424,10 +460,6 @@ object FaceEditor {
         }
     }
 
-    private fun styleEntries(source: Fit3Container): List<ContainerEntry> =
-        source.entries.filter { it.basename.matches(Regex("""style\d+\.bin""")) }
-            .ifEmpty { throw Fit3FormatException("container contains no style entries") }
-
     /**
      * Every style that carries a full-panel background raster, paired with it.
      *
@@ -446,8 +478,9 @@ object FaceEditor {
      */
     private fun backgroundRasters(
         source: Fit3Container,
+        entryBasenames: List<String>,
     ): List<Pair<ContainerEntry, ImageRecord>> =
-        styleEntries(source).mapNotNull { entry ->
+        entryBasenames.map(source::entryByBasename).mapNotNull { entry ->
             FaceRecordParser.backgroundImage(entry)?.let { entry to it }
         }.ifEmpty {
             throw Fit3FormatException(

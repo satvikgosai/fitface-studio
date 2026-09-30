@@ -2,6 +2,7 @@ package dev.fitface.studio.core.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -214,11 +215,25 @@ private fun CloseButton(onDismiss: () -> Unit) {
     TextButton(onClick = onDismiss) { Text(stringResource(R.string.ui_diagnostics_close)) }
 }
 
+/** The height of the download phase: one line of body, the bar, its readout and the footer. */
+private val UpdateBodyMinHeight = 116.dp
+
 @Composable
 private fun UpdateBody(state: UpdateDialogState) {
     // Same reason as the other two, and this one has the longest string in the app in it:
     // the signing-key refusal runs to three lines in portrait and more in landscape.
-    Column(Modifier.verticalScroll(rememberScrollState())) {
+    //
+    // Width and a floor under the height, because this dialog rewrites its own body in
+    // place: "Checking for updates…" is one short line and "Version 0.1.4 is ready to
+    // install" plus a progress bar is four, so an AlertDialog sized to its content grew
+    // and shrank under the reader's finger as the download moved between phases — with
+    // the buttons moving with it. The floor is the download phase, which is the tallest
+    // of the ordinary ones; a refusal is longer still and scrolls.
+    Column(
+        Modifier.fillMaxWidth()
+            .heightIn(min = UpdateBodyMinHeight)
+            .verticalScroll(rememberScrollState()),
+    ) {
         Text(
             when (state.phase) {
                 UpdatePhase.CHECKING -> stringResource(R.string.ui_update_checking)

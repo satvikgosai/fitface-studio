@@ -25,6 +25,8 @@ import javax.inject.Singleton
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -66,39 +68,57 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         cache.addUneditable(appId)
     }
 
+    /**
+     * One catalogue load at a time, for the whole app.
+     *
+     * Two screens ask for it independently — the library on its first frame and the widget
+     * importer when it opens — and nothing joined them, so a cold start could run two full
+     * paged fetches and then race to write the same cache file. Serialising them means the
+     * second caller finds the cache the first just wrote and returns it without touching
+     * the network; `forceRefresh` still refetches, because that one is someone pressing
+     * REFRESH. The lock is inside [Dispatchers.IO] and releases on cancellation, so a
+     * caller that goes away while waiting frees the next one.
+     */
+    private val loading = Mutex()
+
     override suspend fun loadCatalog(forceRefresh: Boolean): FaceCatalog =
         withContext(Dispatchers.IO) {
-            if (!forceRefresh) {
-                cache.readCatalog()
-                    ?.takeIf { it.fetchedAtEpochMillis > System.currentTimeMillis() - CatalogTtlMillis }
-                    ?.let {
-                        // Recorded so a report from a warm start says why the network was
-                        // never touched, rather than showing an empty log that reads as
-                        // nothing having happened.
-                        diagnostics.info(
-                            TAG,
-                            "Catalogue served from cache",
-                            "faces=${it.faces.size} styles=${it.styleCount}",
-                        )
+            loading.withLock {
+                if (!forceRefresh) {
+                    cache.readCatalog()
+                        ?.takeIf {
+                            it.fetchedAtEpochMillis > System.currentTimeMillis() - CatalogTtlMillis
+                        }
+                        ?.let {
+                            // Recorded so a report from a warm start says why the network
+                            // was never touched, rather than showing an empty log that
+                            // reads as nothing having happened.
+                            diagnostics.info(
+                                TAG,
+                                "Catalogue served from cache",
+                                "faces=${it.faces.size} styles=${it.styleCount}",
+                            )
+                            return@withContext it
+                        }
+                }
+                try {
+                    fetchCatalog()
+                } catch (error: WatchFaceException) {
+                    // A failed refresh must not wipe a catalogue the user can still
+                    // browse. Every failure has to reach this guard: it used to sit after
+                    // the paging loop, where a throw out of the network call or the parser
+                    // stepped straight over it and only a page that parsed to nothing was
+                    // covered.
+                    cache.readCatalog()?.let {
+                        diagnostics.warn(TAG, "Catalogue refresh failed; keeping the cached list")
                         return@withContext it
                     }
-            }
-            try {
-                fetchCatalog()
-            } catch (error: WatchFaceException) {
-                // A failed refresh must not wipe a catalogue the user can still browse.
-                // Every failure has to reach this guard: it used to sit after the paging
-                // loop, where a throw out of the network call or the parser stepped
-                // straight over it and only a page that parsed to nothing was covered.
-                cache.readCatalog()?.let {
-                    diagnostics.warn(TAG, "Catalogue refresh failed; keeping the cached list")
-                    return@withContext it
+                    throw error
                 }
-                throw error
             }
         }
 
-    private fun fetchCatalog(): FaceCatalog {
+    private suspend fun fetchCatalog(): FaceCatalog {
         val faces = mutableListOf<CatalogFace>()
         var locale = catalogLocale()
         var start = 1
@@ -151,7 +171,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         return catalog
     }
 
-    private fun fetchCatalogPage(start: Int, locale: String, allowEmpty: Boolean): CatalogPage =
+    private suspend fun fetchCatalogPage(start: Int, locale: String, allowEmpty: Boolean): CatalogPage =
         CatalogXmlParser.parseCatalogPage(
             getText(catalogUrl(start, start + PageSize - 1, locale)),
             allowEmpty = allowEmpty,
@@ -219,7 +239,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             .addQueryParameter("pd", "0")
             .build()
 
-    private fun checkUpdate(face: CatalogFace) {
+    private suspend fun checkUpdate(face: CatalogFace) {
         val appInfo = "${face.appId}@${face.versionCode}"
         val url = commonStubRequest("stub/gearAppUpdateCheck.as", appInfo)
         val result = CatalogXmlParser.parseUpdateCheck(getText(url))
@@ -231,7 +251,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         }
     }
 
-    private fun requestDownload(face: CatalogFace): DownloadMetadata {
+    private suspend fun requestDownload(face: CatalogFace): DownloadMetadata {
         val url = commonStubRequest("stub/gearAppDownload.as", face.appId)
         val metadata = CatalogXmlParser.parseDownload(getText(url))
         if (metadata.resultCode != 1 || metadata.downloadUri.isBlank()) {
@@ -244,7 +264,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         if (parsed == null || !parsed.isHttps || !isTrustedDownloadHost(parsed.host)) {
             throw WatchFaceException(
                 "The store returned an invalid package address for ${face.name}.",
-                metadata.downloadUri,
+                parsed?.let { "host=${it.host} https=${it.isHttps}" } ?: "unparseable package address",
             )
         }
         return metadata
@@ -293,10 +313,10 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             "https://vas.samsungapps.com/"
         }
 
-    private fun getText(url: HttpUrl): String {
+    private suspend fun getText(url: HttpUrl): String {
         val request = Request.Builder().url(url).get().build()
         return try {
-            client.newCall(request).execute().use { response ->
+            client.newCall(request).useCancellable { response ->
                 if (!response.isSuccessful) {
                     throw WatchFaceException(
                         "The watch-face catalogue could not be reached.",
@@ -307,6 +327,8 @@ class FaceCatalogRepositoryImpl @Inject constructor(
             }
         } catch (error: WatchFaceException) {
             throw error
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             throw WatchFaceException(
                 "The watch-face catalogue could not be reached. Check your connection.",
@@ -316,7 +338,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         }
     }
 
-    private fun downloadBoundedPackage(
+    private suspend fun downloadBoundedPackage(
         url: String,
         expectedSize: Long,
         job: Job?,
@@ -330,11 +352,8 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         }
         val request = Request.Builder().url(url).get().build()
         val call = client.newCall(request)
-        // The blocking read below cannot be interrupted from outside, so cancellation
-        // reaches the socket this way and the loop itself this way too.
-        job?.invokeOnCompletion { runCatching { call.cancel() } }
         return try {
-            call.execute().use { response ->
+            call.useCancellable { response ->
                 if (!response.isSuccessful) {
                     throw WatchFaceException(
                         "The watch-face package download failed.",
@@ -345,7 +364,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
                 if (!finalUrl.isHttps || !isTrustedDownloadHost(finalUrl.host)) {
                     throw WatchFaceException(
                         "The download was redirected to an untrusted address.",
-                        finalUrl.toString(),
+                        "redirected to ${finalUrl.host}",
                     )
                 }
                 val body = response.body

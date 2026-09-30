@@ -3,12 +3,15 @@ package dev.fitface.studio.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.CatalogSort
+import dev.fitface.studio.core.model.DeveloperGate
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.FaceCatalogRepository
+import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
@@ -98,18 +101,62 @@ data class LibraryUiState(
     /** The pasteable report, non-null while the dialog is open. */
     val diagnosticsReport: String? = null,
     /**
+     * Whether the export and import controls are on screen at all.
+     *
+     * Absent rather than disabled when this is false: a greyed-out IMPORT is a thing to
+     * ask about, and the whole point of [DeveloperGate] is that nothing hints at it.
+     */
+    val developerTools: Boolean = false,
+    /**
+     * The export waiting for the system picker to name a file.
+     *
+     * Carries a request id as well as the project because `CreateDocument` takes the
+     * suggested name at *launch* time, so the picker cannot be opened from the tap itself
+     * — the effect that launches it keys on this. Without the id, exporting the same
+     * project twice in a row would not change the key and the picker would not reopen.
+     */
+    val exporting: ExportRequest? = null,
+    /** A project just written out, or just read in. Both are snackbars. */
+    val exported: ExportNotice? = null,
+    val imported: ImportNotice? = null,
+    /**
      * The last run ended in a crash whose account has not been shown yet.
      *
      * Surfaced here because there is nowhere else it can be: the process was gone before
      * anything could be said at the time, and a sideloaded APK reports to no console.
      */
     val previousCrash: Boolean = false,
+    /**
+     * Whether the package a custom face is built from is already on the phone, so the card
+     * can say whether starting one costs a download. Checked when the catalogue arrives —
+     * a promise of "no download" has to be checked, not assumed.
+     */
+    val customFaceCached: Boolean = false,
+    /** A custom face being made, or null. */
+    val customFaceProgress: CustomFaceProgress? = null,
 ) {
+    /**
+     * The catalogue entry a custom face is built from, or null while the catalogue has none —
+     * still loading, offline with nothing cached, or no longer served.
+     */
+    val customFaceSource: CatalogFace?
+        get() = faces.firstOrNull { it.faceId == CUSTOM_FACE_TEMPLATE_FACE_ID }
+
     val isOpeningProject: Boolean
         get() = openingProjectId != null
 
+    /**
+     * The name to suggest in the create-document picker, or null when nothing is waiting.
+     *
+     * Assembled here rather than in the composable so the picker and the tests agree by
+     * construction — the picker is the one part of this that cannot be asserted on.
+     */
+    val exportFileName: String?
+        get() = exporting?.let { ProjectArchiveNaming.fileName(it.faceId, it.name) }
+
     val isWorking: Boolean
-        get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null
+        get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null ||
+            customFaceProgress != null
 
     /**
      * Whether a tap on the grid may open the face sheet. Deliberately narrower than
@@ -123,7 +170,7 @@ data class LibraryUiState(
      * Opening a project and a download in flight do conflict, so those still refuse.
      */
     val canSelectFace: Boolean
-        get() = !isOpeningProject && downloadingProductId == null
+        get() = !isOpeningProject && downloadingProductId == null && customFaceProgress == null
 
     val visibleFaces: List<CatalogFace>
         get() {
@@ -224,6 +271,27 @@ internal fun faceAction(
 /** A copy was made and named. The screen turns it into a sentence. */
 data class DuplicateNotice(val id: Long, val name: String)
 
+/**
+ * How far making a custom face has got: downloading the face it is built from, then
+ * building it. Two phases because the second takes long enough to be seen, and a bar
+ * sitting at 100% while nothing seems to happen reads as stuck.
+ */
+data class CustomFaceProgress(val fraction: Float, val building: Boolean)
+
+/**
+ * An export waiting for the system picker.
+ *
+ * The three facts the picker and the repository need between them: which project to write,
+ * and the face and name the suggested file is built from.
+ */
+data class ExportRequest(val id: Long, val projectId: Long, val faceId: String, val name: String)
+
+/** A project was written out, and how big the file came out. */
+data class ExportNotice(val id: Long, val name: String, val byteCount: Long)
+
+/** A project was read in and named. */
+data class ImportNotice(val id: Long, val name: String)
+
 sealed interface LibraryEvent {
     data class OpenEditor(val projectId: Long) : LibraryEvent
 }
@@ -249,6 +317,11 @@ class LibraryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            repository.observeDeveloperTools().collect { enabled ->
+                mutableState.update { it.copy(developerTools = enabled) }
+            }
+        }
+        viewModelScope.launch {
             if (reporter.hasPreviousCrash()) {
                 mutableState.update { it.copy(previousCrash = true) }
             }
@@ -266,8 +339,53 @@ class LibraryViewModel @Inject constructor(
                         catalogFetchedAtEpochMillis = cached.fetchedAtEpochMillis,
                     )
                 }
+                refreshCustomFaceCached()
             }
             loadCatalog(forceRefresh = false)
+        }
+    }
+
+    private suspend fun refreshCustomFaceCached() {
+        val source = mutableState.value.customFaceSource ?: return
+        val cached = runCatching { catalog.isPackageCached(source) }.getOrDefault(false)
+        mutableState.update { it.copy(customFaceCached = cached) }
+    }
+
+    /**
+     * Makes a custom face and opens it: the face it is built from is downloaded — or read
+     * from the phone if it is already there — stripped to its clock, and saved as a new
+     * project called [name].
+     *
+     * The download happens here, on the reader's tap, because that is the only way this app
+     * obtains watch-face content: nothing is bundled. It refuses while anything else holds
+     * the repository's single editing session, for the reason [downloadSelectedFace] does.
+     */
+    fun startCustomFace(name: String) {
+        val current = mutableState.value
+        val source = current.customFaceSource ?: return
+        if (current.customFaceProgress != null || current.downloadingProductId != null) return
+        if (current.isOpeningProject) return
+        viewModelScope.launch {
+            mutableState.update {
+                it.copy(customFaceProgress = CustomFaceProgress(0f, building = false), error = null)
+            }
+            runCatching {
+                val downloaded = catalog.downloadPackage(source, source.styles.firstOrNull()?.id ?: 0) { progress ->
+                    mutableState.update {
+                        it.copy(customFaceProgress = CustomFaceProgress(progress.fraction, building = false))
+                    }
+                }
+                mutableState.update {
+                    it.copy(customFaceProgress = CustomFaceProgress(1f, building = true), customFaceCached = true)
+                }
+                repository.openTemplate(downloaded, name)
+            }.onSuccess { snapshot ->
+                eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
+                mutableState.update { it.copy(customFaceProgress = null) }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                mutableState.update { it.copy(customFaceProgress = null, error = error.userMessage()) }
+            }
         }
     }
 
@@ -290,6 +408,7 @@ class LibraryViewModel @Inject constructor(
                         catalogFailure = null,
                     )
                 }
+                refreshCustomFaceCached()
             }
             .onFailure { error ->
                 val message = error.userMessage()
@@ -323,7 +442,29 @@ class LibraryViewModel @Inject constructor(
         mutableState.update { it.copy(sortReversed = !it.sortReversed) }
     }
 
+    /**
+     * The projects search, and the one hidden thing in this app.
+     *
+     * Typing the phrase [DeveloperGate] holds toggles the export and import controls. The
+     * phrase is **consumed** — it never reaches [LibraryUiState.projectQuery] — for two
+     * reasons: the list would otherwise filter to "No matching projects" on the way, which
+     * is a flash of something wrong in answer to something that worked, and the phrase
+     * would be left sitting in the field for the next person to read off the screen.
+     *
+     * Nothing else is said. The controls appearing is the feedback, and it is the only
+     * feedback worth having; a toast counting down to it is what makes the platform's own
+     * version of this gesture the opposite of hidden.
+     */
     fun setProjectQuery(value: String) {
+        if (DeveloperGate.isUnlockPhrase(value)) {
+            val enabled = !mutableState.value.developerTools
+            mutableState.update { it.copy(projectQuery = "") }
+            // Written through the repository rather than held here: it has to survive the
+            // process, or every cold start would hide the tools again and read as the gate
+            // having failed. The collector in `init` is what puts it back into the state.
+            viewModelScope.launch { repository.setDeveloperTools(enabled) }
+            return
+        }
         mutableState.update { it.copy(projectQuery = value) }
     }
 
@@ -388,6 +529,7 @@ class LibraryViewModel @Inject constructor(
         // takes. Two editors on the back stack was the result.
         if (mutableState.value.downloadingProductId != null) return
         if (mutableState.value.isOpeningProject) return
+        if (mutableState.value.customFaceProgress != null) return
         viewModelScope.launch {
             mutableState.update {
                 it.copy(
@@ -522,6 +664,81 @@ class LibraryViewModel @Inject constructor(
     }
 
     /**
+     * Asks the system picker for somewhere to write [project], then writes it there.
+     *
+     * Two steps because `CreateDocument` needs the suggested file name when it is launched,
+     * so the tap can only set this up and let the screen's effect open the picker.
+     * [finishExport] is the other half, including the half where the picker was cancelled.
+     */
+    fun startExport(project: ProjectSummary) {
+        if (!mutableState.value.developerTools) return
+        mutableState.update {
+            it.copy(
+                exporting = ExportRequest(
+                    id = messageIds.incrementAndGet(),
+                    projectId = project.id,
+                    faceId = project.faceId,
+                    name = project.name,
+                ),
+            )
+        }
+    }
+
+    /**
+     * The document the picker returned, or null if it was cancelled.
+     *
+     * The request is cleared either way and *before* the write, so a cancelled picker
+     * leaves nothing armed and a failure cannot relaunch it.
+     */
+    fun finishExport(destinationUri: String?) {
+        val request = mutableState.value.exporting ?: return
+        mutableState.update { it.copy(exporting = null) }
+        if (destinationUri == null) return
+        viewModelScope.launch {
+            runCatching { repository.exportProject(request.projectId, destinationUri) }
+                .onSuccess { exported ->
+                    mutableState.update {
+                        it.copy(
+                            exported = ExportNotice(
+                                messageIds.incrementAndGet(),
+                                exported.name,
+                                exported.byteCount,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
+     * Reads an archive the picker returned into a new project.
+     *
+     * Refused while something else is working, like [openProject] and unlike a catalogue
+     * refresh: this parses a container and writes a project directory, which is the same
+     * conflict opening one has.
+     */
+    fun importProject(sourceUri: String?) {
+        if (sourceUri == null || !mutableState.value.developerTools) return
+        if (mutableState.value.isWorking) return
+        viewModelScope.launch {
+            runCatching { repository.importProject(sourceUri) }
+                .onSuccess { imported ->
+                    mutableState.update {
+                        it.copy(imported = ImportNotice(messageIds.incrementAndGet(), imported.name))
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutableState.update { it.copy(error = error.userMessage()) }
+                }
+        }
+    }
+
+    /**
      * Deleting asks first. It discards every edit in the project and cannot be undone, and
      * with more than one project on a face the rows beside it look very much alike.
      */
@@ -580,6 +797,18 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    fun clearExported(id: Long) {
+        mutableState.update { current ->
+            if (current.exported?.id == id) current.copy(exported = null) else current
+        }
+    }
+
+    fun clearImported(id: Long) {
+        mutableState.update { current ->
+            if (current.imported?.id == id) current.copy(imported = null) else current
+        }
+    }
+
     private fun Throwable.userMessage(): UserMessage {
         if (this is CancellationException) throw this
         // technicalDetail is the half that explains the failure and it used to stop here:
@@ -605,7 +834,6 @@ class LibraryViewModel @Inject constructor(
         const val TAG = "LibraryViewModel"
 
         const val uneditableMessage =
-            "This face is customised on the watch rather than shipped as an editable " +
-                "container, so FitFace Studio has nothing to open."
+            "This face is customised on the watch and cannot be edited here."
     }
 }

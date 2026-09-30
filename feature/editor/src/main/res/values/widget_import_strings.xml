@@ -1,0 +1,95 @@
+<resources>
+    <string name="widget_import_faces">Add a widget</string>
+    <string name="widget_import_widgets">Choose a widget</string>
+    <string name="widget_import_review">Review</string>
+    <string name="widget_import_target">into %1$s only</string>
+    <string name="widget_import_donor_subtitle">face %1$s · into %2$s only</string>
+    <string name="widget_import_experimental_label">Experimental</string>
+    <string name="widget_import_experimental_short">Check the result on your watch after installing.</string>
+    <string name="widget_import_loading">Loading watch face…</string>
+    <string name="widget_import_downloading">Downloading the watch face…</string>
+    <string name="widget_import_saving">Adding and saving widget…</string>
+    <string name="widget_import_search">Search watch faces</string>
+    <string name="widget_import_badge_cached">On phone</string>
+    <string name="widget_import_badge_not_editable">@string/ui_not_editable</string>
+    <string name="widget_import_a11y_cached">already on this phone</string>
+    <string name="widget_import_a11y_download">%1$s to download</string>
+    <string name="widget_import_badge_download">↓ %1$s</string>
+    <string name="widget_import_face_number">#%1$s</string>
+    <!-- Both facts reach a screen reader; only one of them fits on the card. -->
+    <string name="widget_import_face_a11y">%1$s, face %2$s, %3$s</string>
+    <string name="widget_import_no_faces">No matching watch faces.</string>
+    <string name="widget_import_retry">Retry</string>
+    <string name="widget_import_not_editable">@string/ui_not_editable</string>
+    <string name="widget_import_variant_failed">This style could not be read.</string>
+    <string name="widget_import_widget_number">@string/ui_widget_number</string>
+    <string name="widget_import_widget_size">%1$d × %2$d px</string>
+    <string name="widget_import_canvas_a11y">The watch face this widget comes from. %1$d widgets can be added; tap one to pick it.</string>
+    <string name="widget_import_pick_hint">Tap a widget to select it.</string>
+    <string name="widget_import_pick_count">%1$d of %2$d can be added</string>
+    <string name="widget_import_list">List ›</string>
+    <string name="widget_import_face">Face ›</string>
+    <string name="widget_import_section_can">Can be added · %1$d</string>
+    <string name="widget_import_section_cannot">Cannot be added · %1$d</string>
+    <string name="widget_import_use">Review widget</string>
+
+    <!-- Picking more than one. Every widget still goes in through the single proven
+         import; these only describe the set and what became of it. -->
+    <string name="widget_import_pick_hint_more">Tap another widget to add it to the selection.</string>
+    <string name="widget_import_selected">%1$d selected</string>
+    <string name="widget_import_use_many">Review %1$d widgets</string>
+    <string name="widget_import_clear">@string/ui_clear_selection</string>
+    <!-- The per-row figure is a floor, so a set total can only ever be a floor too. -->
+    <string name="widget_import_set_estimate">adds at least %1$s</string>
+    <!-- Two lines at most: the panel is under the face and every line comes off it. -->
+    <string name="widget_import_set_floor">A minimum, so the set may not all fit. It stops at the first that does not.</string>
+    <string name="widget_import_batch_running">Adding %1$d widgets</string>
+    <string name="widget_import_batch_done">Added %1$d of %2$d</string>
+    <string name="widget_import_batch_queued">queued</string>
+    <string name="widget_import_batch_adding">adding…</string>
+    <string name="widget_import_batch_added">added</string>
+    <string name="widget_import_batch_saving">Saving. Each widget is a separate save, so this cannot be stopped partway.</string>
+    <!-- Said plainly because it is the one thing about a batch that cannot be undone. -->
+    <string name="widget_import_batch_partial">The %1$d already added are saved to your face. Nothing undoes them but removing them.</string>
+    <string name="widget_import_batch_all_done">All %1$d are saved to your face.</string>
+    <!-- Nothing committed, so there is nothing to warn about and nothing to leave for. -->
+    <string name="widget_import_batch_none">Nothing was added. Your face is unchanged.</string>
+    <string name="widget_import_back_to_widgets">Back to widgets</string>
+    <!-- The same refusal, for a set rather than one widget. -->
+    <string name="widget_import_too_big_set">Not all of these will fit. It stops at the first that does not.</string>
+    <string name="widget_import_batch_continue">Add the rest anyway</string>
+    <string name="widget_import_done">Done</string>
+    <string name="widget_import_pick_order_a11y">%1$s, pick %2$d of %3$d. Tap to remove it from the set.</string>
+    <string name="widget_import_pick_add_a11y">%1$s. Tap to add it to the set.</string>
+    <string name="widget_import_adds_value">adds %1$s</string>
+    <string name="widget_import_adds_about">≈ %1$s</string>
+    <string name="widget_import_no_artwork">no art</string>
+    <string name="widget_import_room">Face size</string>
+    <string name="widget_import_room_value">%1$s of %2$s</string>
+    <string name="widget_import_too_big">This one would take the face past the 4 MB the watch accepts. Pick a smaller widget.</string>
+    <string name="widget_import_no_room">no room</string>
+    <string name="widget_import_kilobytes">%1$.1f KB</string>
+    <string name="widget_import_megabytes">%1$.2f MB</string>
+    <string name="widget_import_fact_from">From</string>
+    <string name="widget_import_fact_from_value">%1$s · %2$s</string>
+    <string name="widget_import_fact_widget">Widget</string>
+    <string name="widget_import_fact_adds">Adds</string>
+    <string name="widget_import_compare">Hold the face to see it without</string>
+    <string name="widget_import_review_a11y">Your watch face with the widget added. Hold to see it without.</string>
+    <string name="widget_import_preview_gone">Pick the widget again.</string>
+    <string name="widget_import_add_to">Add to %1$s</string>
+    <!-- The review of a set: the same page, with every pick on the face. -->
+    <string name="widget_import_review_set_title">%1$d widgets</string>
+    <string name="widget_import_compare_set">Hold the face to see it without them</string>
+    <string name="widget_import_review_set_a11y">Your watch face with %1$d widgets added, numbered in the order they go in. Hold to see it without them.</string>
+    <string name="widget_import_fact_widgets">Widgets</string>
+    <string name="widget_import_at_least">at least %1$s</string>
+    <string name="widget_import_add_many_to">Add %1$d widgets to %2$s</string>
+    <string name="widget_import_review_set_detail">Adds at their original positions in %1$s only, in the order shown. Each saves separately; adding stops at the first that does not fit.</string>
+    <string name="widget_import_review_detail">Adds at its original position in %1$s only. Existing widgets stay unchanged. You can move, resize or remove it afterwards.</string>
+    <string name="widget_import_aod">@string/ui_always_on_display</string>
+    <string name="widget_import_artwork">Resource-based widget preview</string>
+    <string name="widget_import_open">Add widgets from another face</string>
+    <string name="widget_import_scope">Imported from face %1$s. Edits affect this variant only.</string>
+    <string name="widget_import_original_size">Original imported size · %1$d%% steps</string>
+</resources>

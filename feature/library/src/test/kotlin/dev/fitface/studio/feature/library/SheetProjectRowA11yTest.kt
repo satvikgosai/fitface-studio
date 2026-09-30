@@ -95,8 +95,11 @@ class SheetProjectRowA11yTest {
         compose.onNodeWithContentDescription("Night mode", substring = true)
             .assertContentDescriptionContains("outdated", substring = true, ignoreCase = true)
         compose.onNodeWithContentDescription("face 00112", substring = true).assertExists()
-        // styleId 2 is shown as "style 03" — the sheet's thumbnails are one-based.
-        compose.onNodeWithContentDescription("style 03", substring = true).assertExists()
+        // styleId 2 is shown as "Style 3": `styleN.bin` and the catalogue's style id both
+        // count from zero, and `:core:ui`'s `styleLabel` is the one place the reader's
+        // one-based number is applied — the same call the editor's Styles page makes, so
+        // the two screens cannot name one colourway differently.
+        compose.onNodeWithContentDescription("Style 3", substring = true).assertExists()
     }
 
     /**

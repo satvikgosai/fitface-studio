@@ -108,7 +108,7 @@ data class DirectInstallState(
      * page rewinds with no trace of what went wrong.
      */
     val failure: String? = null,
-    val message: String = "Checking what this phone has installed…",
+    val message: String = "Checking watch setup…",
 ) {
     val peersCached: Boolean
         get() = watchfacePeerCached && otaPeerCached
@@ -170,7 +170,7 @@ data class DirectInstallState(
         otaPeerCached = false,
         pluginNearbyReleaseAcknowledged = false,
         failure = null,
-        message = "Discovering Fit3 watch-face and OTA peers…",
+        message = "Finding the watch for transfer…",
     )
 
     /**
@@ -194,7 +194,7 @@ data class DirectInstallState(
         totalBytes = 0,
         acknowledgedWindows = 0,
         totalWindows = 0,
-        message = "Reconnect the Fit3 in the companion app, then discover the peers again.",
+        message = "Reconnect the watch in its companion app, then find it again.",
     )
 
     /**
@@ -222,12 +222,12 @@ data class DirectInstallState(
 
         /** In transfer order, for the phase timeline on the Install page. */
         val TransferPhases = listOf(
-            DirectInstallPhase.INITIALIZING to "Initialize accessory session",
-            DirectInstallPhase.DISCOVERING to "Discover paired peers",
-            DirectInstallPhase.VERIFYING to "Verify SHA-256 against frozen payload",
-            DirectInstallPhase.TRANSFERRING to "Transfer windows",
-            DirectInstallPhase.INSTALLING to "Commit on watch",
-            DirectInstallPhase.COMPLETE to "Installed",
+            DirectInstallPhase.INITIALIZING to "Prepare connection",
+            DirectInstallPhase.DISCOVERING to "Find watch",
+            DirectInstallPhase.VERIFYING to "Check face file",
+            DirectInstallPhase.TRANSFERRING to "Send face",
+            DirectInstallPhase.INSTALLING to "Send install request",
+            DirectInstallPhase.COMPLETE to "Request sent",
         )
     }
 }

@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -74,7 +75,9 @@ class AppUpdater @Inject internal constructor(
     )
     val confirmations: Flow<Intent> = mutableConfirmations.asSharedFlow()
 
+    private val workLock = Any()
     private var work: Job? = null
+    private var workGeneration = 0L
 
     /**
      * `0.1.1 (17)` for the running build, which is what the About dialog shows.
@@ -117,8 +120,7 @@ class AppUpdater @Inject internal constructor(
         }
     }
 
-    fun check() = start {
-        mutableState.value = AppUpdateState.Checking
+    fun check() = start(AppUpdateState.Checking, { !it.isBusy }) { generation ->
         val installed = requireNotNull(context.installedIdentity()) {
             "the package manager cannot describe this app"
         }
@@ -131,12 +133,13 @@ class AppUpdater @Inject internal constructor(
         // newest would then equal installed, and the sweep would spare the very file it
         // exists to remove.
         val offered = newest?.takeIf { candidate -> current != null && candidate.version > current }
+        currentCoroutineContext().ensureActive()
         downloads.forgetStale(keep = offered)
         diagnostics.info(
             TAG,
             "update check installed=${installed.versionName} newest=${newest?.version?.raw}",
         )
-        mutableState.value = when {
+        publish(generation, when {
             // Not "up to date". The feed answered and held nothing this app could use,
             // which is what a renamed asset or a re-shaped response looks like — and
             // reporting that as current would leave a reader told they were on the newest
@@ -158,18 +161,22 @@ class AppUpdater @Inject internal constructor(
             // build. Never offer the older one: it cannot install over this and the only
             // way through deletes every saved project.
             else -> AppUpdateState.UpToDate(installed.label)
-        }
+        })
     }
 
     fun download() {
         val offered = mutableState.value as? AppUpdateState.Available ?: return
         val release = offered.release
-        start {
-            if (!downloads.hasRoomFor(release)) {
-                mutableState.value = AppUpdateState.Blocked(release, UpdateBlocker.NOT_ENOUGH_SPACE)
+        start(
+            AppUpdateState.Downloading(release, DownloadProgress(0, release.assetBytes)),
+            { it == offered },
+        ) { generation ->
+            val hasRoom = downloads.hasRoomFor(release)
+            currentCoroutineContext().ensureActive()
+            if (!hasRoom) {
+                publish(generation, AppUpdateState.Blocked(release, UpdateBlocker.NOT_ENOUGH_SPACE))
                 return@start
             }
-            mutableState.value = AppUpdateState.Downloading(release, DownloadProgress(0, release.assetBytes))
             // Whole percentages only. Reported per read, a 36 MiB download emits about
             // 4,600 times, and every one of those is a state change the whole dialog
             // recomposes on.
@@ -185,44 +192,49 @@ class AppUpdater @Inject internal constructor(
                     val percent = (progress.fraction * 100).toInt()
                     if (percent != lastPercent) {
                         lastPercent = percent
-                        mutableState.value = AppUpdateState.Downloading(release, progress)
+                        publish(generation, AppUpdateState.Downloading(release, progress))
                     }
                 }
             }
             val blocker = inspect(release, file.absolutePath)
-            mutableState.value = if (blocker == null) {
+            currentCoroutineContext().ensureActive()
+            publish(generation, if (blocker == null) {
                 AppUpdateState.ReadyToInstall(release)
             } else {
                 AppUpdateState.Blocked(release, blocker)
-            }
+            })
         }
     }
 
     fun install() {
         val ready = mutableState.value as? AppUpdateState.ReadyToInstall ?: return
         val release = ready.release
-        start {
+        start(AppUpdateState.Installing(release), { it == ready }) { generation ->
             val file = downloads.fileFor(release)
             // Re-checked here and not only at the offer: the setting is a switch a reader
             // can turn back off while the download is running.
-            if (!installer.canInstallPackages()) {
-                mutableState.value =
-                    AppUpdateState.Blocked(release, UpdateBlocker.INSTALL_NOT_PERMITTED)
+            val permitted = installer.canInstallPackages()
+            currentCoroutineContext().ensureActive()
+            if (!permitted) {
+                publish(generation, AppUpdateState.Blocked(release, UpdateBlocker.INSTALL_NOT_PERMITTED))
                 return@start
             }
-            mutableState.value = AppUpdateState.Installing(release)
-            when (val outcome = installer.install(file) { mutableConfirmations.tryEmit(it) }) {
+            when (val outcome = installer.install(file) { confirmation ->
+                synchronized(workLock) {
+                    if (generation == workGeneration) mutableConfirmations.tryEmit(confirmation)
+                }
+            }) {
                 is InstallOutcome.Succeeded -> {
                     // Rarely reached: the package manager stops this process as it
                     // replaces it, so the usual end of a successful update is no state at
                     // all.
-                    mutableState.value = AppUpdateState.UpToDate(release.version.raw)
+                    publish(generation, AppUpdateState.UpToDate(release.version.raw))
                 }
                 is InstallOutcome.Cancelled ->
-                    mutableState.value = AppUpdateState.ReadyToInstall(release)
+                    publish(generation, AppUpdateState.ReadyToInstall(release))
                 is InstallOutcome.Failed -> {
                     diagnostics.error(TAG, "the installer refused the update", outcome.detail)
-                    mutableState.value = AppUpdateState.Failed(outcome.message, outcome.detail)
+                    publish(generation, AppUpdateState.Failed(outcome.message, outcome.detail))
                 }
             }
         }
@@ -235,18 +247,21 @@ class AppUpdater @Inject internal constructor(
      * the way out of any failure, cancellation included.
      */
     fun cancel() {
-        work?.cancel()
-        work = null
-        mutableState.value = when (val current = mutableState.value) {
-            is AppUpdateState.Downloading -> AppUpdateState.Available(
-                release = current.release,
-                installedVersion = context.installedVersionLabel(),
-                // Re-read rather than defaulted: cancelling back to the offer should not
-                // quietly tell someone installs are allowed when they are not.
-                installBlockedUpFront = !installer.canInstallPackages(),
-            )
-            is AppUpdateState.Installing -> AppUpdateState.ReadyToInstall(current.release)
-            else -> AppUpdateState.Idle
+        synchronized(workLock) {
+            workGeneration++
+            work?.cancel()
+            work = null
+            mutableState.value = when (val current = mutableState.value) {
+                is AppUpdateState.Downloading -> AppUpdateState.Available(
+                    release = current.release,
+                    installedVersion = context.installedVersionLabel(),
+                    // Re-read rather than defaulted: cancelling back to the offer should not
+                    // quietly tell someone installs are allowed when they are not.
+                    installBlockedUpFront = !installer.canInstallPackages(),
+                )
+                is AppUpdateState.Installing -> AppUpdateState.ReadyToInstall(current.release)
+                else -> AppUpdateState.Idle
+            }
         }
     }
 
@@ -292,25 +307,38 @@ class AppUpdater @Inject internal constructor(
      * The guard is the same one a transfer uses: without it, tapping the menu in the
      * library and again in the editor starts two downloads of the same 36 MiB.
      */
-    private fun start(block: suspend () -> Unit) {
-        if (mutableState.value.isBusy) return
-        work = scope.launch {
-            try {
-                block()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                val detail = (error as? WatchFaceException)?.technicalDetail ?: error.message
-                // The half that explains it. Recorded rather than dropped, because a
-                // funnel that shows only the sentence is how a store result code once
-                // existed in the process and reached nobody.
-                diagnostics.error(TAG, "update failed: ${error.message}", detail, error)
-                mutableState.value = AppUpdateState.Failed(
-                    message = (error as? WatchFaceException)?.userMessage
-                        ?: "The update could not be checked. Try again.",
-                    detail = detail,
-                )
+    private fun start(
+        initial: AppUpdateState,
+        allowed: (AppUpdateState) -> Boolean,
+        block: suspend (Long) -> Unit,
+    ) {
+        synchronized(workLock) {
+            if (!allowed(mutableState.value)) return
+            val generation = ++workGeneration
+            // Reserve the phase before Dispatchers.IO can schedule the worker. The dialog
+            // and a second tap now see the same in-flight attempt immediately.
+            mutableState.value = initial
+            work = scope.launch {
+                try {
+                    block(generation)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    val detail = (error as? WatchFaceException)?.technicalDetail ?: error.message
+                    diagnostics.error(TAG, "update failed: ${error.message}", detail, error)
+                    publish(generation, AppUpdateState.Failed(
+                        message = (error as? WatchFaceException)?.userMessage
+                            ?: "The update could not be checked. Try again.",
+                        detail = detail,
+                    ))
+                }
             }
+        }
+    }
+
+    private fun publish(generation: Long, next: AppUpdateState) {
+        synchronized(workLock) {
+            if (generation == workGeneration) mutableState.value = next
         }
     }
 

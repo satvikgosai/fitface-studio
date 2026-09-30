@@ -19,47 +19,68 @@
     <string name="editor_loading_title">Loading…</string>
     <string name="editor_loading_detail">decoding images · rebuilding preview</string>
     <string name="editor_session_ended_title">This editing session ended</string>
-    <string name="editor_session_ended_detail">Your last applied edit is safe on disk. Reopen the project from the library to continue.</string>
+    <string name="editor_session_ended_detail">Your last applied edit is saved. Reopen the project from the library to continue.</string>
     <string name="editor_reopen">Reopen from library</string>
 
     <!-- Page titles, reused as the navigation rail's labels -->
+    <!-- The one exception: the canvas page's header is titled with the project's name,
+         because two projects on one face are otherwise indistinguishable from it. The rail
+         needs a word for the destination, and this is it. -->
+    <string name="editor_page_canvas">Canvas</string>
     <string name="editor_page_widgets">Widgets</string>
     <string name="editor_page_widget_number">Widget #%1$s</string>
     <string name="editor_page_background">Background</string>
     <string name="editor_page_styles">Styles</string>
-    <string name="editor_page_validate">Validate</string>
+    <!-- The Styles page's row for the always-on display, and every place a variant name
+         is shown — never the raw "aod.bin" basename. -->
+    <string name="editor_aod_label">@string/ui_always_on_display</string>
+    <!-- One page: the checks and the transfer were always one journey — the Install entry
+         silently redirected to Validate until the render had been seen. -->
     <string name="editor_page_install">Install</string>
     <string name="editor_page_project">Project</string>
     <!-- The "⋯" that opens the page above. A glyph needs its label spelled out for TalkBack,
          which otherwise announces the ellipsis character itself. -->
-    <string name="editor_project_a11y">Project and reset</string>
-    <string name="editor_project_name_heading">Project name</string>
-    <string name="editor_project_rename">Rename project</string>
-    <string name="editor_project_rename_title">Rename project</string>
-    <string name="editor_duplicate_project">Duplicate this project</string>
-    <string name="editor_duplicate_project_note">Duplicating makes an independent copy with these edits in it. You stay on this one.</string>
+    <string name="editor_project_a11y">Project options</string>
+    <string name="editor_project_name_heading">@string/ui_project_name</string>
+    <string name="editor_project_rename">@string/ui_rename_project</string>
+    <string name="editor_project_rename_title">@string/ui_rename_project</string>
+    <string name="editor_duplicate_project">Duplicate project</string>
+    <string name="editor_duplicate_project_note">Creates a separate copy with your edits. You stay in this project.</string>
     <!-- The name the copy was given. -->
-    <string name="editor_project_duplicated">Duplicated as “%1$s”</string>
+    <string name="editor_project_duplicated">@string/ui_project_duplicated</string>
     <string name="editor_delete_project">Delete this project</string>
     <string name="editor_delete_project_note">Deleting removes this project and every edit saved in it from your device. The watch face itself can be downloaded again.</string>
-    <string name="editor_delete_project_title">Delete this project?</string>
+    <string name="editor_delete_project_title">@string/ui_delete_project_title</string>
     <!-- project name -->
-    <string name="editor_delete_project_message">%1$s and every edit saved in it will be removed from this device. The watch face itself can be downloaded again.</string>
-    <string name="editor_delete_project_confirm">Delete</string>
+    <string name="editor_delete_project_message">@string/ui_delete_project_message</string>
+    <string name="editor_delete_project_confirm">@string/ui_delete</string>
     <string name="editor_widget_index_unknown">—</string>
+    <!--
+      A removed record's title. Separate from `editor_selection_widget` because the index
+      may be unknown: a session written before the index was stored has only the label that
+      build assembled, and where that cannot be read this says so rather than inventing a
+      number. Both are worded identically on purpose.
+    -->
+    <string name="editor_selection_widget_or_unknown">Widget #%1$s</string>
 
     <!-- Page subtitles -->
     <string name="editor_subtitle_canvas">face %1$s · %2$s</string>
-    <string name="editor_subtitle_widgets">%1$d on canvas · %2$d records</string>
-    <string name="editor_subtitle_inspector">type %1$d · seq %2$d</string>
+    <string name="editor_subtitle_widgets">%1$d on canvas · %2$d widgets</string>
+    <string name="editor_subtitle_inspector">%1$s · %2$s</string>
     <string name="editor_subtitle_background_positioning">positioning · unapplied</string>
-    <string name="editor_subtitle_background_can_add">no background yet · one can be added</string>
+    <string name="editor_subtitle_background_can_add">background can be added</string>
     <string name="editor_subtitle_background_no_room">%1$s · no room for one</string>
-    <string name="editor_subtitle_background_none">no background raster on this face</string>
-    <string name="editor_subtitle_background_idle">no pending image</string>
-    <string name="editor_subtitle_styles">%1$d variants in this container</string>
-    <string name="editor_subtitle_validate">reparse of the edited container</string>
-    <string name="editor_subtitle_install">direct to paired Fit3</string>
+    <string name="editor_subtitle_background_none">no background</string>
+    <string name="editor_subtitle_background_idle">choose an image or tint</string>
+    <plurals name="editor_subtitle_styles">
+        <item quantity="one">%1$d style</item>
+        <item quantity="other">%1$d styles</item>
+    </plurals>
+    <plurals name="editor_subtitle_styles_with_aod">
+        <item quantity="one">%1$d style · always-on display</item>
+        <item quantity="other">%1$d styles · always-on display</item>
+    </plurals>
+    <string name="editor_subtitle_install">check and send to your watch</string>
     <string name="editor_badge_edited">EDITED</string>
     <!--
       Shown in the top bar while an image is positioned but not yet committed. The bar is
@@ -70,33 +91,77 @@
     <string name="editor_badge_unapplied">UNAPPLIED</string>
 
     <!-- Canvas -->
-    <string name="editor_canvas_hint_none">Each outlined region is a draggable widget. Tap one to select it.</string>
-    <string name="editor_canvas_hint_all_styles">Drag to move, or hold a nudge button. Changes apply to every style that has this widget.</string>
-    <string name="editor_canvas_hint_this_style">Drag to move, or hold a nudge button. Changes only apply here.</string>
-    <string name="editor_canvas_pick_from_list">OR PICK FROM THE LIST ›</string>
+    <string name="editor_canvas_hint_none">Sample preview. Tap a widget to select it; hold to select several.</string>
+    <string name="editor_canvas_hint_set">Tap to add or remove widgets; tap empty space to clear. Move them together with the arrows.</string>
+    <string name="editor_canvas_hint_all_styles">Editing every style that has this widget.</string>
+    <string name="editor_canvas_hint_this_style">Editing this style only.</string>
+    <string name="editor_canvas_hint_aod">Editing the always-on display only.</string>
+    <string name="editor_canvas_nudge_all_styles">@string/editor_canvas_hint_all_styles</string>
+    <string name="editor_canvas_nudge_this_style">@string/editor_canvas_hint_this_style</string>
+    <string name="editor_canvas_nudge_aod">@string/editor_canvas_hint_aod</string>
+    <!--
+      Styles and AOD share the resource renderer. Both disclose font substitution and
+      unavailable firmware content here and on Validate.
+    -->
+    <string name="editor_canvas_hint_none_approximate">Sample preview: fonts may differ and some watch content is unavailable. Tap to select; hold to select several.</string>
+    <string name="editor_aod_approximate">Sample preview: readings are not live, fonts may differ and some watch content is unavailable.</string>
+    <string name="editor_canvas_pick_from_list">Choose from list ›</string>
     <string name="editor_canvas_a11y">Fit3 watch-face editor for %1$s. %2$d movable widgets.</string>
 
     <!-- Selection panel -->
-    <string name="editor_selection_widget">Widget #%1$d</string>
-    <string name="editor_selection_geometry">x %1$d · y %2$d · %3$d×%4$d</string>
-    <string name="editor_inspect">Inspect ›</string>
-    <string name="editor_nudge_hint">tap for 1 px · hold to keep moving · drag on canvas for coarse</string>
-    <string name="editor_nudge_locked">position locked by container</string>
+    <string name="editor_selection_widget">@string/ui_widget_number</string>
+    <!-- The selection action bar under the face. Every widget edit lives here now; the
+         inspector keeps the record's facts and is reached from the "more" menu. -->
+    <string name="editor_selection_facts">#%1$d · %2$d×%3$d · x %4$d y %5$d</string>
+    <string name="editor_action_smaller_a11y">Make this widget smaller</string>
+    <string name="editor_action_larger_a11y">Make this widget larger</string>
+    <string name="editor_action_color_a11y">Colour</string>
+    <!-- The scope toggle, as a tray button. Its glyph is the rail's own Styles mark and
+         its tint is the state, so the label has to say which state that is. -->
+    <string name="editor_action_scope_on_a11y">Editing all %1$d styles. Tap to edit only this one.</string>
+    <string name="editor_action_scope_off_a11y">Editing this style only. Tap to edit all %1$d.</string>
+    <string name="editor_action_scope_fixed_a11y">This edit reaches one variant and cannot be widened</string>
+    <!-- Shown in the colour menu when the record carries no colour field at all, so the
+         control says why it can do nothing rather than being silently absent. -->
+    <string name="editor_action_no_color">Colour comes from this widget’s artwork.</string>
+    <string name="editor_action_record_details">Record details</string>
+    <!-- One line at 320dp, which is what the selection tray can spare: it sits under the
+         face and every line it takes is a line the face loses. -->
+    <string name="editor_nudge_hint">tap 1 px · hold to run · drag on the face</string>
+    <string name="editor_nudge_hint_no_drag">tap 1 px · hold to run</string>
+    <string name="editor_nudge_locked">position cannot be changed</string>
+    <!-- The nudge arrows are drawn, not text, so these are all a screen reader has. -->
+    <string name="editor_nudge_left_a11y">Move left</string>
+    <string name="editor_nudge_up_a11y">Move up</string>
+    <string name="editor_nudge_down_a11y">Move down</string>
+    <string name="editor_nudge_right_a11y">Move right</string>
 
     <!-- Widget list -->
     <string name="editor_widgets_on_canvas_title">On the canvas</string>
     <string name="editor_widgets_on_canvas_detail">%1$d of %2$d records draw a rectangle you can select and drag.</string>
-    <string name="editor_widgets_off_canvas_title">Not shown on the canvas</string>
-    <string name="editor_widgets_off_canvas_detail">These records exist in the container but have no drawable rectangle the editor can place — clock hands, and the full-face background layer. Nudging one still rewrites its stored coordinates; you just will not see it move here.</string>
+    <string name="editor_widgets_off_canvas_title">Edit from this list</string>
+    <string name="editor_widgets_off_canvas_detail">Select clock hands and full-face backgrounds here; they have no selectable outline on the canvas. Supported artwork still appears in the preview.</string>
     <string name="editor_widgets_removed_title">Removed</string>
-    <string name="editor_widgets_removed_detail">Kept so you can put them back. Restoring appends the original record at the end of the widget table.</string>
+    <!-- The count chip at the top of the list. Removals used to be the third section of
+         a 25-row scroll, so putting one back meant finding it first. -->
+    <plurals name="editor_widgets_removed_count">
+        <item quantity="one">%1$d removed</item>
+        <item quantity="other">%1$d removed</item>
+    </plurals>
+    <string name="editor_widgets_removed_show">Show removed widgets</string>
+    <string name="editor_widgets_removed_hide">Hide removed widgets</string>
+    <string name="editor_widgets_removed_detail">Restore a widget to put it back.</string>
 
     <!-- Widget row -->
     <string name="editor_row_placement_background">Background</string>
-    <string name="editor_row_placement_hidden">No preview</string>
+    <string name="editor_row_placement_hidden">No outline</string>
     <string name="editor_row_placement_last">Last</string>
     <string name="editor_row_opaque">Opaque</string>
-    <string name="editor_row_record">type %1$d · seq %2$d · %3$d×%4$d</string>
+    <string name="editor_row_record">%1$s · %2$d×%3$d</string>
+    <!-- Shown in place of a reading's name where the format does not name one. -->
+    <string name="editor_widget_reading_unnamed">reading %1$d</string>
+    <!-- Shown in place of a reading for a widget that does not follow one. -->
+    <string name="editor_widget_index">#%1$d</string>
     <!--
       The frame count is a badge beside OPAQUE rather than a fifth clause on the record line.
       Appended, the line overflowed the row's flexible column on a third of the widgets and
@@ -104,7 +169,18 @@
     -->
     <string name="editor_row_frames">%1$d frames</string>
     <string name="editor_row_position">%1$d, %2$d</string>
-    <string name="editor_row_removed">type %1$d · seq %2$d · %3$d×%4$d · %5$d styles</string>
+    <!--
+      The Removed list sits directly under the live one and has to read like it: what the
+      record draws, the reading it followed, its size, and what the removal reached. It used
+      to say "type 4 · seq 29 · 60×60 · 3 styles" — the format layer's own numbers, beside
+      rows saying "Sprite · steps". The last argument is a phrase, not a count, because an
+      always-on removal touches one entry that is not a style at all.
+    -->
+    <string name="editor_row_removed">%1$s · %2$s · %3$d×%4$d · %5$s</string>
+    <plurals name="editor_row_removed_styles">
+        <item quantity="one">%1$d style</item>
+        <item quantity="other">%1$d styles</item>
+    </plurals>
     <string name="editor_restore">Restore</string>
 
     <!-- Inspector -->
@@ -113,41 +189,81 @@
     <string name="editor_remove_body_all_styles">This removes the matching widget from every style that has it. It stays in the Removed list so you can put it back.</string>
     <string name="editor_remove_body_one_style">This removes the widget from %1$s only. It stays in the Removed list so you can put it back.</string>
     <string name="editor_remove_confirm">Remove</string>
-    <string name="editor_cancel">Cancel</string>
+    <!-- A widget from another face is deleted rather than kept under Removed. -->
+    <string name="editor_delete_title">Delete widget #%1$d?</string>
+    <string name="editor_delete_body_imported">It came from face %1$s, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Add it from that face again to have it back.</string>
+    <string name="editor_delete_confirm">@string/ui_delete</string>
+    <!-- Several widgets at once. Each is still its own edit, one after another. -->
+    <string name="editor_widgets_hint">Tap to edit on the canvas; hold to select several.</string>
+    <string name="editor_widgets_hint_set">Tap to add or remove widgets from the selection.</string>
+    <string name="editor_widgets_set_edit">Edit on canvas</string>
+    <string name="editor_selection_set_title">%1$d widgets selected</string>
+    <string name="editor_selection_clear">@string/ui_clear_selection</string>
+    <string name="editor_selection_duplicate_a11y">Duplicate all %1$d</string>
+    <string name="editor_selection_remove_a11y">Remove all %1$d</string>
+    <string name="editor_nudge_hint_set">tap 1 px · hold to run · they move together</string>
+    <string name="editor_remove_set_title">Remove %1$d widgets?</string>
+    <plurals name="editor_remove_set_stock_all">
+        <item quantity="one">%1$d goes to the Removed list, from every style that has it, so you can put it back.</item>
+        <item quantity="other">%1$d go to the Removed list, from every style that has them, so you can put them back.</item>
+    </plurals>
+    <plurals name="editor_remove_set_stock_one">
+        <item quantity="one">%1$d goes to the Removed list, from %2$s only, so you can put it back.</item>
+        <item quantity="other">%1$d go to the Removed list, from %2$s only, so you can put them back.</item>
+    </plurals>
+    <plurals name="editor_remove_set_imported">
+        <item quantity="one">%1$d came from another face, so it is deleted with its artwork. Add it from that face again to have it back.</item>
+        <item quantity="other">%1$d came from other faces, so they are deleted with their artwork. Add them from those faces again to have them back.</item>
+    </plurals>
+    <!-- Each widget is its own commit, so the ones before the refusal are done and saved. -->
+    <string name="editor_selection_stopped_duplicate">Duplicated %1$d of %2$d, then stopped: %3$s</string>
+    <string name="editor_selection_stopped_remove">Removed %1$d of %2$d, then stopped: %3$s</string>
+    <string name="editor_cancel">@string/ui_cancel</string>
     <string name="editor_label_background">BG</string>
-    <string name="editor_label_hidden">HIDDEN</string>
+    <string name="editor_label_hidden">NO OUTLINE</string>
     <string name="editor_label_opaque">OPAQUE</string>
     <string name="editor_opaque_body">This widget\'s frames have no transparency, so the watch paints its whole %1$d×%2$d rectangle — including the black behind the glyphs. The preview shows it the same way.</string>
-    <string name="editor_position_heading">Position · display space</string>
+    <string name="editor_position_heading">Position on face</string>
     <string name="editor_axis_x">X</string>
     <string name="editor_axis_y">Y</string>
-    <string name="editor_encoded">encoded %1$d, %2$d</string>
-    <string name="editor_encoded_anchored">encoded %1$d, %2$d · anchored from end</string>
+    <string name="editor_encoded">stored %1$d, %2$d</string>
+    <!-- Shown when the stored value is an offset from another widget rather than from the
+         panel, so the numbers above and the numbers in the file legitimately differ. -->
+    <string name="editor_encoded_offset">stored %1$d, %2$d · measured from widget #%3$d</string>
+    <string name="editor_encoded_offset_panel">stored %1$d, %2$d · measured from the face</string>
     <string name="editor_record_heading">Record</string>
     <string name="editor_record_detail">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d</string>
     <string name="editor_record_detail_frames">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d   frames %6$d</string>
-    <string name="editor_duplicate_of">Duplicate of #%1$d · selected clone</string>
-    <string name="editor_pair_color">Pair color · #%1$s</string>
+    <string name="editor_duplicate_of">Copy of #%1$d</string>
+    <string name="editor_pair_color">Value color · #%1$s</string>
     <string name="editor_color_white">White</string>
     <string name="editor_color_cyan">Cyan</string>
     <string name="editor_color_pink">Pink</string>
     <string name="editor_color_green">Green</string>
-    <string name="editor_apply_all_title">Apply widget edits to every style</string>
-    <string name="editor_apply_all_on">Every one of the %1$d styles that carries this widget stays in sync, and so does the always-on display. Styles that do not have it are left alone.</string>
+    <string name="editor_apply_all_title">Edit matching widgets in all styles</string>
+    <plurals name="editor_apply_all_on">
+        <item quantity="one">Edits the matching widget in this style. Always-on display is separate.</item>
+        <item quantity="other">Edits matching widgets across %1$d styles. Styles without this widget and the always-on display stay unchanged.</item>
+    </plurals>
     <string name="editor_apply_all_off">Only %1$s changes.</string>
-    <string name="editor_destructive_heading">Destructive</string>
-    <string name="editor_duplicate">Duplicate &amp; select clone</string>
+    <string name="editor_apply_all_single">This face has one style. Edits apply here.</string>
+    <string name="editor_apply_all_aod">Edits affect only the always-on display.</string>
+    <string name="editor_destructive_heading">Widget actions</string>
+    <string name="editor_duplicate">Duplicate &amp; select</string>
     <string name="editor_remove_widget">Remove widget</string>
 
-    <!-- Sprite size -->
-    <string name="editor_size_heading">Size · aspect ratio locked</string>
+    <!-- Widget size -->
+    <string name="editor_size_heading">Size · proportions locked</string>
     <string name="editor_size_value">%1$d × %2$d px</string>
-    <string name="editor_size_shipped">the size this face shipped · steps of %1$d%%</string>
-    <string name="editor_size_percent">%1$d%% of the original %2$d × %3$d · steps of %4$d%%</string>
-    <string name="editor_size_off_ladder">off the ladder · the next tap snaps onto a step of the original %1$d × %2$d</string>
+    <string name="editor_size_shipped">Original size · %1$d%% steps</string>
+    <string name="editor_size_percent">%1$d%% of original %2$d × %3$d · %4$d%% steps</string>
+    <string name="editor_size_off_ladder">Next tap uses a size step based on the original %1$d × %2$d.</string>
     <string name="editor_size_smaller">Smaller</string>
     <string name="editor_size_larger">Larger</string>
-    <string name="editor_size_unavailable">Resizing rewrites every sprite frame this widget points at and moves the records after it. That is only safe on a widget with its own sprite sequence and one uniform RGB565+A frame format — this one does not match, so the controls stay off.</string>
+    <string name="editor_size_unavailable_artwork">This widget’s artwork uses a format or frame layout that cannot be resized safely.</string>
+    <string name="editor_size_unavailable_background">This covers the whole face. Fit a replacement image on the Background page.</string>
+    <string name="editor_size_unavailable_geometry">This widget has no editable size. You can still move it.</string>
+    <string name="editor_size_unavailable_text">The watch controls this text’s font size. Resizing its box would not resize the text.</string>
 
     <!-- Shared -->
     <string name="editor_signed_pixels">%1$d px</string>
@@ -161,12 +277,12 @@
     <string name="editor_placement_readout">zoom %1$d%%   x %2$s   y %3$s</string>
     <string name="editor_placement_move">MOVE</string>
     <string name="editor_placement_size">SIZE</string>
-    <string name="editor_placement_hint">1 px or %1$d%% a tap · hold to keep going · pinch for coarse</string>
+    <string name="editor_placement_hint">Tap: 1 px or %1$d%% · hold to repeat · pinch for larger changes</string>
     <string name="editor_placement_reset">RESET PLACEMENT</string>
 
     <!-- Background page -->
     <string name="editor_bg_no_image_title">No image chosen</string>
-    <string name="editor_bg_no_image_detail">Resampled to %1$d×%2$d on apply.</string>
+    <string name="editor_bg_no_image_detail">Resized to %1$d×%2$d when applied.</string>
     <string name="editor_bg_choose">Choose image</string>
     <string name="editor_bg_tint_cyan">Tint cyan</string>
     <string name="editor_bg_tint_magenta">Tint magenta</string>
@@ -179,47 +295,82 @@
     <string name="editor_bg_none_title">No background</string>
     <string name="editor_bg_no_room_detail">This face is %1$s and the watch stops updating past %2$s. Widgets still work.</string>
     <string name="editor_bg_none_detail">This face draws its widgets straight onto black. Widgets still work.</string>
-    <string name="editor_bg_adds_label">ADDS A BACKGROUND</string>
+    <string name="editor_bg_adds_label">ADD BACKGROUND</string>
     <string name="editor_bg_adds_title">This face never had one</string>
-    <string name="editor_bg_adds_all">The image is added to all %1$d styles and every widget keeps its position. Reset project edits undoes it.</string>
-    <string name="editor_bg_adds_some">Only %1$s gets one: another would take the container over the %2$s the watch accepts. %3$s stays on black.</string>
+    <plurals name="editor_bg_adds_all">
+        <item quantity="one">Adds the image to this style. Widget positions stay unchanged. Reset project edits removes it.</item>
+        <item quantity="other">Adds the image to all %1$d styles. Widget positions stay unchanged. Reset project edits removes it.</item>
+    </plurals>
+    <string name="editor_bg_adds_some">Adds to %1$s only; more backgrounds would exceed the watch’s %2$s limit. Black background remains in %3$s.</string>
+    <!-- The always-on display is one entry, so there is no style count and nothing skipped. -->
+    <string name="editor_bg_adds_aod">Adds only to the always-on display. Widget positions and numbered styles stay unchanged. Reset project edits removes it.</string>
     <string name="editor_bg_partial_applies">Applies to %1$s. The other styles stay on black.</string>
-    <string name="editor_bg_partial_elsewhere">%1$s is on black, so this canvas will not change — the image lands on %2$s.</string>
+    <string name="editor_bg_partial_elsewhere">Black background remains in %1$s. The image applies to %2$s, so this preview will not change.</string>
 
     <!-- Styles page -->
     <string name="editor_style_preview_a11y">Preview of %1$s</string>
-    <string name="editor_style_current_edited">Current style · showing your edit</string>
-    <string name="editor_style_current">Current style</string>
-    <string name="editor_style_tap_to_load">Tap to load this variant</string>
-    <string name="editor_style_tap_to_load_no_image">Tap to load this variant · no image in the package</string>
-    <string name="editor_styles_footnote">Every style except the current one is the package\'s own picture of the unedited face. Switching style clears the current selection and reloads the preview; widget moves follow the apply-to-every-style setting.</string>
+    <string name="editor_style_current_edited">Selected · your edit</string>
+    <string name="editor_style_current">Selected</string>
+    <string name="editor_style_tap_to_load">Original preview · tap to open</string>
+    <string name="editor_style_tap_to_load_no_image">No preview available · tap to open</string>
+    <string name="editor_aod_current_edited">@string/editor_style_current_edited</string>
+    <string name="editor_aod_current">@string/editor_style_current</string>
+    <string name="editor_aod_tap_to_load">Tap to open</string>
+    <string name="editor_styles_footnote">Other styles show their original pictures; the selected style shows your current preview. Always-on previews are generated because no picture is supplied. Switching clears widget selection and reloads the preview. Widget edits follow your scope setting; always-on edits stay separate.</string>
 
-    <!-- Validate page -->
-    <string name="editor_validate_ok">Container reparsed successfully. Entry bounds, records and CRCs are valid.</string>
     <string name="editor_checks_heading">Checks</string>
+    <!-- The collapsed summary beside each Send-page section heading. -->
+    <string name="editor_install_checks_summary">%1$d pass</string>
+    <string name="editor_install_checks_failed">failed</string>
+    <string name="editor_install_expand">@string/ui_details_expand</string>
+    <string name="editor_install_collapse">@string/ui_details_collapse</string>
+    <!-- The same section, folded, beside the face. Five characters because it shares a
+         143dp line with a status badge on a 320dp phone. -->
+    <string name="editor_install_watch_label">Watch</string>
+    <!-- Shown in place of the watch section when the container did not reparse. Nothing
+         may be sent, so the page offers the way back rather than a disabled transfer. -->
+    <string name="editor_install_blocked">This face failed validation and cannot be sent. Reset project edits to restore the original face.</string>
     <string name="editor_check_entry_bounds">Entry table bounds</string>
     <string name="editor_check_record_sizes">Record sizes</string>
     <string name="editor_check_crc">Per-entry CRC</string>
     <string name="editor_check_payload_length">Payload length</string>
     <string name="editor_check_face_id">Face ID byte range</string>
     <string name="editor_audit_heading">Audit</string>
-    <string name="editor_audit_detail">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nvariants touched %4$d of %5$d\ncontainer %6$s of %7$s</string>
-    <string name="editor_continue_to_install">Continue to install →</string>
+    <!-- The audit section is always on the page, so it needs something to say before the
+         first commit of a session. -->
+    <string name="editor_audit_none_summary">no edit yet</string>
+    <string name="editor_audit_none">No edits applied this session. Your previously saved face is unchanged.</string>
+    <string name="editor_audit_detail">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nentries rewritten %4$d\ncontainer %5$s of %6$s</string>
+    <!-- Same as editor_audit_detail, for an edit that touched only the always-on display —
+         "%4$d of %5$d styles" would misreport it as one of the numbered styles, when it is
+         neither counted among nor touched by them. -->
+    <string name="editor_audit_detail_aod">operation %1$s\nchanged bytes %2$d\nsize delta %3$s\nvariant touched: always-on display\ncontainer %4$s of %5$s</string>
     <string name="editor_reset_edits">Reset project edits</string>
 
     <!-- Thumbnail card -->
     <string name="editor_thumbnail_heading">Face-picker thumbnail</string>
     <string name="editor_thumbnail_in_sync_label">IN SYNC</string>
-    <string name="editor_thumbnail_in_sync">Matches your edit, so the watch\'s carousel shows the same layout as %1$s. Updating it again would only resample it, so there is nothing left to do.</string>
+    <string name="editor_thumbnail_in_sync">The watch’s picker matches %1$s. Make another edit before updating it again.</string>
     <string name="editor_thumbnail_unedited">Unedited, so the stock thumbnail already matches this face.</string>
-    <string name="editor_thumbnail_blocked">Resolve the errors above first — a thumbnail rendered from a container that does not validate would bake in a broken layout.</string>
-    <string name="editor_thumbnail_stale">The watch\'s face picker still shows the stock image. Update it once so the carousel matches what you install.</string>
+    <string name="editor_thumbnail_blocked">Fix validation errors before updating the thumbnail.</string>
+    <string name="editor_thumbnail_stale">Update the watch’s face-picker image to match your edit.</string>
+    <!-- The card shows the thumbnail as it is, and as Update thumbnail would leave it. -->
+    <string name="editor_thumbnail_now">Now</string>
+    <string name="editor_thumbnail_after">After</string>
+    <string name="editor_thumbnail_now_a11y">The face picker\'s thumbnail for %1$s as it is now</string>
+    <string name="editor_thumbnail_after_a11y">The thumbnail after updating it</string>
+    <string name="editor_thumbnail_state_stock">Stock image, matches</string>
+    <string name="editor_thumbnail_state_stale">Out of date</string>
+    <string name="editor_thumbnail_state_in_sync">Matches your edit</string>
+    <string name="editor_thumbnail_state_blocked">Fix the errors first</string>
+    <string name="editor_thumbnail_state_aod">Shown for %1$s</string>
+    <string name="editor_thumbnail_aod">The watch’s picker uses a numbered style. Select %1$s to update its thumbnail.</string>
     <string name="editor_thumbnail_update">Update thumbnail</string>
 
     <!-- Project page -->
-    <string name="editor_container_heading">Container</string>
+    <string name="editor_container_heading">File details</string>
     <string name="editor_container_detail">face id %1$s\nstyles %2$d\nimages %3$d\nwidgets %4$d\nsource %5$s</string>
-    <string name="editor_reset_note">Resetting restores this project\'s working copy to the downloaded container.</string>
+    <string name="editor_reset_note">Removes all project edits and restores the original face.</string>
 
     <!-- Install page -->
     <string name="editor_install_advisory_label">HEADS UP</string>
@@ -227,10 +378,10 @@
     <string name="editor_install_advisory_no_agent">No app that can reach the watch was found on this phone. Connect the watch in its companion app once, then carry on.</string>
     <string name="editor_install_advisory_framework">The accessory service this phone needs was not found. Connect the watch in its companion app once, then carry on.</string>
     <string name="editor_install_stopped_label">STOPPED</string>
-    <string name="editor_install_restart">Restart direct-install setup</string>
+    <string name="editor_install_restart">Restart setup</string>
 
-    <!-- Device status -->
-    <string name="editor_device_face_a11y">The face that will be installed</string>
+    <!-- The plate on the install page, which is the only render of the face on it. -->
+    <string name="editor_device_face_a11y">The face that will be sent to the watch</string>
     <string name="editor_device_name">Fit3 · SM-R390</string>
     <string name="editor_device_face_named">%1$s · %2$s</string>
     <string name="editor_device_face_unnamed">face %1$s · %2$s</string>
@@ -244,22 +395,22 @@
 
     <!-- Setup checklist -->
     <string name="editor_setup_label">SETUP</string>
-    <string name="editor_setup_banner">Only one app may hold the accessory channel. Discovery needs the watch connected, so it comes first — then the stock plugin has to let the channel go by losing its Nearby devices access.</string>
-    <string name="editor_setup_banner_legacy">Only one app may hold the accessory channel. Discovery needs the watch connected, so it comes first — then the stock plugin has to let the channel go. This phone has no Nearby devices switch for it, so step 4 needs a tool that can disable the plugin.</string>
+    <string name="editor_setup_banner">Only one app can use the watch connection at a time. Find the watch while its plugin is connected, then turn off the plugin’s Nearby devices access for transfer.</string>
+    <string name="editor_setup_banner_legacy">Only one app can use the watch connection at a time. Find the watch while its plugin is connected, then disable the plugin for transfer. This Android version has no Nearby devices switch.</string>
     <string name="editor_setup_step1_title">Connect the watch in its companion app</string>
-    <string name="editor_setup_step1_why">Hands pairing back to the stock app, then return here.</string>
+    <string name="editor_setup_step1_why">Connect in the companion app, then return here.</string>
     <string name="editor_setup_step1_done">Companion app and plugin found</string>
     <string name="editor_setup_step1_done_plugin_only">Watch plugin found, no companion app</string>
     <string name="editor_setup_step1_done_companion_only">Companion app found, no watch plugin</string>
     <string name="editor_setup_step1_done_agent_only">An app that can reach the watch was found</string>
     <string name="editor_setup_step2_title">Grant FitFace Nearby devices access</string>
-    <string name="editor_setup_step2_why">Android asks for this before any app may use the accessory channel.</string>
+    <string name="editor_setup_step2_why">Required to connect to the watch.</string>
     <string name="editor_setup_step2_done">Granted</string>
-    <string name="editor_setup_step3_title">Discover the watch-face and OTA peers</string>
-    <string name="editor_setup_step3_why">Needs the watch connected, so the plugin\'s access has to be ON for this step — turn it back on if you have already revoked it.</string>
-    <string name="editor_setup_step3_why_legacy">Needs the watch connected, so the plugin has to be enabled and holding it — turn it back on first if you disabled it for an earlier attempt.</string>
-    <string name="editor_setup_step3_done">Both peers cached — they stay cached while the watch does</string>
-    <string name="editor_setup_step4_title">Let the plugin release the channel</string>
+    <string name="editor_setup_step3_title">Find the watch for transfer</string>
+    <string name="editor_setup_step3_why">Keep the watch connected and the plugin’s Nearby devices access on. Turn it back on if needed.</string>
+    <string name="editor_setup_step3_why_legacy">Keep the plugin enabled and the watch connected. Re-enable it first if needed.</string>
+    <string name="editor_setup_step3_done">Watch services found for this connection</string>
+    <string name="editor_setup_step4_title">Free the connection for transfer</string>
     <string name="editor_setup_step4_why">Turn the plugin\'s Nearby devices access off. Return here after Android applies the change.</string>
     <string name="editor_setup_step4_why_legacy">No Nearby devices switch on this Android version — the plugin has to be disabled instead. Freeze it with Hail in its Shizuku working mode, or disable it over ADB, then confirm below. Put it back after the attempt.</string>
     <string name="editor_setup_step4_done">Channel released</string>
@@ -268,27 +419,44 @@
     <string name="editor_setup_companion_app">Companion app</string>
     <string name="editor_setup_plugin_access">Plugin access</string>
     <string name="editor_setup_plugin_access_legacy">Plugin app info</string>
-    <string name="editor_setup_confirm_released">The plugin has let go — continue</string>
-    <string name="editor_setup_confirm_note">Revoking the plugin\'s Nearby access is detected on its own. Use this only if you freed the channel some other way.</string>
+    <string name="editor_setup_confirm_released">I’ve freed the connection</string>
+    <string name="editor_setup_confirm_note">Nearby devices changes are detected automatically. Confirm only if you freed the connection another way.</string>
     <string name="editor_setup_confirm_note_legacy">Tap this once the plugin is disabled — nothing here can detect that on its own.</string>
 
     <!-- Transfer panel -->
     <string name="editor_transfer_phases">Phases</string>
     <string name="editor_transfer_keep_open">Keep FitFace Studio open. Leaving the app aborts the transfer.</string>
     <string name="editor_transfer_done_label">DONE</string>
-    <string name="editor_transfer_done">Installed. Reconnect the watch in the companion app, and restore the plugin\'s Nearby access if you turned it off.</string>
-    <string name="editor_transfer_done_legacy">Installed. Re-enable the plugin, then reconnect the watch in the companion app.</string>
+    <string name="editor_transfer_done">Request sent. Check the face on your watch. Restore the plugin’s Nearby devices access if you turned it off, then reconnect in the companion app.</string>
+    <string name="editor_transfer_done_legacy">Request sent. Check the face on your watch, re-enable the plugin, then reconnect in the companion app.</string>
     <string name="editor_transfer_send_again">Send again</string>
     <string name="editor_transfer_back_to_canvas">Back to canvas</string>
-    <string name="editor_transfer_try_again">Try again</string>
-    <string name="editor_transfer_rediscover">Reconnect the watch and discover again</string>
+    <string name="editor_transfer_try_again">@string/ui_try_again</string>
+    <string name="editor_transfer_rediscover">Reconnect and find watch again</string>
     <string name="editor_transfer_in_progress">%1$s…</string>
     <string name="editor_transfer_install">Install on watch</string>
 
     <!-- Payload readout -->
-    <string name="editor_payload_heading">Payload</string>
+    <string name="editor_payload_heading">Transfer details</string>
     <string name="editor_payload_none">—</string>
-    <string name="editor_payload_detail">face %1$s  ·  style %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
-    <string name="editor_destructive_note">Duplicate appends a selected clone you can drag immediately. Removal and duplication rebuild the widget table and every CRC.</string>
+    <!--
+      Diagnostics, so these are the raw values that go on the wire. `sampler` is deliberately
+      not called "style": it is the protocol byte, counted from zero, so labelling it as a
+      style would have it disagree with every "Style N" the rest of the app shows.
+    -->
+    <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
+    <string name="editor_destructive_note">A duplicate is added at the end of the drawing order and selected for editing. Removal and duplication rebuild the widget table and its checksums.</string>
     <string name="editor_transfer_progress">%1$d/%2$d windows · %3$d/%4$d bytes</string>
+    <string name="editor_preview_details">Preview details</string>
+    <string name="editor_preview_explanation">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</string>
+    <string name="editor_restore_details">Restore details</string>
+    <string name="editor_restore_explanation">Restored widgets are placed at the end of the drawing order.</string>
+    <string name="editor_duplicate_restore_details">Duplicate and restore details</string>
+    <string name="editor_image_details">Image details</string>
+    <string name="editor_styles_details">About these previews</string>
+    <string name="editor_thumbnail_details">Thumbnail details</string>
+    <string name="editor_connection_details">Connection details</string>
+    <string name="editor_setup_details">Why this order?</string>
+    <string name="editor_title_edited_a11y">%1$s, edited</string>
+    <string name="editor_transfer_percent">%1$d%% sent</string>
 </resources>

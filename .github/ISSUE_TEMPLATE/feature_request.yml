@@ -9,11 +9,9 @@ body:
         personal-use project for one watch family. It will never be published to an app
         store, and plenty of things are left undone on purpose rather than by oversight.
 
-        [`docs/`](../blob/main/docs/) explains what the format allows and what the
-        editor deliberately refuses — [`docs/editing.md`](../blob/main/docs/editing.md)
-        in particular records, for each edit the app will not make, the corpus or
-        hardware evidence for why. A request that runs into one of those is not
-        hopeless, but it needs to engage with the evidence.
+        [Format and editing contracts](https://github.com/satvikgosai/fitface-studio/blob/main/docs/bin-format.md#editing-contracts)
+        describe supported operations, restrictions and the evidence behind them.
+        A request that changes a restriction should address that evidence.
 
   - type: textarea
     id: problem
@@ -54,6 +52,6 @@ body:
       label: Confirmation
       options:
         - label: >-
-            I have checked `docs/` and this is not something the project has already
+            I have checked the documentation and this is not something the project has already
             documented a reason for not doing.
           required: true

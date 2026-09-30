@@ -50,7 +50,7 @@ any APK you build yourself: passing it on passes on the vendor's code with it.
 
 ### Runtime content
 
-**No watch-face content is distributed by this software or this repository.** No
+**No watch-face content is bundled with this software or distributed by this repository.** No
 watch-face package, container, raster, font or preview image is bundled in the app
 or committed here, and `.gitignore` keeps it that way; the documentation
 screenshots described below are captures of this app's own interface, not face
@@ -60,9 +60,11 @@ above — the same endpoints the stock companion plugin uses. Everything it obta
 that way remains the property of its publisher; this project claims no rights in
 any of it and grants none.
 
-* Downloaded packages, extracted containers and everything derived from them are
-  written **only** to this app's private storage, and nowhere else.
-* Nothing is re-signed, re-published, uploaded, mirrored or shared by the app.
+* Downloaded packages and edits are stored privately. Optional developer controls
+  can export a project archive to a document the user chooses, or import one into a
+  new private project. Export grants no rights in the face or its artwork.
+* Nothing is re-signed, uploaded or mirrored by the app. Watch delivery and optional
+  local archive export occur only on the user's instruction.
 * Use this only with faces you are authorised to inspect and modify on hardware
   you own.
 

@@ -1,5 +1,8 @@
 plugins {
     alias(libs.plugins.android.library)
+    // `ProjectManifest` is `@Serializable`. The module already used the JSON element API to
+    // read `bandface_info.json`, which needs no plugin; a declared shape does.
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {

@@ -1,4 +1,9 @@
 .gradle/
+.agents
+.codex
+.claude
+.codegraph
+.mcp.json
 **/build/
 .kotlin/
 local.properties

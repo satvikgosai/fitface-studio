@@ -57,6 +57,7 @@ class EditPersistenceTest {
             context = context,
             projectDao = dao,
             imageSource = AndroidImageSource(context.contentResolver),
+            contentResolver = context.contentResolver,
             diagnostics = DiagnosticsLog(),
         )
     }
@@ -177,7 +178,7 @@ class EditPersistenceTest {
     private suspend fun nudge(snapshot: EditorSnapshot, by: Int): EditorSnapshot {
         val widget = snapshot.widgets.first { it.width > 0 && it.height > 0 }
         return repository.moveWidget(
-            styleName = snapshot.selectedStyle,
+            styleName = snapshot.selectedVariant.basename,
             globalIndex = widget.globalIndex,
             widgetType = widget.type,
             sequenceId = widget.sequenceId,

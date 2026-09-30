@@ -214,7 +214,7 @@ class WidgetPlacementTest {
     }
 
     /**
-     * Resize is only offered where StructuralEditor.resizeSprite will accept it — the
+     * Resize is only offered where StructuralEditor.resizeWidget will accept it — the
      * UI enabling a control whose commit always fails is the failure this guards.
      */
     @Test
@@ -227,12 +227,12 @@ class WidgetPlacementTest {
                     FaceRecordParser.widgetGuides(entry)
                         .filter { it.canResize }
                         .forEach { widget ->
-                            val edit = StructuralEditor.resizeSprite(
-                                source,
-                                listOf(entry.basename),
-                                widget.sequenceId,
-                                (widget.width - 2).coerceIn(1, 128),
-                                (widget.height - 2).coerceIn(1, 128),
+                            val edit = resizeGuide(
+                                source = source,
+                                entryBasenames = listOf(entry.basename),
+                                guide = widget,
+                                width = (widget.width - 2).coerceIn(1, 128),
+                                height = (widget.height - 2).coerceIn(1, 128),
                             )
                             assertTrue(
                                 "$face/${entry.basename} seq ${widget.sequenceId}",

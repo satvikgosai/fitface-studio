@@ -50,6 +50,7 @@ class StylePreviewProjectTest {
             context = context,
             projectDao = database.projectDao(),
             imageSource = AndroidImageSource(context.contentResolver),
+            contentResolver = context.contentResolver,
             diagnostics = DiagnosticsLog(),
         )
     }

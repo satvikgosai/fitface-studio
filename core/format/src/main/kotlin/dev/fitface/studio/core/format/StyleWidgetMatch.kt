@@ -1,5 +1,7 @@
 package dev.fitface.studio.core.format
 
+import dev.fitface.studio.core.model.AOD_ENTRY_NAME
+
 /**
  * Pairs the same widget across the variant entries of one container.
  *
@@ -15,12 +17,11 @@ package dev.fitface.studio.core.format
  * happen or fail loudly — and every other variant is best effort: it is edited
  * where the same widget is unambiguously there, and left alone where it is not.
  */
-internal object StyleWidgetMatch {
+object StyleWidgetMatch {
     private val STYLE_ENTRY = Regex("""style\d+\.bin""")
-    private const val AOD_ENTRY = "aod.bin"
 
     fun isVariantEntry(basename: String): Boolean =
-        basename == AOD_ENTRY || basename.matches(STYLE_ENTRY)
+        basename == AOD_ENTRY_NAME || basename.matches(STYLE_ENTRY)
 
     fun requireVariantEntry(entry: ContainerEntry): ContainerEntry {
         if (!isVariantEntry(entry.basename)) {
@@ -40,7 +41,7 @@ internal object StyleWidgetMatch {
      */
     fun match(entry: ContainerEntry, source: WidgetRecord): WidgetRecord? {
         val records = FaceRecordParser.scanWidgets(entry)
-        if (entry.basename != AOD_ENTRY) {
+        if (entry.basename != AOD_ENTRY_NAME) {
             records.singleOrNull {
                 it.globalIndex == source.globalIndex &&
                     it.widgetType == source.widgetType &&

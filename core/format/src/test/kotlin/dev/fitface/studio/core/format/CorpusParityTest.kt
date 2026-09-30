@@ -155,15 +155,16 @@ class CorpusParityTest {
             }
             val withBackground = styles.filter { FaceRecordParser.backgroundImage(it) != null }
 
+            val styleBasenames = styles.map { it.basename }
             if (withBackground.isEmpty()) {
                 assertThrows(Fit3FormatException::class.java) {
-                    FaceEditor.tintBackgrounds(container, red = 0, green = 255, blue = 255)
+                    FaceEditor.tintBackgrounds(container, styleBasenames, red = 0, green = 255, blue = 255)
                 }
                 assertArrayEquals(original, container.toByteArray())
                 refused++
                 return@forEach
             }
-            val edit = FaceEditor.tintBackgrounds(container, red = 0, green = 255, blue = 255)
+            val edit = FaceEditor.tintBackgrounds(container, styleBasenames, red = 0, green = 255, blue = 255)
             assertEquals(original.size, edit.container.fileSize)
             assertTrue(fixture.relativePath, edit.container.validate().isValid)
             assertTrue(fixture.relativePath, edit.changedPayloadBytes > 0)
@@ -221,8 +222,6 @@ class CorpusParityTest {
 
         val layers = FaceRecordParser.widgetImageLayers(
             entry = style,
-            originalEntry = style,
-            reference = preview,
         ).associateBy { it.globalIndex }
 
         assertEquals(setOf(6, 7, 8, 9, 10, 11), layers.keys)
@@ -269,7 +268,7 @@ class CorpusParityTest {
             val source = Fit3Container.parse(originalBytes)
             val entry = source.entryByBasename("style0.bin")
             val widget = FaceRecordParser.scanWidgets(entry)
-                .first { it.width in 1..255 && it.height in 1..401 }
+                .first { it.raw1C in 1..255 && it.raw1E in 1..401 }
             val targetX = if (widget.x < Short.MAX_VALUE) widget.x + 1 else widget.x - 1
             val targetY = if (widget.y < Short.MAX_VALUE) widget.y + 1 else widget.y - 1
 
@@ -450,8 +449,8 @@ class CorpusParityTest {
         val badge = FaceRecordParser.scanWidgets(entry).single {
             it.widgetType == WIDGET_BADGE
         }
-        val originalEndX = badge.width.toShort().toInt()
-        val originalEndY = badge.height.toShort().toInt()
+        val originalEndX = badge.raw1C.toShort().toInt()
+        val originalEndY = badge.raw1E.toShort().toInt()
         val deltaX = 3
         val deltaY = 4
 
@@ -480,8 +479,8 @@ class CorpusParityTest {
 
         assertEquals(badge.x + deltaX, moved.x)
         assertEquals(badge.y + deltaY, moved.y)
-        assertEquals(originalEndX + deltaX, moved.width.toShort().toInt())
-        assertEquals(originalEndY + deltaY, moved.height.toShort().toInt())
+        assertEquals(originalEndX + deltaX, moved.raw1C.toShort().toInt())
+        assertEquals(originalEndY + deltaY, moved.raw1E.toShort().toInt())
         assertTrue(changedOffsets.all(allowedOffsets::contains))
         assertArrayEquals(originalBytes, source.toByteArray())
         assertTrue(edit.container.validate().isValid)

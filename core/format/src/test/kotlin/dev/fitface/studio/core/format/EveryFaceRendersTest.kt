@@ -242,8 +242,8 @@ class EveryFaceRendersTest {
             FaceRecordParser.widgetGuides(entry)
                 .filter { it.placement == WidgetPlacement.CANVAS }
                 .forEach { widget ->
-                    val left = widget.drawLeft(panel.width)
-                    val top = widget.drawTop(panel.height)
+                    val left = widget.drawLeft
+                    val top = widget.drawTop
                     assertTrue(
                         "$label #${widget.globalIndex} at ($left,$top) " +
                             "${widget.width}x${widget.height} misses the " +

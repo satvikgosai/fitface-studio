@@ -9,31 +9,25 @@ enum class ImageFit {
     STRETCH,
 }
 
-fun displayCoordinate(value: Int, extent: Int, canvasExtent: Int): Int =
-    if (value < 0) canvasExtent + value - extent else value
-
-fun encodeCoordinate(
-    display: Int,
-    extent: Int,
-    canvasExtent: Int,
-    anchoredFromEnd: Boolean,
-): Int = if (anchoredFromEnd) {
-    display + extent - canvasExtent
-} else {
-    display
-}
-
 /**
  * Left edge of the rectangle [WidgetGuide] draws in, in display space.
  *
- * Use this — never `displayCoordinate(x, …)` directly — anywhere a widget's rectangle
- * is drawn, hit-tested or cropped, so Badge endpoint ordering is handled once.
+ * `origin + stored` is the whole calculation, and its inverse — `display − origin` — is
+ * how an edit turns a position back into stored bytes. [WidgetGuide.originX] carries
+ * whatever the widget's coordinates are measured from: the panel for most records, and
+ * another widget's rectangle for the ones that are aligned to one.
+ *
+ * Use this — never `x` directly — anywhere a widget's rectangle is drawn, hit-tested or
+ * cropped, so Rule endpoint ordering is handled once.
+ *
+ * This used to read the sign of the coordinate to decide whether the widget was anchored
+ * to the far edge of the face. That is right for one alignment code and wrong for a
+ * coordinate that is simply negative, which is why widgets on six catalogue faces were
+ * drawn at the opposite edge from where the watch draws them.
  */
-fun WidgetGuide.drawLeft(canvasWidth: Int): Int =
-    displayCoordinate(x, width, canvasWidth) + drawOffsetX
+val WidgetGuide.drawLeft: Int get() = originX + x + drawOffsetX
 
-fun WidgetGuide.drawTop(canvasHeight: Int): Int =
-    displayCoordinate(y, height, canvasHeight) + drawOffsetY
+val WidgetGuide.drawTop: Int get() = originY + y + drawOffsetY
 
 /**
  * Where the widget's rectangle was before the current edit.
@@ -43,20 +37,47 @@ fun WidgetGuide.drawTop(canvasHeight: Int): Int =
  * clear are the ones the old rectangle covered. [WidgetGuide.drawOffsetX] is either
  * zero or a whole width, so it is re-derived at the original extent too.
  */
-fun WidgetGuide.originalDrawLeft(canvasWidth: Int): Int =
-    displayCoordinate(originalX, originalWidth, canvasWidth) +
-        if (drawOffsetX == 0) 0 else -originalWidth
+val WidgetGuide.originalDrawLeft: Int
+    get() = originalOriginX + originalX + if (drawOffsetX == 0) 0 else -originalWidth
 
-fun WidgetGuide.originalDrawTop(canvasHeight: Int): Int =
-    displayCoordinate(originalY, originalHeight, canvasHeight) +
-        if (drawOffsetY == 0) 0 else -originalHeight
+val WidgetGuide.originalDrawTop: Int
+    get() = originalOriginY + originalY + if (drawOffsetY == 0) 0 else -originalHeight
 
 /**
- * How large a Sprite may be *grown past what it shipped at*, per side.
+ * How a widget's size is stored, and therefore what bounds a resize of it.
  *
- * This is not a hard maximum — see [spriteResizeLimit]. A sprite may always be taken back
- * to the extent the face shipped, however large that is, because that is the one size
- * whose bytes are known to work: resampling to the original dimensions returns the frame
+ * The editor's ladder needs the bound and cannot see `:core:format`, so the format layer
+ * decides the kind from its schema table and the guide carries it. Only two answers
+ * matter to the bound, and the difference between them is whether the edit writes pixels:
+ * resampling a raster grows the container, and a widget that stores its own extent does
+ * not add a byte.
+ */
+enum class WidgetResizeKind {
+    /** This widget cannot be resized — see `WidgetGuide.supportMessage` for why. */
+    NONE,
+
+    /**
+     * The size is the artwork's, so a resize rewrites raster bytes: Static, Sprite, Hand,
+     * image Arc and LineBar. [RASTER_RESIZE_CEILING] bounds growth because those bytes
+     * count against [WATCH_CONTAINER_BYTE_CEILING].
+     */
+    RASTER,
+
+    /**
+     * The size is stored in the record and the widget names no raster, so the resize is a
+     * same-size patch: the vector arc's box and the Rule's second endpoint. The container
+     * does not change length by one byte, so the only bound is what can be a widget on a
+     * 256 × 402 panel — [WIDGET_EXTENT_CEILING].
+     */
+    FIELDS,
+}
+
+/**
+ * How large a raster-backed widget may be *grown past what it shipped at*, per side.
+ *
+ * This is not a hard maximum — see [widgetResizeLimit]. Such a widget may always be taken
+ * back to the extent the face shipped, however large that is, because that is the one size
+ * whose bytes are known to work: resampling to the original dimensions returns the raster
  * records to their original length, so the container comes back to the size the store
  * shipped, and the watch has now been shown to redraw a resized sprite.
  *
@@ -66,17 +87,33 @@ fun WidgetGuide.originalDrawTop(canvasHeight: Int): Int =
  * [WATCH_CONTAINER_BYTE_CEILING], so growing its frames beyond what it shipped crossed
  * that line instead. Growth past the shipped extent is what has to stay bounded, and the
  * container ceiling is what makes it safe.
+ *
+ * It is named for the mechanism rather than for the Sprite it was discovered on, because
+ * the same arithmetic now bounds a Static, a Hand, an image Arc and a LineBar.
  */
-const val SPRITE_RESIZE_CEILING = 128
+const val RASTER_RESIZE_CEILING = 128
 
 /**
- * The largest a Sprite frame may be resized to: [SPRITE_RESIZE_CEILING], or the extent it
- * shipped at when the face ships something larger.
+ * The largest extent this app will write for any widget, per side.
  *
- * One rule in one place, because the editor's ladder and `StructuralEditor.resizeSprite`
+ * The panel is 256 × 402, so nothing larger than this can be a widget on it — the
+ * catalogue's largest is a 400 × 400 vector arc box, deliberately overhanging the panel.
+ * It is both the sanity bound on every resize request and the growth ceiling for a
+ * [WidgetResizeKind.FIELDS] widget, which adds no bytes and so has nothing else to fear.
+ */
+const val WIDGET_EXTENT_CEILING = 512
+
+/**
+ * The largest a widget may be resized to, per side.
+ *
+ * One rule in one place, because the editor's ladder and `StructuralEditor.resizeWidget`
  * have to agree exactly — a rung the format layer would refuse is a button that fails.
  */
-fun spriteResizeLimit(shippedExtent: Int): Int = maxOf(SPRITE_RESIZE_CEILING, shippedExtent)
+fun widgetResizeLimit(shippedExtent: Int, kind: WidgetResizeKind): Int = when (kind) {
+    WidgetResizeKind.NONE -> 0
+    WidgetResizeKind.RASTER -> maxOf(RASTER_RESIZE_CEILING, shippedExtent)
+    WidgetResizeKind.FIELDS -> maxOf(WIDGET_EXTENT_CEILING, shippedExtent)
+}
 
 /**
  * The largest container the watch accepts: **4 MiB exactly, confirmed on an SM-R390.**
@@ -106,7 +143,7 @@ fun spriteResizeLimit(shippedExtent: Int): Int = maxOf(SPRITE_RESIZE_CEILING, sh
  *
  * It also explains the one hardware result that used to look like a separate firmware
  * rule: a sprite grown past the extent its face shipped, on a face already within 76,640
- * bytes of the ceiling. See [SPRITE_RESIZE_CEILING].
+ * bytes of the ceiling. See [RASTER_RESIZE_CEILING].
  */
 const val WATCH_CONTAINER_BYTE_CEILING: Int = 4 * 1024 * 1024
 
@@ -321,6 +358,13 @@ enum class ProjectSort {
 private fun <T> Comparator<T>.maybeReversed(reversed: Boolean): Comparator<T> =
     if (reversed) reversed() else this
 
+/**
+ * The face a custom face is built from — Info_4, whose clock carries alpha and whose other
+ * widgets are anchored to nothing, so stripping them leaves a clean canvas. A custom face
+ * installs into this face's slot on the watch, which the screen offering it has to say.
+ */
+const val CUSTOM_FACE_TEMPLATE_FACE_ID = "00006"
+
 class FacePackage(
     val sourceKey: String,
     val displayName: String,
@@ -419,14 +463,34 @@ enum class WidgetPlacement {
  * position is still editable.
  */
 enum class WidgetCategory(val label: String, val detail: String) {
-    IMAGE("Image", "One static raster blitted at a fixed position."),
-    SPRITE("Sprite", "A table of frames the watch indexes with a live value."),
-    HAND("Clock hand", "A hand rotated about a pivot, so it has no fixed rectangle."),
-    VALUE("Value", "A live reading the watch draws with its own glyphs."),
-    RULE("Rule", "A straight line between two stored endpoints."),
-    COMPOSITE("Composite", "Several sub-fields laid out together, such as a date."),
-    ARC("Arc", "A curved gauge."),
+    IMAGE("Image", "A still image at a fixed position."),
+    SPRITE("Sprite", "Images that change with a live reading."),
+    ANIMATION("Animation", "An image sequence played by the watch."),
+    // What it is, not why it has no outline: the panel above this one already says that,
+    // in the support message, and the two together said "rotated about a pivot" twice on
+    // one screen.
+    HAND("Clock hand", "The hour, minute or second hand."),
+    VALUE("Value", "A live reading drawn with the watch’s font."),
+    RULE("Rule", "A straight line."),
+    COMPOSITE("Composite", "Text and readings combined, such as a date."),
+    ARC("Image arc", "A curved gauge drawn from its own artwork."),
+
+    /**
+     * The other arc, and the reason the two are named apart.
+     *
+     * It draws from a stored colour, thickness and angle range instead of a raster, so
+     * it has no artwork to replace and no pointer to relocate. 75 records across nine
+     * catalogue faces are this type, and every one of them used to be labelled "Other".
+     */
+    VECTOR_ARC("Vector arc", "A curved gauge drawn from stored colour and thickness."),
     BAR("Bar", "A straight gauge."),
+    GROUP("Complication group", "A group of live readings the watch lays out itself."),
+
+    /**
+     * A type the watch accepts and then ignores: it builds nothing and updates nothing.
+     * No catalogue face carries one. Preserved byte for byte, never offered as editable.
+     */
+    RESERVED("Reserved", "Accepted by the watch but drawn as nothing."),
     UNKNOWN("Other", "Type preserved verbatim; only its position is interpreted."),
     ;
 
@@ -435,14 +499,70 @@ enum class WidgetCategory(val label: String, val detail: String) {
             1 -> IMAGE
             2 -> HAND
             3 -> SPRITE
+            4 -> ANIMATION
             5 -> VALUE
+            6 -> VECTOR_ARC
             7 -> RULE
+            9 -> GROUP
             13 -> COMPOSITE
             16 -> ARC
             17 -> BAR
+            8, 10, 11, 12, 14, 15 -> RESERVED
             else -> UNKNOWN
         }
     }
+}
+
+/**
+ * What a widget's live-data source number means.
+ *
+ * These are the watch's own readings, not the container's: a face selects among them and
+ * cannot introduce one. The map is what a later analysis pass established, joined against
+ * the rendered previews shipped in the packages themselves — a face whose steps widget
+ * previews `3457` beside a label reading `steps` settles that number.
+ *
+ * Where no name is available the number is shown as itself. Guessing a label from a
+ * plausible-looking sample value is how source 41 was once read as calories and 48 as
+ * battery, and both were wrong.
+ */
+object DataSourceLabels {
+    private val labels = mapOf(
+        0 to "constant zero",
+        1 to "hour", 2 to "hour tens", 3 to "hour units",
+        5 to "AM/PM",
+        9 to "minute", 10 to "minute tens", 11 to "minute units",
+        13 to "second", 14 to "second tens", 15 to "second units",
+        17 to "weekday",
+        18 to "day of month", 19 to "day tens", 20 to "day units",
+        21 to "month", 22 to "month tens", 23 to "month units",
+        24 to "year", 25 to "year thousands", 26 to "year hundreds",
+        27 to "year tens", 28 to "year units",
+        29 to "steps",
+        37 to "battery",
+        41 to "heart rate",
+        48 to "calories",
+        55 to "distance",
+        62 to "temperature",
+        69 to "weather icon",
+        71 to "active minutes",
+        72 to "floors",
+        75 to "complication group",
+        102 to "blood oxygen",
+        104 to "sleep",
+        106 to "second clock hour tens", 107 to "second clock hour units",
+        109 to "second clock minute tens", 110 to "second clock minute units",
+        115 to "water",
+        116 to "second time zone",
+        120 to "weather description",
+        122 to "second zone month", 123 to "second zone weekday", 124 to "second zone day",
+        125 to "second zone AM/PM",
+    )
+
+    /** The reading [source] selects, or null when this format has no name for it. */
+    fun labelOrNull(source: Int): String? = labels[source]
+
+    /** `steps`, or `source 70` where no name is established. */
+    fun label(source: Int): String = labels[source] ?: "source $source"
 }
 
 data class WidgetGuide(
@@ -459,18 +579,49 @@ data class WidgetGuide(
     /**
      * The extent before the current edit.
      *
-     * A Sprite resize rewrites every referenced frame, so [width]/[height] follow the
-     * new raster the moment it commits while the vendor's `preview.bin` still renders
-     * the old one. Both rectangles are needed: the new one says where to draw, the
-     * original one says which reference pixels the edit has to clear.
+     * A resize rewrites the record or its rasters, so [width]/[height] follow the current
+     * resources. The original extent anchors the resize ladder and pristine resampling;
+     * rendering no longer uses it to clear pixels from a vendor preview.
      */
     val originalWidth: Int = width,
     val originalHeight: Int = height,
     val recordSize: Int,
     val isFinal: Boolean,
     val canEditPosition: Boolean,
-    val canResize: Boolean = false,
+    /**
+     * How this widget resizes, or [WidgetResizeKind.NONE] when it cannot.
+     *
+     * Carried rather than derived from [type], because whether a *particular* record can
+     * be resized depends on the container around it — a Static that draws the panel
+     * background, a raster pool whose members disagree about their pixel format — and the
+     * format layer is the only thing that can see that.
+     */
+    val resizeKind: WidgetResizeKind = WidgetResizeKind.NONE,
     val placement: WidgetPlacement = WidgetPlacement.CANVAS,
+    /**
+     * The display position [x] is measured from — zero for a widget positioned against
+     * the panel, and another widget's edge for one aligned to it.
+     *
+     * Every Image, Clock hand, Value and Composite record in the catalogue is aligned to
+     * something, so this is the normal case rather than the exception.
+     */
+    val originX: Int = 0,
+    val originY: Int = 0,
+    /** The origin before the current edit, for the same reason as [originalWidth]. */
+    val originalOriginX: Int = originX,
+    val originalOriginY: Int = originY,
+    /** The widget this one is positioned against, when its reference resolved to one. */
+    val alignedToGlobalIndex: Int? = null,
+    /** The live reading this widget follows, where the format names one. */
+    val sourceLabel: String? = null,
+    /**
+     * Whether this widget follows a live reading at all.
+     *
+     * Separate from [sourceLabel] being null, which only means the reading has no
+     * established name. A Composite gives each of its parts its own reading and ignores
+     * the record's, so calling it "reading 0" would be noise.
+     */
+    val followsReading: Boolean = false,
     /**
      * Offset from the stored coordinate to the left edge of the drawn rectangle.
      *
@@ -490,24 +641,125 @@ data class WidgetGuide(
     val colorArgb: Int?,
     val originalColorArgb: Int? = colorArgb,
     val duplicateSourceGlobalIndex: Int? = null,
+    /** Imports are edited only in the variant where they were added. */
+    val importedFromFaceId: String? = null,
     val supportMessage: String,
-)
+) {
+    /** Whether the editor may offer to resize this widget at all. */
+    val canResize: Boolean get() = resizeKind != WidgetResizeKind.NONE
+}
+
+/**
+ * Which of a container's editable face entries a variant is.
+ *
+ * A numbered style is installable and carries a sampler id; `aod.bin` is not — it is
+ * always-on-display artwork the watch shows on its own, never selected for install. See
+ * [EditorSnapshot.selectedVariant] and [EditorSnapshot.activeStyleName].
+ */
+enum class VariantKind { STYLE, AOD }
+
+/**
+ * The always-on display's entry name.
+ *
+ * Here rather than in `:core:format` — where it used to live — because it is a *name*, and
+ * the modules that have to recognise it reach further down than the format layer does:
+ * `:core:model` tells a removed record's scope apart from it and `:feature:editor` cannot
+ * see `:core:format` at all. Every module above this one can now spell it one way. The
+ * literal was written out 24 times across four modules once already; do not start a
+ * twenty-fifth.
+ */
+const val AOD_ENTRY_NAME = "aod.bin"
+
+/**
+ * One editable face entry: a numbered style or the single always-on-display entry.
+ *
+ * [styleIndex] is the entry's position among [EditorSnapshot.styleNames], null for AOD —
+ * AOD has no sampler id and no preview-frame index of its own.
+ */
+data class EditorVariant(
+    val basename: String,
+    val kind: VariantKind,
+    val styleIndex: Int? = null,
+) {
+    /** This entry's own style number, or null for one that is not a numbered style. */
+    val styleNumber: Int? get() = styleNumberOf(basename)
+
+    companion object {
+        /**
+         * The `N` in `styleN.bin`, counted from **zero** the way the container counts it.
+         *
+         * This is the format's number, not the reader's — `:core:ui`'s `styleLabel` is
+         * where the one-based offset and the wording are applied, once, for every screen
+         * that shows one.
+         *
+         * Read out of the basename rather than off [styleIndex], which is a *position*:
+         * it indexes `preview.bin`'s frames and the package's extracted PNGs, so it is
+         * the same number only while a face numbers its styles contiguously from zero.
+         * The catalogue's `FaceStyleOption.id` is this same number, which is what lets
+         * the library and the editor name one colourway identically.
+         *
+         * Null for anything that is not a numbered style — [AOD_ENTRY_NAME], and any
+         * entry name this app has not seen; the caller names those in words.
+         */
+        fun styleNumberOf(basename: String): Int? =
+            StyleEntryName.matchEntire(basename)?.groupValues?.get(1)?.toIntOrNull()
+
+        private val StyleEntryName = Regex("""style(\d+)\.bin""")
+    }
+}
 
 /**
  * A widget record that was removed from the container and can be appended back.
- * [recordsByStyle] holds the exact bytes that were cut out of each style entry.
+ * [recordsByVariant] holds the exact bytes that were cut out of each face entry.
+ *
+ * It carries the *facts* the Removed list shows and no assembled copy: this module is
+ * framework-free and cannot reach a resource table, so a label built here is a string no
+ * translator can see and no screen can reword. It used to hold `label = "Widget #12"` for
+ * exactly that reason, spelled differently from the `Widget #%1$d` two lines away in the
+ * editor's own resources.
  */
 data class RemovedWidget(
     val id: Long,
-    val label: String,
+    /**
+     * Where the record sat when it was cut, which is a historical marker rather than a
+     * live address: `removeWidget` renumbers everything after the record it cuts, so this
+     * names the widget the reader removed and must not be used to resolve it. Negative
+     * when it is not known, which is only a session written before this field existed.
+     */
+    val globalIndex: Int,
     val widgetType: Int,
     val sequenceId: Int,
     val x: Int,
     val y: Int,
     val width: Int,
     val height: Int,
-    val recordsByStyle: Map<String, ByteArray>,
+    /**
+     * The live reading it followed, named, or null where the format names none — the same
+     * two fields [WidgetGuide] carries, copied at removal because the guide is gone once
+     * the record is out of the container.
+     */
+    val sourceLabel: String? = null,
+    val followsReading: Boolean = false,
+    val recordsByVariant: Map<String, ByteArray>,
+    val importOriginId: String? = null,
 ) {
+    /** What it draws, named — the same label the widget list shows for a live record. */
+    val category: WidgetCategory get() = WidgetCategory.forWidgetType(widgetType)
+
+    /**
+     * How many **numbered styles** the record was cut from.
+     *
+     * Counted rather than taken from `recordsByVariant.size`, which counts *entries*: an
+     * always-on removal writes one entry that is not a style, and reporting it as "1
+     * styles" is the same mistake `editor_audit_detail_aod` exists to avoid. AOD is never
+     * joined to a style edit, so in practice this is either the style count or zero.
+     */
+    val styleCount: Int
+        get() = recordsByVariant.keys.count { EditorVariant.styleNumberOf(it) != null }
+
+    /** Whether the record was cut from the always-on display. */
+    val touchedAod: Boolean get() = AOD_ENTRY_NAME in recordsByVariant
+
     override fun equals(other: Any?): Boolean = this === other ||
         (other is RemovedWidget && other.id == id)
 
@@ -525,6 +777,9 @@ data class WidgetImageLayer(
     val frame: PreviewFrame,
     /** The source raster has no alpha channel; the watch paints every pixel. */
     val isOpaque: Boolean = false,
+    /** Artwork origin relative to the guide, including rotation/stroke overhang. */
+    val offsetX: Int = 0,
+    val offsetY: Int = 0,
 )
 
 data class EditAuditSummary(
@@ -548,9 +803,39 @@ data class EditorSnapshot(
      */
     val projectName: String = sourceName,
     val styleNames: List<String>,
-    val selectedStyle: String,
+    /**
+     * Every editable face entry, numbered styles first, `aod.bin` last when the
+     * container carries one — the Styles page's row order. See [VariantKind].
+     */
+    val variants: List<EditorVariant> = styleNames.mapIndexed { index, name ->
+        EditorVariant(name, VariantKind.STYLE, index)
+    },
+    /** What the canvas currently shows and edits — a numbered style or AOD. */
+    val selectedVariant: EditorVariant = variants.first(),
+    /**
+     * The style that installs and supplies the sampler id.
+     *
+     * Deliberately separate from [selectedVariant]: looking at the always-on display
+     * must never change which style is queued to install, so this is never `"aod.bin"`
+     * and only ever moves when a numbered style is selected. Install and the Validate
+     * page's "active style" wording must read this, never [selectedVariant].
+     */
+    val activeStyleName: String,
+    /** Face entries whose payload actually differs from the pristine container. */
+    val editedVariantNames: Set<String> = emptySet(),
+    /**
+     * The always-on display's own generated thumbnail, for its Styles-page row when it
+     * is not [selectedVariant] — there is no packaged AOD preview to show instead, the
+     * package never ships one. Null when the container carries no `aod.bin`.
+     */
+    val aodThumbnail: PreviewFrame? = null,
+    /**
+     * Whether [composedPreview] approximates part of [selectedVariant] rather than
+     * rendering it exactly: firmware fonts are approximated and firmware-only resources
+     * or unknown readings may be unavailable. All variants use the same resource renderer.
+     */
+    val selectedVariantApproximate: Boolean = false,
     val preview: PreviewFrame,
-    val referencePreview: PreviewFrame?,
     val composedPreview: PreviewFrame,
     val widgetOverlay: PreviewFrame,
     val widgetImageLayers: List<WidgetImageLayer>,
@@ -590,6 +875,18 @@ data class EditorSnapshot(
      * face means.
      */
     val backgroundAddTargets: List<String> = emptyList(),
+    /**
+     * The same two facts for the always-on display, which the style lists above say
+     * nothing about: 32 of the corpus's 99 carry a panel raster and the rest compose over
+     * black, independently of what their styles do.
+     *
+     * Separate fields rather than folded into [backgroundStyles] because a background
+     * edit on AOD writes that one entry and a background edit on the styles writes the
+     * group — see [canReplaceBackground], which is what the page reads.
+     */
+    val aodHasBackground: Boolean = false,
+    /** Whether AOD has room under the ceiling to be *given* a background. */
+    val aodCanTakeBackground: Boolean = false,
     /** Size of the container as it stands, measured against the watch's ceiling. */
     val containerBytes: Int = 0,
     val imageCount: Int,
@@ -597,6 +894,18 @@ data class EditorSnapshot(
     val validationWarnings: List<String>,
     val isDirty: Boolean,
     val thumbnailRefreshed: Boolean = false,
+    /**
+     * The face-picker thumbnail of [activeStyleName] as it is stored now: one frame of
+     * `preview.bin`, which is what the watch's carousel and the companion app show for
+     * this style. Null where the face has none this app can read.
+     */
+    val pickerThumbnail: PreviewFrame? = null,
+    /**
+     * Exactly what **Update thumbnail** would store instead — box-filtered and quantised
+     * the way the update writes it. Null wherever the update is not on offer, so a screen
+     * showing it is showing a promise the button keeps.
+     */
+    val pickerThumbnailAfter: PreviewFrame? = null,
     val audit: EditAuditSummary?,
 ) {
     /**
@@ -609,11 +918,50 @@ data class EditorSnapshot(
      * in a broken layout.
      */
     val canRefreshThumbnail: Boolean
-        get() = isDirty && !thumbnailRefreshed && validationErrors.isEmpty()
+        get() = isDirty && !thumbnailRefreshed && validationErrors.isEmpty() &&
+            selectedVariant.kind == VariantKind.STYLE
 
-    /** Whether any style of this face can take a replacement background at all. */
+    /**
+     * Whether this container carries an always-on display at all.
+     *
+     * Read from [variants], which comes from the container's own entry table — never
+     * inferred from whether [aodThumbnail] rendered, or a face would lose its AOD row
+     * the moment a preview failed rather than because it has none.
+     */
+    val hasAod: Boolean
+        get() = variants.any { it.kind == VariantKind.AOD }
+
+    /** Whether the always-on display is what the canvas currently shows and edits. */
+    val isAodSelected: Boolean
+        get() = selectedVariant.kind == VariantKind.AOD
+
+    /** Whether [selectedVariant]'s own payload differs from the pristine container. */
+    val isSelectedVariantDirty: Boolean
+        get() = selectedVariant.basename in editedVariantNames
+
+    /**
+     * Whether the last committed edit reached the always-on display and nothing else.
+     *
+     * Decided here rather than by a screen comparing [EditAuditSummary.changedStyles] to
+     * an entry name it would have to know: "n of m styles" is the wrong sentence for an
+     * AOD-only edit, because AOD is neither counted among the styles nor one of them.
+     */
+    val auditTouchedOnlyAod: Boolean
+        get() = variants.firstOrNull { it.kind == VariantKind.AOD }?.let { aod ->
+            audit?.changedStyles == listOf(aod.basename)
+        } ?: false
+
+    /**
+     * Whether what is on the canvas can take a replacement background.
+     *
+     * Two questions in one, because a background edit has two scopes: with a style
+     * selected it writes every style that carries a panel raster, so the answer is about
+     * the group; with AOD selected it writes that one entry, so the answer is about it
+     * alone. Answering the style question while AOD is on the canvas is what would offer
+     * a replacement the repository then has to refuse.
+     */
     val canReplaceBackground: Boolean
-        get() = backgroundStyles.isNotEmpty()
+        get() = if (isAodSelected) aodHasBackground else backgroundStyles.isNotEmpty()
 
     /**
      * Whether this face can be *given* its first background: no style has one, so there
@@ -625,7 +973,11 @@ data class EditorSnapshot(
      * background. See [WatchFaceRepository.addBackground].
      */
     val canAddBackground: Boolean
-        get() = backgroundStyles.isEmpty() && backgroundAddTargets.isNotEmpty()
+        get() = if (isAodSelected) {
+            !aodHasBackground && aodCanTakeBackground
+        } else {
+            backgroundStyles.isEmpty() && backgroundAddTargets.isNotEmpty()
+        }
 
     /**
      * A backgroundless face with no room left for one. Distinct from
@@ -633,26 +985,37 @@ data class EditorSnapshot(
      * container is simply too close to the watch's size ceiling already.
      */
     val backgroundWouldNotFit: Boolean
-        get() = backgroundStyles.isEmpty() && styleNames.isNotEmpty() &&
-            backgroundAddTargets.isEmpty()
+        get() = if (isAodSelected) {
+            !aodHasBackground && !aodCanTakeBackground
+        } else {
+            backgroundStyles.isEmpty() && styleNames.isNotEmpty() &&
+                backgroundAddTargets.isEmpty()
+        }
 
-    /** Styles an added background would have to skip to stay under the ceiling. */
+    /**
+     * Styles an added background would have to skip to stay under the ceiling.
+     *
+     * Empty with AOD selected: it was the only candidate, so the styles beside it were
+     * never skipped for want of room and saying they were would be a different claim.
+     */
     val backgroundAddSkipped: List<String>
-        get() = if (backgroundAddTargets.isEmpty()) {
+        get() = if (isAodSelected || backgroundAddTargets.isEmpty()) {
             emptyList()
         } else {
             styleNames - backgroundAddTargets.toSet()
         }
 
     /**
-     * Whether the style on the canvas is one of [backgroundStyles].
+     * Whether the variant on the canvas carries a panel raster of its own.
      *
-     * False means a replacement still applies — to the siblings that do carry a
-     * background — but nothing about *this* canvas would change, so the page says so
-     * instead of looking broken.
+     * For a style, false means a replacement still applies — to the siblings that do
+     * carry a background — but nothing about *this* canvas would change, so the page says
+     * so instead of looking broken. For AOD there are no siblings: false means the edit
+     * has nothing to replace at all, which is why [canReplaceBackground] asks this
+     * instead of the style group.
      */
-    val selectedStyleHasBackground: Boolean
-        get() = selectedStyle in backgroundStyles
+    val selectedVariantHasBackground: Boolean
+        get() = if (isAodSelected) aodHasBackground else selectedVariant.basename in backgroundStyles
 
     /** Widgets the canvas can draw and the user can drag. */
     val canvasWidgets: List<WidgetGuide>
@@ -695,8 +1058,25 @@ class DirectInstallPayload(
 
     fun copyBytes(): ByteArray = payload.copyOf()
 
+    /**
+     * Whether this payload ends exactly on a transfer window boundary.
+     *
+     * The transfer sends [TRANSFER_WINDOW_BYTES] at a time and the watch acknowledges
+     * each window, with the last one normally short. A payload that divides exactly
+     * leaves no short window at all, and that is the one shape of transfer this project
+     * has never been able to observe end to end. It is not refused — the bytes are as
+     * sound as any other, and refusing an install that would probably work is worse than
+     * the risk — but it is worth having in a bug report if a transfer ever stalls right
+     * at the end.
+     */
+    val endsOnWindowBoundary: Boolean
+        get() = payload.size % TRANSFER_WINDOW_BYTES == 0
+
     companion object {
         const val MAX_DIRECT_INSTALL_BYTES: Int = 16 * 1024 * 1024
+
+        /** Data bytes per acknowledged transfer window. */
+        const val TRANSFER_WINDOW_BYTES: Int = 39_600
 
         fun create(
             faceId: Int,
@@ -714,6 +1094,13 @@ class DirectInstallPayload(
 }
 
 interface WatchFaceRepository {
+    /** Loads an independent catalogue package without creating/opening a donor project. */
+    suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = throw UnsupportedOperationException()
+    suspend fun widgetDonorVariant(handle: String, variant: String): WidgetDonorVariant = throw UnsupportedOperationException()
+    suspend fun previewWidgetImport(handle: String, donorVariant: String, index: Int,
+        projectId: Long, targetVariant: String): WidgetImportPreview = throw UnsupportedOperationException()
+    suspend fun importWidget(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
+    suspend fun releaseWidgetDonor(handle: String) {}
     fun observeProjects(): Flow<List<ProjectSummary>>
 
     fun observeImageFit(): Flow<ImageFit>
@@ -721,6 +1108,17 @@ interface WatchFaceRepository {
     suspend fun setImageFit(value: ImageFit)
 
     suspend fun openPackage(download: FacePackage): EditorSnapshot
+
+    /**
+     * Starts a custom face from [download], which has to be the template's own face
+     * ([CUSTOM_FACE_TEMPLATE_FACE_ID]): stripped to its clock, given previews of what it now
+     * is, and saved as a new project called [name], numbered if that is taken.
+     *
+     * Made here, from the package the store served, rather than shipped: no watch-face
+     * content is bundled with this app.
+     */
+    suspend fun openTemplate(download: FacePackage, name: String): EditorSnapshot =
+        throw UnsupportedOperationException()
 
     suspend fun openProject(projectId: Long): EditorSnapshot
 
@@ -742,6 +1140,40 @@ interface WatchFaceRepository {
     suspend fun duplicateProject(projectId: Long): DuplicatedProject
 
     suspend fun deleteProject(projectId: Long)
+
+    /**
+     * Writes [projectId] to [destinationUri] as a project archive, and says how big it came
+     * out.
+     *
+     * The archive is a package the app can open: the members `Fit3Apk` reads under the names
+     * the package gave them, plus the edit and the project's own details. So an import is an
+     * [openProject] away from being indistinguishable from a download, and this had to grow
+     * no second container writer to manage it.
+     *
+     * [destinationUri] is a document the reader chose in the system picker, and it is the one
+     * place this app writes outside its private storage — see invariant 5 in
+     * `docs/architecture.md`. Behind [DeveloperGate], because it is a debugging tool.
+     */
+    suspend fun exportProject(projectId: Long, destinationUri: String): ExportedProject
+
+    /**
+     * Reads an archive at [sourceUri] into a **new** project, named against the face's
+     * existing ones.
+     *
+     * Always new, never a merge into a project already on the face, for [openPackage]'s
+     * reason: two projects on one face are the normal case now, and quietly re-entering one
+     * is what that change existed to stop. So importing the same archive twice gives two
+     * projects, which is also what makes an archive usable as a checkpoint.
+     */
+    suspend fun importProject(sourceUri: String): ImportedProject
+
+    /**
+     * Whether the export and import controls are on screen. Off on a fresh install, and
+     * turned on only by the phrase [DeveloperGate] holds.
+     */
+    fun observeDeveloperTools(): Flow<Boolean>
+
+    suspend fun setDeveloperTools(enabled: Boolean)
 
     suspend fun currentSnapshot(styleName: String? = null): EditorSnapshot
 
@@ -798,9 +1230,22 @@ interface WatchFaceRepository {
 
     suspend fun resizeBackground(width: Int, height: Int): EditorSnapshot
 
-    suspend fun resizeSprite(
+    /**
+     * Resizes one widget to [width] × [height] in the extent terms [WidgetGuide] reports,
+     * whatever its type stores that extent in.
+     *
+     * The selection is the same tuple every other widget edit takes, and for the same
+     * reason: a widget's global index is not an identity across a structural edit, and a
+     * **Static's data source is `0` in 678 of the catalogue's 681 records**, so neither
+     * alone can name the record to rewrite.
+     */
+    suspend fun resizeWidget(
         styleName: String,
+        globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
+        x: Int,
+        y: Int,
         width: Int,
         height: Int,
         applyToAllStyles: Boolean,

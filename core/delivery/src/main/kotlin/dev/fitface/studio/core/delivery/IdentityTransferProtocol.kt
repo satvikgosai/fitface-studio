@@ -19,7 +19,9 @@ internal object WatchfaceInstallProtocol {
 
 internal object IdentityTransferProtocol {
     const val CHUNK_BYTES: Int = 960
-    const val WINDOW_BYTES: Int = 39_600
+
+    /** One place, so the protocol and the payload's own boundary check cannot drift. */
+    const val WINDOW_BYTES: Int = DirectInstallPayload.TRANSFER_WINDOW_BYTES
     const val MAX_WINDOW_RETRIES: Int = 3
 
     fun descriptor(fileName: String, fileSize: Int): ByteArray =

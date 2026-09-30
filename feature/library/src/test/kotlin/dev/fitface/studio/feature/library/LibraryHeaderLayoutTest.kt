@@ -47,6 +47,7 @@ class LibraryHeaderLayoutTest {
 
     private var page by mutableStateOf(LibraryPage.WatchFaces)
     private var crashed by mutableStateOf(false)
+    private var developerTools by mutableStateOf(false)
 
     /** Captured from the composition so the test cannot drift from the string resources. */
     private var projectsTab: String = ""
@@ -59,11 +60,16 @@ class LibraryHeaderLayoutTest {
             FitFaceTheme(darkTheme = true) {
                 LibraryHeader(
                     page = page,
-                    state = LibraryUiState(isLoadingCatalog = false, previousCrash = crashed),
+                    state = LibraryUiState(
+                        isLoadingCatalog = false,
+                        previousCrash = crashed,
+                        developerTools = developerTools,
+                    ),
                     projectCount = PROJECT_COUNT,
                     loading = false,
                     onPage = { page = it },
                     onRefresh = {},
+                    onImport = {},
                     onReportProblem = {},
                     onAbout = {},
                     onCheckForUpdate = {},
@@ -138,6 +144,54 @@ class LibraryHeaderLayoutTest {
             "the crash case moved the menu action",
             plainPosition,
             crashedNode.positionInRoot,
+        )
+    }
+
+    /**
+     * The hidden IMPORT button takes REFRESH's slot on the page REFRESH is not on, so it
+     * costs the header nothing — and the touch-target floor above already made the two pages
+     * the same height whether or not either was there.
+     *
+     * Worth pinning rather than reasoning about, because this is exactly the shape of the bug
+     * the rest of this class exists for: a control that appears on one page and not the other
+     * is what put the tab row 26px higher on Projects and moved the tab out from under the
+     * finger that tapped it. A gate that only some installs have turned on would make that
+     * two different layouts of the same screen, and only one of them ever looked at.
+     */
+    @Test
+    fun theHiddenImportActionMovesNothing() {
+        setHeader()
+        onPage(LibraryPage.Projects)
+        val locked = topOfTab()
+        val lockedMenu = menuNode(menuLabel)
+
+        developerTools = true
+        compose.waitForIdle()
+
+        assertEquals("unlocking the tools moved the tab row", locked, topOfTab())
+        assertEquals(
+            "unlocking the tools moved the menu action",
+            lockedMenu.positionInRoot,
+            menuNode(menuLabel).positionInRoot,
+        )
+        assertEquals(
+            "unlocking the tools resized the menu action",
+            lockedMenu.size,
+            menuNode(menuLabel).size,
+        )
+    }
+
+    /** And it still leaves the tabs where the catalogue page has them. */
+    @Test
+    fun theTabsStayPutWithTheToolsUnlockedToo() {
+        developerTools = true
+        setHeader()
+        val onWatchFaces = topOfTab()
+        onPage(LibraryPage.Projects)
+        assertEquals(
+            "with the tools unlocked, switching tabs moves the tabs",
+            onWatchFaces,
+            topOfTab(),
         )
     }
 

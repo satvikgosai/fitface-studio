@@ -1,7 +1,7 @@
 package dev.fitface.studio.core.ui
 
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -53,11 +53,14 @@ class FitTopBarLayoutTest {
     /** Captured from the composition so the test cannot drift from the string resource. */
     private var menuLabel: String = ""
 
-    private fun setBar(actions: @Composable RowScope.() -> Unit) {
+    private fun setBar(titleDescription: String? = null, actions: @Composable RowScope.() -> Unit) {
         compose.setContent {
             menuLabel = stringResource(R.string.ui_app_menu_a11y)
             FitFaceTheme(darkTheme = true) {
-                FitTopBar(title = TITLE, subtitle = SUBTITLE, onBack = {}, actions = actions)
+                FitTopBar(
+                    title = TITLE, subtitle = SUBTITLE, onBack = {},
+                    titleContentDescription = titleDescription, actions = actions,
+                )
             }
         }
     }
@@ -109,21 +112,22 @@ class FitTopBarLayoutTest {
     }
 
     /**
-     * The Canvas page is the worst case: the app menu, the EDITED badge and the `⋯`
-     * overflow all at once. This combination is what left roughly 100dp for the face name, and
-     * it is the tightest bar in the app — the floor here is correspondingly lower, and it is
-     * the configuration to check on a device before believing this fix.
+     * Canvas keeps its EDITED badge visible beside the two icon actions. Measure to the
+     * badge itself so its padding and label cannot silently consume the title's budget.
      */
     @Test
     fun theWorstCaseCanvasBarStillLeavesRoomForTheTitle() {
-        setBar {
-            Text("EDITED", style = FitFaceType.micro)
+        setBar(titleDescription = "$TITLE, edited") {
+            FitBadge(EDITED_LABEL, MaterialTheme.fitColors.warning)
             FitIconButton(glyph = "⋯", contentDescription = OVERFLOW_LABEL, onClick = {})
             appMenu()
         }
-        val column = titleColumnWidth(listOf(menuLabel, OVERFLOW_LABEL))
+        compose.onNodeWithContentDescription("$TITLE, edited").assertExists()
+        val titleLeft = compose.onNodeWithText(TITLE).fetchSemanticsNode().positionInRoot.x
+        val badgeLeft = compose.onNodeWithText(EDITED_LABEL).fetchSemanticsNode().positionInRoot.x
+        val column = (badgeLeft - titleLeft).toInt().px()
         assertTrue(
-            "with a badge and an overflow present the title column got only $column",
+            "with the EDITED badge and both Canvas actions present the title column got only $column",
             column >= MINIMUM_TITLE_WIDTH_CROWDED,
         )
     }
@@ -186,8 +190,8 @@ class FitTopBarLayoutTest {
         val ACTION_BUDGET = 44.dp
         val MINIMUM_TITLE_WIDTH = 200.dp
 
-        /** Canvas carries two actions and a badge; 130dp still clears its 19-char subtitle. */
-        val MINIMUM_TITLE_WIDTH_CROWDED = 130.dp
+        /** Canvas keeps the saved-edit badge alongside two icon actions. */
+        val MINIMUM_TITLE_WIDTH_CROWDED = 110.dp
 
         const val TITLE = "Black or white"
 
@@ -195,6 +199,7 @@ class FitTopBarLayoutTest {
         const val SUBTITLE = "reparse of the edited container"
 
         const val OVERFLOW_LABEL = "Project"
+        const val EDITED_LABEL = "EDITED"
         const val BACK_LABEL = "Back"
     }
 }

@@ -1,30 +1,22 @@
-# Internal documentation
+# Documentation
 
-How FitFace Studio works underneath. The [top-level README](../README.md) covers
-what the app does and how to use it; everything here is implementation detail.
+The [project README](../README.md) covers using the app. Start here for technical
+references; [Contributing](../CONTRIBUTING.md) and [AGENTS](../AGENTS.md) cover
+working conventions.
 
-| Document | Covers |
+| Reference | Covers |
 | --- | --- |
-| [architecture.md](architecture.md) | Modules, data flow, state ownership, caches, and the six invariants |
-| [bin-format.md](bin-format.md) | The container format byte by byte, derived from the corpus; §14 lists related public work |
-| [editing.md](editing.md) | Which edits are safe, what the catalogue sweep proved, and why |
-| [direct-install.md](direct-install.md) | Accessory discovery, the OTA/RFCOMM transfer, security posture |
-| [design-system.md](design-system.md) | The token layer, and the three places the code knowingly departs from the design |
-| [design-system.html](design-system.html) | The same system, drawn — palette in both themes, type scale, every component state. Open it in a browser; it needs no server and no network |
-| [development.md](development.md) | Toolchain, build, the uncommitted corpus, decoding by hand, manual verification |
+| [Development](development.md) | Toolchain, builds, tests, corpus setup and release signing |
+| [Architecture](architecture.md) | Modules, state, projects, archives and updates |
+| [Container format](bin-format.md) | Byte layouts, editing contracts and corpus/hardware evidence |
+| [Direct install](direct-install.md) | Bluetooth protocol, channel handover and recovery |
+| [Design system](design-system.html) | Visual components and UI implementation rules; open locally in a browser |
+| [Tools](../tools/README.md) | Corpus download, independent analysis and HTML report commands |
+| [Accessory SDK](../libs/README.md) | Required JARs, fetching, hashes and rights |
 
-Changing the code: [`CONTRIBUTING.md`](../CONTRIBUTING.md) is the procedure and
-[`AGENTS.md`](../AGENTS.md) is the danger map — the traps that already bit this
-codebase.
+Use the [evidence vocabulary](bin-format.md#evidence) when recording findings.
+Update each topic's reference rather than duplicating it in another guide; local
+plans, audits and captures belong in ignored `analysis/`.
 
-## Honesty about evidence
-
-These documents distinguish three levels, and the distinction is load-bearing:
-
-- **proven** — an arithmetic invariant tested against every matching record in the
-  corpus, or a value confirmed against an embedded preview raster;
-- **supported** — consistent across every available record, with too few distinct
-  examples to exclude coincidence;
-- **unknown** — preserved verbatim, with no reading offered.
-
-Anything the code depends on is in the first category or is fail-closed.
+[Changelog](../CHANGELOG.md) · [Security](../SECURITY.md) ·
+[Notice](../NOTICE.md) · [License](../LICENSE)
