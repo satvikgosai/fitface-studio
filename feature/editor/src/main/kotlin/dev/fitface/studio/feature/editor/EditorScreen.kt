@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxWithConstraintsScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -269,7 +270,8 @@ fun EditorRoute(
         onVariant = viewModel::selectVariant,
         onWidget = viewModel::selectWidget,
         selection = SelectionActions(
-            onToggle = viewModel::toggleInSelection,
+            onBegin = viewModel::beginSelection,
+            onDone = viewModel::finishSelection,
             onClear = viewModel::clearSelection,
             onNudge = viewModel::nudgeSelection,
             onDuplicate = viewModel::duplicateSelection,
@@ -1051,7 +1053,8 @@ private fun EditorPageContent(
                 onWidget(widget.globalIndex)
                 if (!building) onNavigate(EditorPage.Canvas)
             },
-            onHold = { selection.onToggle(it.globalIndex) },
+            onHold = { selection.onBegin(it.globalIndex) },
+            onDoneSet = { selection.onDone(); onNavigate(EditorPage.Canvas) },
             onClearSet = selection.onClear,
             onEditSet = { onNavigate(EditorPage.Canvas) },
             onRestore = onRestoreWidget,
@@ -1123,7 +1126,7 @@ private fun CanvasWorkspace(
 ) {
     val picks = state.multiSelection.mapNotNull { index ->
         snapshot.widgets.firstOrNull { it.globalIndex == index }
-    }.takeIf { it.size >= 2 }.orEmpty()
+    }
     // Stacked, the face is only as tall as the hint and the selection panel leave it, and
     // a landscape phone leaves all three about 340dp: the face came out a third of its
     // portrait size, and tapping a widget — which is what adds the panel — shrank it to a
@@ -1135,7 +1138,7 @@ private fun CanvasWorkspace(
         val face: @Composable (Modifier) -> Unit = { faceModifier ->
             CanvasFace(
                 state, snapshot, selected, onWidget, onMoveWidget, onTransformImage,
-                selection.onToggle, faceModifier,
+                selection.onBegin, faceModifier,
             )
         }
         val actions: @Composable (WidgetGuide) -> Unit = { widget ->
@@ -1150,6 +1153,7 @@ private fun CanvasWorkspace(
                 onRemove = onRemoveWidget,
                 onApplyAll = onApplyAll,
                 onInspect = onInspect,
+                onSelectMultiple = { selection.onBegin(widget.globalIndex) },
             )
         }
         val tray: @Composable () -> Unit = {
@@ -1361,6 +1365,7 @@ private fun SelectionActionBar(
     onRemove: () -> Unit,
     onApplyAll: (Boolean) -> Unit,
     onInspect: () -> Unit,
+    onSelectMultiple: () -> Unit,
 ) {
     var showColors by remember(widget.globalIndex) { mutableStateOf(false) }
     var confirmRemoval by rememberSaveable(widget.globalIndex) { mutableStateOf(false) }
@@ -1408,6 +1413,12 @@ private fun SelectionActionBar(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            FitIconButton(
+                glyph = "▦",
+                contentDescription = stringResource(R.string.editor_select_multiple),
+                onClick = onSelectMultiple,
+                enabled = enabled,
+            )
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
@@ -1691,7 +1702,8 @@ private val EditorUiState.editsReachOtherStyles: Boolean
  * one argument rather than five more on every signature between the route and the tray.
  */
 internal class SelectionActions(
-    val onToggle: (Int) -> Unit,
+    val onBegin: (Int) -> Unit,
+    val onDone: () -> Unit,
     val onClear: () -> Unit,
     val onNudge: (Int, Int) -> Unit,
     val onDuplicate: () -> Unit,
@@ -1755,6 +1767,16 @@ private fun SelectionSetBar(
                 )
             }
             // A plain text action, so the header keeps the single tray's height.
+            if (picks.size == 1) {
+                Text(
+                    stringResource(R.string.editor_selection_done),
+                    modifier = Modifier.clip(MaterialTheme.shapes.small)
+                        .clickable(enabled = enabled, role = Role.Button, onClick = selection.onDone)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
             Text(
                 stringResource(R.string.editor_selection_clear),
                 modifier = Modifier.clip(MaterialTheme.shapes.small)
@@ -1800,14 +1822,16 @@ private fun SelectionSetBar(
             )
             FitIconButton(
                 glyph = "⧉",
-                contentDescription = stringResource(R.string.editor_selection_duplicate_a11y, picks.size),
+                contentDescription = if (picks.size == 1) stringResource(R.string.editor_duplicate)
+                    else stringResource(R.string.editor_selection_duplicate_a11y, picks.size),
                 onClick = selection.onDuplicate,
                 modifier = Modifier.weight(1f),
                 enabled = enabled,
             )
             FitIconButton(
                 glyph = "✕",
-                contentDescription = stringResource(R.string.editor_selection_remove_a11y, picks.size),
+                contentDescription = if (picks.size == 1) stringResource(R.string.editor_remove_widget)
+                    else stringResource(R.string.editor_selection_remove_a11y, picks.size),
                 onClick = { confirmRemoval = true },
                 modifier = Modifier.weight(1f),
                 enabled = enabled,
@@ -1876,7 +1900,8 @@ private fun RemoveSetDialog(
     val stock = picks.size - imported
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.editor_remove_set_title, picks.size)) },
+        title = { Text(if (picks.size == 1) stringResource(R.string.editor_remove_title, picks.single().globalIndex)
+            else stringResource(R.string.editor_remove_set_title, picks.size)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (stock > 0) {
@@ -2130,6 +2155,7 @@ private fun WidgetsWorkspace(
     onSelect: (WidgetGuide) -> Unit,
     /** Holding a row adds it to the set, as holding a widget on the canvas does. */
     onHold: (WidgetGuide) -> Unit,
+    onDoneSet: () -> Unit,
     onClearSet: () -> Unit,
     onEditSet: () -> Unit,
     onRestore: (Long) -> Unit,
@@ -2235,8 +2261,8 @@ private fun WidgetsWorkspace(
         // Pinned under the list, so the set and the way to act on it stay in view however
         // far the list scrolls. The tray that moves, duplicates and removes a set is on the
         // face; this says what is chosen and goes there.
-        if (picks.size >= 2) {
-            WidgetSetFooter(picks, enabled, onClearSet, onEditSet)
+        if (picks.isNotEmpty()) {
+            WidgetSetFooter(picks, enabled, onClearSet, onEditSet, onDoneSet)
         }
     }
 }
@@ -2247,6 +2273,7 @@ private fun WidgetSetFooter(
     enabled: Boolean,
     onClear: () -> Unit,
     onEdit: () -> Unit,
+    onDone: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
@@ -2266,6 +2293,16 @@ private fun WidgetSetFooter(
                     style = FitFaceType.numeric,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (picks.size == 1) {
+                Text(
+                    stringResource(R.string.editor_selection_done),
+                    modifier = Modifier.clip(MaterialTheme.shapes.small)
+                        .clickable(enabled = enabled, role = Role.Button, onClick = onDone)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             Text(
@@ -2364,6 +2401,7 @@ private fun WidgetRow(
             .combinedClickable(
                 enabled = enabled,
                 onClick = onClick,
+                onLongClickLabel = stringResource(R.string.editor_select_multiple),
                 onLongClick = onHold?.let { hold ->
                     {
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -2388,14 +2426,14 @@ private fun WidgetRow(
             pickOrder?.let { PickBadge(it + 1) }
         }
         Column(Modifier.weight(1f)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(
                     stringResource(R.string.editor_selection_widget, widget.globalIndex),
                     style = MaterialTheme.typography.titleSmall,
                 )
                 MicroLabel(widget.category.label, color = MaterialTheme.colorScheme.tertiary)
             }
-            Row(
+            FlowRow(
                 modifier = Modifier.padding(top = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
@@ -2433,17 +2471,25 @@ private fun WidgetRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.fitText.secondary,
             )
+            Text(
+                stringResource(R.string.editor_row_position, widget.drawLeft, widget.drawTop),
+                style = FitFaceType.numeric,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Text(
-            stringResource(
-                R.string.editor_row_position,
-                widget.drawLeft,
-                widget.drawTop,
-            ),
-            style = FitFaceType.numeric,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (onHold != null) {
+            FitIconButton(
+                glyph = if (pickOrder == null) "+" else "✓",
+                contentDescription = stringResource(
+                    if (pickOrder == null) R.string.editor_add_to_selection else R.string.editor_remove_from_selection,
+                    widget.globalIndex,
+                ),
+                onClick = if (pickOrder == null) onHold else onClick,
+                enabled = enabled,
+            )
+        } else {
+            Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -4079,7 +4125,7 @@ private fun DirectWatchCanvas(
     /** Where each member of a set being nudged is headed; see `EditorUiState.pendingSetMove`. */
     pendingSetMove: List<WidgetMovePreview> = emptyList(),
     /**
-     * Holding a widget adds it to the set or takes it out. Null where this canvas does not
+     * Holding a widget starts a selection set or adds it. Null where this canvas does not
      * build sets — only the Canvas page does, because only its tray acts on one.
      */
     onHoldWidget: ((Int) -> Unit)? = null,

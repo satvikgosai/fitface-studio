@@ -97,12 +97,9 @@ data class EditorUiState(
     val placement: ImagePlacement = ImagePlacement(),
     val selectedWidgetIndex: Int? = null,
     /**
-     * Widgets picked together, in pick order: two or more, or empty.
-     *
-     * Never exactly one. A set that falls to one widget becomes the ordinary selection,
-     * because the single tray does everything a set can and more — the same rule the
-     * import picker follows, where one pick is the single flow unchanged. So "is a set
-     * selected" is `isNotEmpty()`, and [selectedWidgetIndex] is null whenever it is.
+     * Selection mode, in pick order: one or more items, or empty when inactive.
+     * A singleton stays in this mode until Done/Clear, so the next tap can add an item.
+     * [selectedWidgetIndex] is null whenever selection mode is active.
      */
     val multiSelection: List<Int> = emptyList(),
     /** A set edit stopped partway; see [SelectionStop]. */
@@ -344,24 +341,34 @@ class EditorViewModel @Inject constructor(
             applyWidgetEditsToAllStyles = !imported && mutableState.value.applyWidgetEditsToAllStyles)
     }
 
-    /**
-     * Adds a widget to the set, or takes it out — what holding a widget on the canvas does.
-     *
-     * Starting from a single selection carries it in, so holding a second widget makes a
-     * set of two rather than throwing the first one away. A set that falls to one becomes
-     * that one's ordinary selection; see [EditorUiState.multiSelection].
-     */
+    /** Hold or the labelled selection action enters the mode without toggling the item off. */
+    fun beginSelection(globalIndex: Int) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        if (current.isWorking || snapshot.widgets.none { it.globalIndex == globalIndex }) return
+        val base = current.multiSelection.ifEmpty { listOfNotNull(current.selectedWidgetIndex) }
+        mutableState.value = current.copy(
+            multiSelection = (base + globalIndex).distinct(), selectedWidgetIndex = null,
+        )
+    }
+
+    /** A tap toggles membership; a remaining singleton still accepts the next tap. */
     fun toggleInSelection(globalIndex: Int) {
         val current = mutableState.value
         val snapshot = current.snapshot ?: return
         if (current.isWorking || snapshot.widgets.none { it.globalIndex == globalIndex }) return
         val base = current.multiSelection.ifEmpty { listOfNotNull(current.selectedWidgetIndex) }
         val next = if (globalIndex in base) base - globalIndex else base + globalIndex
-        mutableState.value = when (next.size) {
-            0 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = null)
-            1 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = next.single())
-            else -> current.copy(multiSelection = next, selectedWidgetIndex = null)
-        }
+        mutableState.value = current.copy(multiSelection = next, selectedWidgetIndex = null)
+    }
+
+    fun finishSelection() {
+        val current = mutableState.value
+        if (current.isWorking) return
+        val index = current.multiSelection.singleOrNull()
+        mutableState.value = current.copy(multiSelection = emptyList(), selectedWidgetIndex = index,
+            applyWidgetEditsToAllStyles = current.applyWidgetEditsToAllStyles &&
+                current.snapshot?.widgets?.singleOrNull { it.globalIndex == index }?.importedFromFaceId == null)
     }
 
     fun clearSelection() {
@@ -441,7 +448,7 @@ class EditorViewModel @Inject constructor(
     private fun runOnSelection(action: SelectionAction) {
         val start = mutableState.value
         val snapshot = start.snapshot ?: return
-        if (start.isWorking || start.multiSelection.size < 2) return
+        if (start.isWorking || start.multiSelection.isEmpty()) return
         val order = when (action) {
             SelectionAction.REMOVE -> start.multiSelection.sortedDescending()
             SelectionAction.DUPLICATE -> start.multiSelection
@@ -510,8 +517,8 @@ class EditorViewModel @Inject constructor(
                 isWorking = false,
                 pendingWidgetMove = null,
                 pendingSetMove = emptyList(),
-                multiSelection = selection.takeIf { it.size >= 2 }.orEmpty(),
-                selectedWidgetIndex = selection.singleOrNull(),
+                multiSelection = selection,
+                selectedWidgetIndex = null,
                 widgetRemovals = mutableState.value.widgetRemovals +
                     if (action == SelectionAction.REMOVE) done else 0,
                 selectionStopped = failure?.let { error ->
@@ -1093,7 +1100,7 @@ class EditorViewModel @Inject constructor(
                     mutableState.value = onSuccess(
                         mutableState.value.copy(
                             snapshot = snapshot,
-                            multiSelection = stillSelected.takeIf { it.size >= 2 }.orEmpty(),
+                            multiSelection = stillSelected,
                             selectedWidgetIndex = mutableState.value.selectedWidgetIndex
                                 .takeIf { selectedStillExists },
                             isWorking = false,

@@ -197,7 +197,11 @@
     <string name="editor_widgets_hint">Tap to edit on the canvas; hold to select several.</string>
     <string name="editor_widgets_hint_set">Tap to add or remove widgets from the selection.</string>
     <string name="editor_widgets_set_edit">Edit on canvas</string>
-    <string name="editor_selection_set_title">%1$d widgets selected</string>
+    <string name="editor_selection_set_title">%1$d selected</string>
+    <string name="editor_select_multiple">Select multiple widgets</string>
+    <string name="editor_selection_done">Done</string>
+    <string name="editor_add_to_selection">Add widget #%1$d to selection</string>
+    <string name="editor_remove_from_selection">Remove widget #%1$d from selection</string>
     <string name="editor_selection_clear">@string/ui_clear_selection</string>
     <string name="editor_selection_duplicate_a11y">Duplicate all %1$d</string>
     <string name="editor_selection_remove_a11y">Remove all %1$d</string>

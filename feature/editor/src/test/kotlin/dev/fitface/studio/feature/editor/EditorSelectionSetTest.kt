@@ -5,6 +5,8 @@ import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.EditorVariant
+import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.PreviewFrame
@@ -68,22 +70,65 @@ class EditorSelectionSetTest {
 
     // -- choosing a set -------------------------------------------------------
 
-    /** Holding a second widget keeps the first; a set that falls to one is a selection again. */
-    @Test fun holdingASecondWidgetMakesASetAndFallingToOneIsASelectionAgain() {
+    @Test fun firstHoldStartsSelectionAndAnotherTapAddsAWidget() {
+        val (vm, _) = opened()
+        vm.beginSelection(1)
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        assertNull(vm.state.value.selectedWidgetIndex)
+        vm.selectWidget(2)
+        assertEquals(listOf(1, 2), vm.state.value.multiSelection)
+        vm.selectWidget(1)
+        assertEquals(listOf(2), vm.state.value.multiSelection)
+        vm.selectWidget(3)
+        assertEquals(listOf(2, 3), vm.state.value.multiSelection)
+    }
+
+    @Test fun holdingTheCurrentWidgetStartsModeAndRepeatedHoldsKeepItSelected() {
         val (vm, _) = opened()
         vm.selectWidget(1)
-        vm.toggleInSelection(2)
+        vm.beginSelection(1)
+        vm.beginSelection(1)
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        assertNull(vm.state.value.selectedWidgetIndex)
+        vm.beginSelection(2)
         assertEquals(listOf(1, 2), vm.state.value.multiSelection)
-        assertNull(vm.state.value.selectedWidgetIndex)
         vm.toggleInSelection(1)
-        assertTrue(vm.state.value.multiSelection.isEmpty())
-        assertEquals(2, vm.state.value.selectedWidgetIndex)
+        assertEquals(listOf(2), vm.state.value.multiSelection)
         vm.toggleInSelection(2)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
         assertNull(vm.state.value.selectedWidgetIndex)
-        // Holding with nothing selected is an ordinary selection of that one.
-        vm.toggleInSelection(3)
+    }
+
+    @Test fun doneReturnsASingletonToOrdinaryEditingAndClearDropsIt() {
+        val (vm, _) = opened()
+        vm.beginSelection(3)
+        vm.finishSelection()
         assertEquals(3, vm.state.value.selectedWidgetIndex)
         assertTrue(vm.state.value.multiSelection.isEmpty())
+        vm.beginSelection(3)
+        vm.clearSelection()
+        assertNull(vm.state.value.selectedWidgetIndex)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        vm.beginSelection(999)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+    }
+
+    @Test fun singletonSetCanNudgeDuplicateAndRemove() {
+        val (vm, repository) = opened()
+        vm.beginSelection(1)
+        vm.nudgeSelection(1, 0)
+        settle()
+        assertEquals(listOf(21 to 20), repository.moves[1])
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        vm.duplicateSelection()
+        settle()
+        assertEquals(listOf(1), repository.duplicated)
+        assertEquals(listOf(4), vm.state.value.multiSelection)
+        vm.removeSelection()
+        settle()
+        assertEquals(listOf(4), repository.removed)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        assertNull(vm.state.value.selectedWidgetIndex)
     }
 
     /** With a set picked, a tap toggles and bare canvas lets go — the import picker's gestures. */
@@ -98,6 +143,37 @@ class EditorSelectionSetTest {
         vm.selectWidget(null)
         assertTrue(vm.state.value.multiSelection.isEmpty())
         assertNull(vm.state.value.selectedWidgetIndex)
+    }
+
+    @Test fun singletonSelectionClearsOnVariantChangeAndReset() {
+        val (vm, _) = opened()
+        vm.beginSelection(1)
+        vm.selectVariant(EditorVariant("aod.bin", VariantKind.AOD))
+        settle()
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        assertNull(vm.state.value.selectedWidgetIndex)
+        vm.beginSelection(2)
+        vm.reset()
+        settle()
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        assertNull(vm.state.value.selectedWidgetIndex)
+    }
+
+    @Test fun selectionDoesNotChangeWhileASingletonDuplicateIsSaving() {
+        val (vm, repository) = opened()
+        repository.parkedDuplicate = CompletableDeferred()
+        vm.beginSelection(1)
+        vm.duplicateSelection()
+        settle()
+        assertTrue(vm.state.value.isWorking)
+        vm.beginSelection(2)
+        vm.toggleInSelection(2)
+        vm.finishSelection()
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        repository.parkedDuplicate!!.complete(Unit)
+        settle()
+        assertEquals(listOf(4), vm.state.value.multiSelection)
+        assertFalse(vm.state.value.isWorking)
     }
 
     // -- removing -----------------------------------------------------------------
@@ -317,10 +393,15 @@ class EditorSelectionSetTest {
         var failOnCall: Int? = null
         /** When set, every move commit waits for it — the window a held arrow repeats in. */
         var parked: CompletableDeferred<Unit>? = null
+        var parkedDuplicate: CompletableDeferred<Unit>? = null
         private var calls = 0
 
         override fun observeImageFit() = flowOf(ImageFit.COVER)
         override suspend fun openProject(projectId: Long): EditorSnapshot = current
+        override suspend fun currentSnapshot(styleName: String?): EditorSnapshot = current.copy(
+            selectedVariant = EditorVariant(styleName ?: "style0.bin", VariantKind.AOD),
+        ).also { current = it }
+        override suspend fun resetEdits(): EditorSnapshot = current
 
         private fun identify(globalIndex: Int, sequenceId: Int): WidgetGuide {
             if (++calls == failOnCall) throw WatchFaceException("refused")
@@ -346,6 +427,7 @@ class EditorSelectionSetTest {
             x: Int, y: Int, applyToAllStyles: Boolean,
         ): EditorSnapshot {
             val source = identify(globalIndex, sequenceId)
+            parkedDuplicate?.await()
             duplicated += globalIndex
             val next = current.widgets.maxOf { it.globalIndex } + 1
             current = current.copy(widgets = current.widgets + source.copy(globalIndex = next, ordinal = next))
