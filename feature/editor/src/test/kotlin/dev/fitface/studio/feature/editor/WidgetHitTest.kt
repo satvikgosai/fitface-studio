@@ -36,7 +36,7 @@ class WidgetHitTest {
         val line = guide(4, 10, 10, 300, 300).copy(type = 7, rotationTenths = 450,
             rotationKind = WidgetRotationKind.LINE)
         assertEquals(RotationBounds(0, 0, 300, 300), line.visualBounds)
-        // 300×300 is under the RGB888 budget, but a line has no canvas at all; a far larger
+        // 300×300 is under the text canvas budget, but a line has no canvas at all; a far larger
         // line still steps, where text of that size would be refused.
         val long = line.copy(width = 1500, height = 1500)
         assertEquals(600, nextWidgetRotation(long, clockwise = true))

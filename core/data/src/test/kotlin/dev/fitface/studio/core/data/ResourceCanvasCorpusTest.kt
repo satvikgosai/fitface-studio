@@ -33,6 +33,21 @@ class ResourceCanvasCorpusTest {
             largerBox.argb.count { it != 0 })
     }
 
+    /**
+     * Turned text is the straight label turned, with no box behind it: the firmware's rotated
+     * Comp canvas is RGB565 + alpha cleared to opacity 0, so only the glyphs cover the face.
+     */
+    @Test fun turnedTextKeepsTransparentSurroundings() {
+        val text = WidgetText("28", FontBinding(ByteArray(72), "date", 20), 0xFFFF0000.toInt())
+        val straight = WidgetTextRasterizer.render(text, 60, 40)
+        val label = WidgetTextRasterizer.render(text.copy(rotationDegrees = 15.0), 60, 40)
+        assertArrayEquals(straight.argb, label.argb)
+        val turned = WidgetPreviewComposer.rotate(label, 30, 20, 15.0).frame
+        val covered = straight.argb.count { it ushr 24 != 0 }
+        assertTrue(turned.argb.count { it ushr 24 != 0 } <= covered * 5 / 4 + 8)
+        assertTrue(turned.argb.none { it == 0xFF000000.toInt() })
+    }
+
     @Test fun everyVariantUsesOnlyCurrentResourcesAndKeepsEveryDrawableRecord() {
         val root = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot"))).resolve("SM_R390")
         assumeTrue(Files.isDirectory(root))

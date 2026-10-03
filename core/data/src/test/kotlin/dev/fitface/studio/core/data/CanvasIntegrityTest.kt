@@ -96,12 +96,18 @@ class CanvasIntegrityTest {
         }
     }
 
-    @Test fun rotatingCompositeSharesItsVisualBoundsAndRetainsTheOpaqueCanvas() {
+    /**
+     * The firmware draws turned text onto an RGB565 + alpha canvas cleared to opacity 0, so
+     * a turn moves the glyphs and covers no more of the face than the straight text did. A
+     * filled box would cover the whole rotated rectangle.
+     */
+    @Test fun rotatingCompositeSharesItsVisualBoundsAndKeepsItsBackgroundClear() {
         val path = containers.first { it.fileName.toString().contains("00105") }
         val original = Fit3Container.parse(Files.readAllBytes(path))
         val entry = original.entryByBasename("style0.bin")
         val widget = FaceRecordParser.widgetGuides(entry).first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
         val baseline = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
+        var straightCoverage = 0
         for (angle in listOf(0, 900, 1800, 2700, 3181)) {
             val edited = FaceEditor.rotateWidget(original, listOf(entry.basename), widget.globalIndex,
                 widget.sequenceId, widget.x, widget.y, angle).container
@@ -122,9 +128,12 @@ class CanvasIntegrityTest {
             org.junit.Assert.assertEquals(bounds.top, layer.offsetY)
             org.junit.Assert.assertEquals(bounds.width, layer.frame.width)
             org.junit.Assert.assertEquals(bounds.height, layer.frame.height)
-            if (angle == 0) assertTrue(layer.frame.argb.any { it ushr 24 == 0 })
-            else assertTrue(layer.frame.argb.any { it == 0xFF000000.toInt() })
-            assertTrue(layer.frame.argb.any { it ushr 24 != 0 })
+            val coverage = layer.frame.argb.count { it ushr 24 != 0 }
+            if (angle == 0) straightCoverage = coverage
+            assertTrue(layer.frame.argb.any { it ushr 24 == 0 })
+            assertTrue(coverage > 0)
+            assertTrue("$angle: $coverage px covered, straight text covers $straightCoverage",
+                coverage <= straightCoverage * 5 / 4 + 32)
             org.junit.Assert.assertEquals(widget.x, guide.x)
             org.junit.Assert.assertEquals(widget.y, guide.y)
         }

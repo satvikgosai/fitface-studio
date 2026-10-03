@@ -2,7 +2,7 @@ package dev.fitface.studio.core.model
 
 import kotlin.math.*
 
-/** Editor allocation policy, not a measured total watch RAM budget (RGB888 = 3 bytes/pixel). */
+/** Editor allocation policy, not a measured total watch RAM budget (RGB565 + alpha = 3 bytes/pixel). */
 const val MAX_ROTATED_TEXT_PIXELS = 256 * 402
 fun canRotateText(width: Int, height: Int): Boolean =
     width in 1..1024 && height in 1..1024 && width.toLong() * height <= MAX_ROTATED_TEXT_PIXELS
@@ -17,7 +17,7 @@ fun normalizedRotation(tenths: Int): Int = ((tenths % 3600) + 3600) % 3600
  * other type has no angle at all: a tilted digit on a vendor face is tilted artwork.
  */
 enum class WidgetRotationKind {
-    /** Composite `+0x5C` in tenths; the watch rotates an opaque RGB888 canvas of the box. */
+    /** Composite `+0x5C` in tenths; the watch rotates a transparent canvas of the box. */
     TEXT,
 
     /** A Rule's endpoint direction in whole degrees; it turns about its midpoint. */

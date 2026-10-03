@@ -501,7 +501,7 @@
         <item quantity="one">Also turns %1$d other widget using this artwork.</item>
         <item quantity="other">Also turns %1$d other widgets using this artwork.</item>
     </plurals>
-    <string name="editor_rotation_backdrop">Tilted text gets a black box. Fonts are approximate.</string>
+    <string name="editor_rotation_text">Fonts in the preview are approximate.</string>
     <string name="editor_arrange">Arrange layers</string>
     <string name="editor_arrange_scope">Applies to: %1$s only</string>
     <string name="editor_arrange_description">Front widgets cover those behind.</string>

@@ -668,8 +668,8 @@ Record `+0x54..+0x57` is not read,
 `+0x58` is stored AARRGGBB text colour (RGB consumed, alpha ignored), `+0x5C` is rotation in tenths of a degree,
 `+0x5E` selects `font_N.bin`, `+0x60` is signed letter spacing, and `+0x62`
 is a dictionary index containing a digit permutation such as `"1234"` or
-`"3214"`. `+0x5F/+0x61` have no effect. A nonzero rotation uses an RGB888
-canvas; zero uses an ordinary label. Comp is therefore authorable, but every
+`"3214"`. `+0x5F/+0x61` have no effect. A nonzero rotation draws into a
+transparent RGB565+A canvas; zero uses an ordinary label. Comp is therefore authorable, but every
 dictionary index and source must be designed with the locale files rather than
 copied independently.
 
@@ -1043,14 +1043,18 @@ Reads retain raw vendor values; requests normalize to `[0, 3600)`. The original
 native/donor angle survives reopening and is offered as Reset rotation. Payload identity
 excludes this mutable angle while retaining the neighbouring fields.
 
-Nonzero angles use the firmware's **opaque black RGB888 text canvas**, rotated
-about the integer centre of the stored box. The preview mirrors that behaviour
-with an approximate Android font. Shared rotation geometry supplies rendered
+Nonzero angles draw the text into a **transparent canvas** the size of the stored
+box, rotated about its integer centre. The constructor sets GUI image format 5
+(RGB565+A, `w × h × 3` bytes) at `0x2C107F5C`, and every update clears it to opacity 0
+(`0x2C107CF6`, colour 0 and opacity 0) before drawing the text, so only the glyphs cover
+the face. Three bytes per pixel is RGB565 plus alpha, not an opaque RGB888 box. This is
+instruction-level evidence; turned text has not been checked on a watch. The preview
+mirrors it with an approximate Android font. Shared rotation geometry supplies rendered
 bounds, selection outlines, hit tests and drag/nudge clamps without changing the
 stored layout box or alignment origin. Off-panel starting positions can still be
 moved gradually inward.
 
-The editor limits each newly rotated box to 102,912 pixels (308,736 RGB888 bytes)
+The editor limits each newly rotated box to 102,912 pixels (308,736 canvas bytes)
 and at most 1,024 pixels per side. This is an editor allocation policy, **not a
 measured total watch RAM budget**. Oversized boxes can still be set to zero.
 

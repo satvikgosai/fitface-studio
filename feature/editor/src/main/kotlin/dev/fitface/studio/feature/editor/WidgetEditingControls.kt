@@ -158,7 +158,7 @@ internal fun RotationControls(
         Text(
             stringResource(
                 when (kind) {
-                    WidgetRotationKind.TEXT -> R.string.editor_rotation_backdrop
+                    WidgetRotationKind.TEXT -> R.string.editor_rotation_text
                     WidgetRotationKind.LINE -> R.string.editor_rotation_line
                     WidgetRotationKind.ARC -> R.string.editor_rotation_arc
                     WidgetRotationKind.ARTWORK -> R.string.editor_rotation_artwork
