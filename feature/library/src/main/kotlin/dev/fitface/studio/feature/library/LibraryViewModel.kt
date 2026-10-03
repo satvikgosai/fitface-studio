@@ -7,7 +7,6 @@ import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.CatalogSort
-import dev.fitface.studio.core.model.DeveloperGate
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.FaceCatalogRepository
@@ -100,13 +99,6 @@ data class LibraryUiState(
     val catalogFailure: String? = null,
     /** The pasteable report, non-null while the dialog is open. */
     val diagnosticsReport: String? = null,
-    /**
-     * Whether the export and import controls are on screen at all.
-     *
-     * Absent rather than disabled when this is false: a greyed-out IMPORT is a thing to
-     * ask about, and the whole point of [DeveloperGate] is that nothing hints at it.
-     */
-    val developerTools: Boolean = false,
     /**
      * The export waiting for the system picker to name a file.
      *
@@ -317,11 +309,6 @@ class LibraryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            repository.observeDeveloperTools().collect { enabled ->
-                mutableState.update { it.copy(developerTools = enabled) }
-            }
-        }
-        viewModelScope.launch {
             if (reporter.hasPreviousCrash()) {
                 mutableState.update { it.copy(previousCrash = true) }
             }
@@ -442,29 +429,7 @@ class LibraryViewModel @Inject constructor(
         mutableState.update { it.copy(sortReversed = !it.sortReversed) }
     }
 
-    /**
-     * The projects search, and the one hidden thing in this app.
-     *
-     * Typing the phrase [DeveloperGate] holds toggles the export and import controls. The
-     * phrase is **consumed** — it never reaches [LibraryUiState.projectQuery] — for two
-     * reasons: the list would otherwise filter to "No matching projects" on the way, which
-     * is a flash of something wrong in answer to something that worked, and the phrase
-     * would be left sitting in the field for the next person to read off the screen.
-     *
-     * Nothing else is said. The controls appearing is the feedback, and it is the only
-     * feedback worth having; a toast counting down to it is what makes the platform's own
-     * version of this gesture the opposite of hidden.
-     */
     fun setProjectQuery(value: String) {
-        if (DeveloperGate.isUnlockPhrase(value)) {
-            val enabled = !mutableState.value.developerTools
-            mutableState.update { it.copy(projectQuery = "") }
-            // Written through the repository rather than held here: it has to survive the
-            // process, or every cold start would hide the tools again and read as the gate
-            // having failed. The collector in `init` is what puts it back into the state.
-            viewModelScope.launch { repository.setDeveloperTools(enabled) }
-            return
-        }
         mutableState.update { it.copy(projectQuery = value) }
     }
 
@@ -671,7 +636,6 @@ class LibraryViewModel @Inject constructor(
      * [finishExport] is the other half, including the half where the picker was cancelled.
      */
     fun startExport(project: ProjectSummary) {
-        if (!mutableState.value.developerTools) return
         mutableState.update {
             it.copy(
                 exporting = ExportRequest(
@@ -722,7 +686,7 @@ class LibraryViewModel @Inject constructor(
      * conflict opening one has.
      */
     fun importProject(sourceUri: String?) {
-        if (sourceUri == null || !mutableState.value.developerTools) return
+        if (sourceUri == null) return
         if (mutableState.value.isWorking) return
         viewModelScope.launch {
             runCatching { repository.importProject(sourceUri) }

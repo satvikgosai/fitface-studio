@@ -121,7 +121,7 @@
     <string name="library_projects_saved">Saved automatically</string>
     <string name="library_projects_local_count">%1$d local</string>
     <string name="library_projects_empty_title">No projects yet</string>
-    <string name="library_projects_empty_detail">Download a watch face to start. The original and your applied edits are saved privately on this device.</string>
+    <string name="library_projects_empty_detail">Download a watch face or import a project to start. The original and your applied edits are saved privately on this device.</string>
     <string name="library_browse">Browse watch faces</string>
     <string name="library_project_face_line">face %1$s · %2$s</string>
     <string name="library_project_face_line_plain">face %1$s</string>

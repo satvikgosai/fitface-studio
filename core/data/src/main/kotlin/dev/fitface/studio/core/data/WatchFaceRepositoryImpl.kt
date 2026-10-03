@@ -4,7 +4,6 @@ import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
-import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -105,16 +104,6 @@ import kotlinx.serialization.json.Json
 
 private val Context.editorPreferences by preferencesDataStore(name = "editor_preferences")
 private val ImageFitKey = stringPreferencesKey("image_fit")
-
-/**
- * Whether the export and import controls are on screen.
- *
- * In the editor's own preference store rather than a new one: it is a single boolean, and a
- * second `preferencesDataStore` is a second file, a second lock and a second thing to keep in
- * step. The key is deliberately dull — a name that said what it gates would be the one string
- * worth grepping the APK for, and the point of `DeveloperGate` is that nothing advertises it.
- */
-private val DeveloperToolsKey = booleanPreferencesKey("advanced_tools")
 
 @Singleton
 class WatchFaceRepositoryImpl @Inject constructor(
@@ -288,13 +277,6 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
     override suspend fun setImageFit(value: ImageFit) {
         context.editorPreferences.edit { it[ImageFitKey] = value.name }
-    }
-
-    override fun observeDeveloperTools(): Flow<Boolean> =
-        context.editorPreferences.data.map { it[DeveloperToolsKey] ?: false }
-
-    override suspend fun setDeveloperTools(enabled: Boolean) {
-        context.editorPreferences.edit { it[DeveloperToolsKey] = enabled }
     }
 
     /**
@@ -804,7 +786,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ProjectArchive.read(bytes)
                 } catch (error: ProjectArchiveException) {
                     throw WatchFaceException(
-                        "That file is not a FitFace Studio project: ${error.message}",
+                        "That file cannot be imported: ${error.message}",
                         "import: ${error.message}",
                         error,
                     )

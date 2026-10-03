@@ -272,10 +272,6 @@ After validation, creation uses the row/files cleanup contract above. Failed imp
 leaves no project. `ProjectArchiveHostilityTest` covers traversal, bombs, duplicates
 and schema boundaries; import repository tests cover provenance and rollback.
 
-Hidden developer controls govern visibility only: every ViewModel action re-checks
-the flag, while archive validation always runs. `DeveloperGate` stores a digest;
-never put its phrase into source, resources, comments or docs.
-
 ### Style preview files
 
 Package PNGs (`assets/SM-R390_<face>_<group>_<style>.png`) avoid parsing every project

@@ -119,9 +119,6 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
   cannot be renumbered. Test migrations and rollback, not just a fresh database.
 - Atomic writers need unique scratch files. Creation and cleanup must survive
   coroutine cancellation without exposing partially written projects.
-- Hidden export tools change visibility only. Re-check the flag in ViewModel actions;
-  never gate correctness on it. `DeveloperGate` compares a digest: never put its
-  phrase in source, resources, comments or documentation.
 - App updates use the releases list and parsed versions, including prereleases.
   Inspect package, version code and readable signer certificates before install;
   never recommend uninstalling away saved projects to solve a key mismatch.

@@ -1180,7 +1180,7 @@ interface WatchFaceRepository {
      *
      * [destinationUri] is a document the reader chose in the system picker, and it is the one
      * place this app writes outside its private storage — see invariant 5 in
-     * `docs/architecture.md`. Behind [DeveloperGate], because it is a debugging tool.
+     * `docs/architecture.md`.
      */
     suspend fun exportProject(projectId: Long, destinationUri: String): ExportedProject
 
@@ -1194,14 +1194,6 @@ interface WatchFaceRepository {
      * projects, which is also what makes an archive usable as a checkpoint.
      */
     suspend fun importProject(sourceUri: String): ImportedProject
-
-    /**
-     * Whether the export and import controls are on screen. Off on a fresh install, and
-     * turned on only by the phrase [DeveloperGate] holds.
-     */
-    fun observeDeveloperTools(): Flow<Boolean>
-
-    suspend fun setDeveloperTools(enabled: Boolean)
 
     suspend fun currentSnapshot(styleName: String? = null): EditorSnapshot
 
