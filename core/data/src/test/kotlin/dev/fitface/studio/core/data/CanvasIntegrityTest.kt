@@ -131,22 +131,28 @@ class CanvasIntegrityTest {
     }
 
     /**
-     * A turned Rule or vector arc redraws itself and nothing else: every pixel of the face
-     * that changes lies inside the widget's rectangle before or after the turn, and other
-     * widgets' layers are identical. `00105`'s diagonal rules and `00023`'s gauge arcs.
+     * A turned Rule, vector arc or picture redraws itself and nothing else: every pixel of
+     * the face that changes lies inside a rectangle that changed — the widget's, or one
+     * positioned against it — and other widgets' layers are identical. `00105`'s diagonal
+     * rules and its colon, which shares no frames, and `00023`'s gauge arcs.
      */
-    @Test fun turningALineOrAnArcChangesOnlyItsOwnPixels() {
+    @Test fun turningALineAnArcOrAPictureChangesOnlyItsOwnPixels() {
         for ((id, kind) in listOf("00105" to dev.fitface.studio.core.model.WidgetRotationKind.LINE,
-            "00023" to dev.fitface.studio.core.model.WidgetRotationKind.ARC)) {
+            "00023" to dev.fitface.studio.core.model.WidgetRotationKind.ARC,
+            "00105" to dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK)) {
             val path = containers.firstOrNull { it.fileName.toString().contains(id) } ?: continue
             val original = Fit3Container.parse(Files.readAllBytes(path))
             val entry = original.entryByBasename("style0.bin")
-            val before = FaceRecordParser.widgetGuides(entry).first { it.rotationKind == kind }
-            val edited = FaceEditor.rotateWidget(original, listOf(entry.basename), before.globalIndex,
-                before.sequenceId, before.x, before.y, (before.rotationTenths!! + 900) % 3600,
-                pristine = original).container
-            val after = FaceRecordParser.widgetGuides(edited.entryByBasename(entry.basename))
-                .single { it.globalIndex == before.globalIndex }
+            val before = FaceRecordParser.widgetGuides(entry)
+                .first { it.rotationKind == kind && it.sharedArtworkWidgets == 0 }
+            val angle = (before.rotationTenths!! + 900) % 3600
+            val edited = if (kind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK) {
+                StructuralEditor.turnArtwork(original, listOf(entry.basename), before.globalIndex, before.type,
+                    before.sequenceId, before.x, before.y, angle, pristine = original).container
+            } else {
+                FaceEditor.rotateWidget(original, listOf(entry.basename), before.globalIndex,
+                    before.sequenceId, before.x, before.y, angle, pristine = original).container
+            }
             val old = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
             val new = WidgetPreviewComposer.compose(edited.entryByBasename(entry.basename), edited.entries,
                 WidgetTextRasterizer::render)
@@ -159,12 +165,20 @@ class CanvasIntegrityTest {
             fun inside(guide: WidgetGuide, x: Int, y: Int) =
                 x in guide.drawLeft - pad until guide.drawLeft + guide.width + pad &&
                     y in guide.drawTop - pad until guide.drawTop + guide.height + pad
+            // The turned widget's rectangle, and any positioned against it, before and after.
+            val oldGuides = FaceRecordParser.widgetGuides(entry).associateBy { it.globalIndex }
+            val moved = FaceRecordParser.widgetGuides(edited.entryByBasename(entry.basename)).filter {
+                val was = oldGuides.getValue(it.globalIndex)
+                it.globalIndex == before.globalIndex ||
+                    listOf(was.drawLeft, was.drawTop, was.width, was.height) != listOf(it.drawLeft, it.drawTop, it.width, it.height)
+            }
             val changed = old.composed.argb.indices.filter { old.composed.argb[it] != new.composed.argb[it] }
             assertTrue("$id: the turned widget must redraw", changed.isNotEmpty())
             val width = old.composed.width
-            changed.forEach {
-                assertTrue("$id: pixel ${it % width},${it / width} changed outside the widget",
-                    inside(before, it % width, it / width) || inside(after, it % width, it / width))
+            changed.forEach { pixel ->
+                assertTrue("$id: pixel ${pixel % width},${pixel / width} changed outside the widget",
+                    (moved + moved.map { oldGuides.getValue(it.globalIndex) })
+                        .any { inside(it, pixel % width, pixel / width) })
             }
         }
     }

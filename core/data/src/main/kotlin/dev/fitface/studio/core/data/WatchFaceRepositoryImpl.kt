@@ -73,6 +73,7 @@ import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.WidgetDonor
 import dev.fitface.studio.core.model.WidgetRotationKind
+import dev.fitface.studio.core.model.artworkBounds
 import dev.fitface.studio.core.model.WidgetDonorVariant
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetImportPreview
@@ -839,7 +840,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     val state = contents.sessionState ?: throw WatchFaceException("This project's saved edit metadata is missing.")
                     json.decodeFromString<StoredSessionState>(state.decodeToString()).also {
                         require(it.schema == contents.manifest.schema && (it.schema != 2 || it.importOrigins != null) &&
-                            (it.schema != 3 || it.lineage != null) && it.editedContainer == null) {
+                            (it.schema < 3 || it.lineage != null) &&
+                            (it.schema != 4 || it.lineage?.artworkTurns != null) && it.editedContainer == null) {
                             "Invalid saved edit metadata."
                         }
                     }
@@ -1410,6 +1412,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
             mutex.withLock {
                 val current = requireSession()
                 val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+                val guide = FaceRecordParser.widgetGuides(current.currentContainer.entryByBasename(styleName))
+                    .singleOrNull { it.globalIndex == globalIndex }
+                if (guide?.rotationKind == WidgetRotationKind.ARTWORK) {
+                    return@withLock turnArtwork(current, styleName, guide.copy(sequenceId = sequenceId, x = x, y = y),
+                        targetIndices, angleTenths, applyToAllStyles)
+                }
                 val targets = targetIndices.keys.toList()
                 // A Rule turns at its current resize rung, measured from its pristine line.
                 val edit = FaceEditor.rotateWidget(current.currentContainer, targets, globalIndex,
@@ -1419,6 +1427,42 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName)
             }
         }
+
+    /**
+     * Redraws a Static's or Sprite's artwork turned, and saves the turn under the artwork's
+     * own key — the only record of it, since the pixels cannot say what angle they are at.
+     * Siblings whose artwork has no key are left alone rather than turned unrecorded. [guide]
+     * carries the caller's stored identity, so a stale selection is refused like any edit.
+     */
+    private suspend fun turnArtwork(current: Session, styleName: String, guide: WidgetGuide,
+        targetIndices: Map<String, Int>, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot {
+        val keys = targetIndices.mapValues { (variant, index) -> current.artworkKey(variant, index) }
+        if (keys[styleName] == null) {
+            throw WatchFaceException("This picture's original artwork is unknown, so it cannot be turned safely.")
+        }
+        val recorded = targetIndices.filterKeys { keys[it] != null }
+        val saved = current.identities()
+        val edit = StructuralEditor.turnArtwork(
+            source = current.currentContainer,
+            entryBasenames = recorded.keys.toList(),
+            globalIndex = guide.globalIndex,
+            widgetType = guide.type,
+            sequenceId = guide.sequenceId,
+            x = guide.x,
+            y = guide.y,
+            angleTenths = angleTenths,
+            turns = recorded.mapValues { (variant, _) -> saved.turn(keys.getValue(variant)!!) },
+            pristine = current.originalContainer,
+            pristineWidgets = current.pristineWidgets(recorded.keys.toList(), styleName, guide.globalIndex),
+            targetIndices = recorded,
+        )
+        val lineage = edit.changedStyles.fold(saved) { state, variant ->
+            keys[variant]?.let { state.withTurn(it, angleTenths) } ?: state
+        }
+        return commit(current, edit.container,
+            edit.audit("Widget artwork turned " + editScope(styleName, applyToAllStyles)), styleName,
+            lineage = lineage)
+    }
 
     override suspend fun resizeWidget(
         styleName: String,
@@ -1456,6 +1500,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 pristine = current.originalContainer,
                 targetIndices = targetIndices,
                 pristineWidgets = current.pristineWidgets(styleNames, styleName, globalIndex),
+                // Turned artwork resizes at its turn, or the resize would straighten it.
+                turns = current.artworkTurns(targetIndices),
             )
             commit(
                 current,
@@ -1883,6 +1929,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val previousRemoved = current.removedWidgets.toList()
         val identifiedRemoved = previousRemoved.map(current::identifyLegacyRemoval)
         val candidateLineage = lineage.withResources(current.originalContainer, container)
+            .withoutStaleTurns(importOrigins)
         current.currentContainer = container
         current.importOrigins = importOrigins
         current.lineage = candidateLineage
@@ -1979,8 +2026,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
+    // Schema 4 only when an artwork turn is saved. Readers use `ignoreUnknownKeys`, so an
+    // older build would drop the turn without a word and then straighten the artwork on its
+    // next resize; at 4 it refuses the project instead. Untouched projects stay at 3.
     private fun storedState(current: Session) = StoredSessionState(
-        schema = 3,
+        schema = if (current.identities().artworkTurns.isNullOrEmpty()) 3 else 4,
         thumbnailRefreshed = current.thumbnailRefreshed,
         removed = current.removedWidgets.map(::StoredRemovedWidget),
         importOrigins = current.importOrigins,
@@ -1992,8 +2042,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
     private fun readCheckpoint(file: File): StoredSessionState {
         require(file.isFile && file.length() in 1..MAX_CHECKPOINT_BYTES.toLong()) { "The project's saved edit data is missing or too large." }
         val stored = json.decodeFromString<StoredSessionState>(file.readText())
-        require(stored.schema in 2..3 && (stored.schema != 2 || stored.importOrigins != null) &&
-            (stored.schema != 3 || stored.lineage != null) && stored.editedContainer != null) {
+        require(stored.schema in 2..4 && (stored.schema != 2 || stored.importOrigins != null) &&
+            (stored.schema < 3 || stored.lineage != null) &&
+            (stored.schema != 4 || stored.lineage?.artworkTurns != null) && stored.editedContainer != null) {
             "The project's saved edit metadata cannot be read."
         }
         require(stored.editedContainer.length <= (WATCH_CONTAINER_BYTE_CEILING + 2) / 3 * 4) { "The saved edit is too large." }
@@ -2001,8 +2052,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
     }
 
     private fun applyStoredState(stored: StoredSessionState, current: Session) {
-        require(stored.schema in 1..3 && (stored.schema != 2 || stored.importOrigins != null) &&
-            (stored.schema != 3 || stored.lineage != null) && (stored.schema == 3 || stored.lineage == null)) {
+        require(stored.schema in 1..4 && (stored.schema != 2 || stored.importOrigins != null) &&
+            (stored.schema < 3 || stored.lineage != null) && (stored.schema >= 3 || stored.lineage == null) &&
+            (stored.schema != 4 || stored.lineage?.artworkTurns != null)) {
             "This project's saved edit needs a newer app or is incomplete."
         }
         stored.lineage?.validate(current.originalContainer, current.currentContainer, stored.importOrigins)
@@ -2323,6 +2375,37 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 if (matching != null) targets[variant] = matching
             }
             return targets
+        }
+
+        /**
+         * Where [index]'s artwork turn is saved, or null when its frames have no original —
+         * an import's own artwork, or a vendor pool resolved through its original images.
+         */
+        fun artworkKey(variant: String, index: Int): String? = artworkKeys(variant, setOf(index))[index]
+
+        /** [artworkKey] for several widgets of one variant, pairing their originals once. */
+        fun artworkKeys(variant: String, indices: Set<Int>): Map<Int, String> {
+            val imported = indices.mapNotNull { index ->
+                importOrigins?.find(variant, index)?.let { index to SessionLineage.importArtworkKey(it.id) }
+            }.toMap()
+            val native = indices - imported.keys
+            val sources = identities().widgets[variant]?.mapNotNull { (current, origin) ->
+                origin.originalIndex?.let { current to it }
+            }?.toMap()
+            if (native.isEmpty() || sources == null) return imported
+            val originalVariant = lineage?.variants?.get(variant) ?: variant
+            return imported + StructuralEditor.artworkOrigins(currentContainer.entryByBasename(variant),
+                originalEntry(variant), sources, native)
+                .mapValues { (_, image) -> SessionLineage.nativeArtworkKey(originalVariant, image) }
+        }
+
+        /** The present turn of each target's artwork, tenths; absent where nothing is turned. */
+        fun artworkTurns(targets: Map<String, Int>): Map<String, Int> {
+            val saved = identities()
+            if (saved.artworkTurns.isNullOrEmpty()) return emptyMap()
+            return targets.mapNotNull { (variant, index) ->
+                artworkKey(variant, index)?.let { key -> saved.turn(key).takeIf { it != 0 }?.let { variant to it } }
+            }.toMap()
         }
 
         fun pristineWidgets(styleNames: List<String>, styleName: String, index: Int): Map<String, WidgetPristine> {
@@ -2739,6 +2822,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val currentRecords by lazy(LazyThreadSafetyMode.NONE) {
                 FaceRecordParser.scanWidgets(selected).associateBy { it.globalIndex }
             }
+            val savedTurns = identities().takeIf { !it.artworkTurns.isNullOrEmpty() }
+            val artworkKeys by lazy(LazyThreadSafetyMode.NONE) {
+                artworkKeys(selected.basename, FaceRecordParser.widgetGuides(selected)
+                    .filter { it.rotationKind == WidgetRotationKind.ARTWORK }.map { it.globalIndex }.toSet())
+            }
             val widgets = FaceRecordParser.widgetGuides(selected).map { widget ->
                 val duplicateSource = duplicateSources[widget.globalIndex]
                 val imported = importOrigins?.find(selected.basename, widget.globalIndex)
@@ -2754,6 +2842,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
                             ?.let(originalRecordsFor(selected.basename)::get))
                         ?.let { FaceRecordParser.lineAnchor(currentRecords.getValue(widget.globalIndex), it) }
                 }
+                // Turned artwork reports its saved turn, and its resize ladder is of the turned
+                // original's bounds — exactly what its resize and its next turn measure from.
+                val turn = if (widget.rotationKind != WidgetRotationKind.ARTWORK || savedTurns == null) 0
+                else artworkKeys[widget.globalIndex]?.let(savedTurns::turn) ?: 0
+                val turned = original?.takeIf { turn != 0 }?.let { artworkBounds(it.width, it.height, turn) }
                 widget.copy(
                     originalX = original?.x ?: widget.x,
                     originalY = original?.y ?: widget.y,
@@ -2766,10 +2859,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     // A resize follows the new raster immediately; the reference
                     // render still shows the old one, so the composer needs the
                     // extent it was drawn at to know what to clear.
-                    originalWidth = line?.width ?: original?.width ?: widget.width,
-                    originalHeight = line?.height ?: original?.height ?: widget.height,
+                    originalWidth = line?.width ?: turned?.first ?: original?.width ?: widget.width,
+                    originalHeight = line?.height ?: turned?.second ?: original?.height ?: widget.height,
                     originalColorArgb = original?.colorArgb ?: widget.colorArgb,
-                    rotationTenths = line?.directionTenths ?: widget.rotationTenths,
+                    // A turn at an odd angle stores opaque frames with alpha for the corners;
+                    // the artwork itself is still the opaque rectangle it shipped as.
+                    opaqueArtwork = widget.opaqueArtwork || original?.opaqueArtwork == true,
+                    rotationTenths = line?.directionTenths ?: turn.takeIf { turned != null } ?: widget.rotationTenths,
                     originalRotationTenths = line?.originalDirectionTenths
                         ?: original?.rotationTenths ?: widget.rotationTenths,
                     duplicateSourceGlobalIndex = duplicateSource,

@@ -133,6 +133,9 @@ object WidgetSchema {
      * rotation either: they map the live reading onto the dial, so changing them makes the
      * hand point at the wrong time. An image arc stores an orientation beside a texture
      * raster, and whether that texture turns with it is unproven, so it is not offered.
+     *
+     * Static and Sprite artwork *can* be turned, but by redrawing its pixels rather than
+     * by any field, so it has no model here — see `StructuralEditor.turnArtwork`.
      */
     sealed interface RotationModel {
         /** Unsigned tenths of a degree, clockwise, in the `u16` at [offset]. */

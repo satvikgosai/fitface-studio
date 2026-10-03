@@ -449,6 +449,103 @@ class WidgetImportRepositoryTest {
         assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
     }
 
+    @Test fun turnedArtworkKeepsItsTurnThroughResizeRemovalReopenArchiveAndReset() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val digit = s.widgets.first {
+            it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK && it.sharedArtworkWidgets > 0
+        }
+        assertEquals(0, digit.rotationTenths)
+        // A stale selection is refused, as every other edit refuses one.
+        assertTrue(runCatching {
+            repository.rotateWidget("style0.bin", digit.globalIndex, digit.sequenceId, digit.x + 1, digit.y, 150, false)
+        }.isFailure)
+        s = repository.rotateWidget("style0.bin", digit.globalIndex, digit.sequenceId, digit.x, digit.y, 150, false)
+        var turned = s.widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(150, turned.rotationTenths)
+        assertEquals(0, turned.originalRotationTenths)
+        assertEquals(dev.fitface.studio.core.model.artworkBounds(digit.width, digit.height, 150), turned.width to turned.height)
+        assertEquals(100, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        // The other digits share the frames, so they are turned too, and say so.
+        assertEquals(digit.sharedArtworkWidgets, s.widgets.count { it.globalIndex != digit.globalIndex &&
+            it.rotationTenths == 150 && it.width == turned.width })
+        val smaller = requireNotNull(dev.fitface.studio.core.model.nextWidgetSize(turned, grow = false))
+        s = repository.resizeWidget("style0.bin", turned.globalIndex, turned.type, turned.sequenceId,
+            turned.x, turned.y, smaller.width, smaller.height, false)
+        turned = s.widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        assertEquals(150, turned.rotationTenths)
+        // Removing and restoring a widget does not lose its artwork's turn: it is kept by artwork.
+        s = remove(s, turned)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertEquals(150, s.widgets.last().rotationTenths)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(150, s.widgets.last().rotationTenths)
+        val archive = export(s.projectId)
+        assertEquals(4, ProjectArchive.read(archive.readBytes()).manifest.schema)
+        val imported = repository.importProject(Uri.fromFile(archive).toString())
+        repository = repository(); s = repository.openProject(imported.id)
+        turned = s.widgets.last()
+        assertEquals(150, turned.rotationTenths)
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        // Back to no turn, the project stops needing the newer schema.
+        s = repository.rotateWidget("style0.bin", turned.globalIndex, turned.sequenceId, turned.x, turned.y, 0, false)
+        assertEquals(0, s.widgets.last().rotationTenths)
+        assertEquals(3, ProjectArchive.read(export(s.projectId).readBytes()).manifest.schema)
+        repository.resetEdits()
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun aTurnSurvivesStyleDeletionAndRenumberingAndAodTurnsAlone() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        s = repository.currentSnapshot("style1.bin")
+        val digit = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK }
+        s = repository.rotateWidget("style1.bin", digit.globalIndex, digit.sequenceId, digit.x, digit.y, 900, false)
+        assertEquals(listOf("style1.bin"), s.audit?.changedStyles)
+        assertEquals(0, repository.currentSnapshot("style0.bin").widgets
+            .single { it.globalIndex == digit.globalIndex }.rotationTenths)
+        // Deleting style0 renumbers style1 to style0; the turn is kept by original artwork.
+        s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        s = repository.currentSnapshot("style0.bin")
+        var turned = s.widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(900, turned.rotationTenths)
+        assertEquals(digit.height to digit.width, turned.width to turned.height)
+        repository = repository(); s = repository.openProject(s.projectId)
+        turned = repository.currentSnapshot("style0.bin").widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(900, turned.rotationTenths)
+        // The always-on display turns on its own even when every style is requested.
+        val aod = repository.currentSnapshot("aod.bin").widgets
+            .firstOrNull { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK }
+        if (aod != null) {
+            s = repository.rotateWidget("aod.bin", aod.globalIndex, aod.sequenceId, aod.x, aod.y, 1800, true)
+            assertEquals(listOf("aod.bin"), s.audit?.changedStyles)
+            assertEquals(1800, s.widgets.single { it.globalIndex == aod.globalIndex }.rotationTenths)
+            assertEquals(900, repository.currentSnapshot("style0.bin").widgets
+                .single { it.globalIndex == digit.globalIndex }.rotationTenths)
+        }
+        repository.resetEdits()
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun anImportedPictureTurnsInItsOwnStyleUnderItsOwnKey() = runBlocking {
+        val donor = Fit3Container.parse(bin("00105")).entryByBasename("style0.bin")
+        val index = FaceRecordParser.widgetGuides(donor)
+            .first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK }.globalIndex
+        var s = add(repository.openPackage(face("00106")), "00105", index)
+        val widget = s.widgets.last()
+        assertEquals(dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK, widget.rotationKind)
+        s = repository.rotateWidget(s.selectedVariant.basename, widget.globalIndex, widget.sequenceId,
+            widget.x, widget.y, 900, true)
+        assertEquals(listOf(s.selectedVariant.basename), s.audit?.changedStyles)
+        assertEquals(900, s.widgets.last().rotationTenths)
+        assertEquals(widget.height to widget.width, s.widgets.last().let { it.width to it.height })
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(900, s.widgets.last().rotationTenths)
+        // Deleting the import drops its turn with its artwork; the project saves cleanly.
+        s = remove(s, s.widgets.last())
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertTrue(s.widgets.none { it.importedFromFaceId != null })
+    }
+
     @Test fun importedCompositeAndAodRotationStayIsolatedEvenWithAllStylesRequested() = runBlocking {
         val donorIndex = FaceRecordParser.scanWidgets(Fit3Container.parse(bin("00105")).entryByBasename("style0.bin"))
             .first { it.widgetType == 13 }.globalIndex

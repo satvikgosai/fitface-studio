@@ -25,6 +25,28 @@ enum class WidgetRotationKind {
 
     /** A vector arc's start angle in whole degrees; its range turns with it. */
     ARC,
+
+    /**
+     * A Static or Sprite whose artwork is redrawn at the angle, in whole degrees, from the
+     * original pixels. The angle is the app's own record of the redraw: no field of the
+     * image record holds it, and the artwork grows to the turned bounds.
+     */
+    ARTWORK,
+}
+
+/**
+ * The box a `width × height` image needs once turned by [tenths]: exact at quarter turns,
+ * otherwise the continuous bounding box rounded up, so no turned pixel is cut off. Shared
+ * by the format layer's redraw and the editor's resize ladder, which have to agree.
+ */
+fun artworkBounds(width: Int, height: Int, tenths: Int): Pair<Int, Int> {
+    val angle = normalizedRotation(tenths)
+    if (angle % 1800 == 0) return width to height
+    if (angle % 900 == 0) return height to width
+    val radians = Math.toRadians(angle / 10.0)
+    val c = abs(cos(radians)); val s = abs(sin(radians))
+    fun up(value: Double) = ceil(value - 1e-9).toInt().coerceAtLeast(1)
+    return up(width * c + height * s) to up(width * s + height * c)
 }
 
 /** Whether [angleTenths] is an angle [widget] can be given. */
@@ -33,7 +55,8 @@ fun canRotateTo(widget: WidgetGuide, angleTenths: Int): Boolean = when (widget.r
     WidgetRotationKind.TEXT ->
         normalizedRotation(angleTenths) == 0 || canRotateText(widget.width, widget.height)
     // Integer endpoints and whole-degree arc fields: a tenth would be silently rounded.
-    WidgetRotationKind.LINE, WidgetRotationKind.ARC -> angleTenths % 10 == 0
+    // Turned artwork follows them, so every kind but text steps in whole degrees.
+    WidgetRotationKind.LINE, WidgetRotationKind.ARC, WidgetRotationKind.ARTWORK -> angleTenths % 10 == 0
 }
 
 data class RotationBounds(val left: Int, val top: Int, val width: Int, val height: Int)

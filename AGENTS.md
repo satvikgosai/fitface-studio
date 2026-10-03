@@ -84,6 +84,9 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
 - Resize from pristine entry bytes, including donor provenance for imports. Shared
   raster users and their geometry move together. Keep the original-based 5% ladder,
   aspect ratio and `widgetResizeLimit`; never compound current-size multipliers.
+- Turned Static/Sprite artwork is redrawn from originals at the angle saved in
+  `SessionLineage.artworkTurns` (keyed by artwork, schema 4). Resize and turn both
+  measure from the turned original's bounds; never turn the previous output.
 - Resizing keeps image-record count. Background addition and widget import have
   separate append rules; imported deletion has bounded resource ownership rules.
   Do not reintroduce a blanket image-count ban.

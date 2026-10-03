@@ -90,6 +90,42 @@ fun widgetSizeAt(
     }
 }
 
+/**
+ * The rung of a `originalWidth × originalHeight` ladder a [width] × [height] widget is on,
+ * or the nearest by area for a size off the ladder, as a percentage.
+ */
+fun widgetSizePercentOf(
+    originalWidth: Int,
+    originalHeight: Int,
+    width: Int,
+    height: Int,
+    kind: WidgetResizeKind = WidgetResizeKind.RASTER,
+): Int {
+    val ladder = widgetResizeLadder(originalWidth, originalHeight, kind)
+    return ladder.firstOrNull { it.width == width && it.height == height }?.percentOfOriginal
+        ?: ladder.minByOrNull { kotlin.math.abs(it.area - width.toLong() * height) }?.percentOfOriginal
+        ?: 100
+}
+
+/**
+ * [percent] of a `originalWidth × originalHeight` original, or the largest rung below it
+ * that is within [widgetResizeLimit].
+ *
+ * What a turn lands on, and what another style is resized to: the same fraction of *its*
+ * original. A turned box is larger, so a widget enlarged near its limit can have no rung at
+ * that fraction at the new angle — and a button that is lit and then refused is the outcome
+ * this ladder exists to prevent. 100% always fits, so this is null only without a ladder.
+ */
+fun widgetSizeAtMost(
+    originalWidth: Int,
+    originalHeight: Int,
+    percent: Int,
+    kind: WidgetResizeKind = WidgetResizeKind.RASTER,
+): WidgetSize? = widgetSizeAt(originalWidth, originalHeight, percent, kind)
+    ?: widgetResizeLadder(originalWidth, originalHeight, kind)
+        .filter { it.percentOfOriginal <= percent }
+        .maxByOrNull { it.percentOfOriginal }
+
 private fun scaledExtent(extent: Int, percent: Int): Int =
     ((extent * percent + 50) / 100).coerceAtLeast(1)
 

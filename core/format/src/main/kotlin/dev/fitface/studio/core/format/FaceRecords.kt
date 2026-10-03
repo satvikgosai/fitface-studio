@@ -845,6 +845,10 @@ object FaceRecordParser {
      * through this — the canvas, the preview composer and the editor's write-back — or
      * they disagree about where a widget is.
      */
+    /** [drawnExtents] for every record of [entry], keyed by ordinal. */
+    internal fun drawnExtentsOf(entry: ContainerEntry): Map<Int, DrawnExtent> =
+        drawnExtents(scanWidgets(entry), imagesByRelativeOffset(entry))
+
     internal fun placements(entry: ContainerEntry): Map<Int, ResolvedPlacement> {
         val records = scanWidgets(entry)
         val images = imagesByRelativeOffset(entry)
@@ -989,6 +993,18 @@ object FaceRecordParser {
                     WidgetResizeKind.RASTER
                 else -> WidgetResizeKind.NONE
             }
+            // Artwork the app can redraw turned: a Static or Sprite on the canvas whose pool a
+            // resize accepts, in RGB565 or RGB565+A — an opaque one gains alpha only for the
+            // corners a turn uncovers. Indexed8 cannot be blended. The angle is the app's
+            // record, not the container's, so it starts at zero here and the repository
+            // supplies the saved turn.
+            val artworkTurn = (0 to WidgetRotationKind.ARTWORK).takeIf {
+                resizeModel == WidgetSchema.ResizeModel.Raster &&
+                    placement == WidgetPlacement.CANVAS &&
+                    resizeKind == WidgetResizeKind.RASTER &&
+                    referencedImages.isNotEmpty() &&
+                    referencedImages.all { image -> image.format == IMAGE_RGB565_ALPHA || image.format == IMAGE_RGB565 }
+            }
             WidgetGuide(
                 ordinal = it.ordinal,
                 globalIndex = it.globalIndex,
@@ -1019,8 +1035,10 @@ object FaceRecordParser {
                 },
                 hasOpaqueBackdrop = opaqueBackdrop && placement == WidgetPlacement.CANVAS,
                 colorArgb = pairColor.takeIf { canEditPair },
-                rotationTenths = rotationOf(entry, it)?.first,
-                rotationKind = rotationOf(entry, it)?.second,
+                rotationTenths = (rotationOf(entry, it) ?: artworkTurn)?.first,
+                rotationKind = (rotationOf(entry, it) ?: artworkTurn)?.second,
+                sharedArtworkWidgets = resizePool?.widgets?.count { other -> other.ordinal != it.ordinal } ?: 0,
+                opaqueArtwork = referencedImages.isNotEmpty() && referencedImages.none(ImageRecord::hasAlphaChannel),
                 supportMessage = when {
                     !place.isMovable ->
                         "This widget’s position cannot be measured safely, so moving is disabled. " +

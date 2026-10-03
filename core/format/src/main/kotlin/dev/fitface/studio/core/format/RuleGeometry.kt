@@ -2,8 +2,8 @@ package dev.fitface.studio.core.format
 
 import dev.fitface.studio.core.model.WidgetResizeKind
 import dev.fitface.studio.core.model.normalizedRotation
-import dev.fitface.studio.core.model.widgetResizeLadder
-import dev.fitface.studio.core.model.widgetSizeAt
+import dev.fitface.studio.core.model.widgetSizeAtMost
+import dev.fitface.studio.core.model.widgetSizePercentOf
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -116,18 +116,16 @@ internal object RuleGeometry {
      *
      * The rung is a percentage of the pristine line's extent *at its current direction*,
      * so turning a line resized to 60% leaves it at 60% of its shipped length rather than
-     * snapping it back, and the extent it lands on is one the ladder offers.
+     * snapping it back, and the extent it lands on is one the ladder offers — or the largest
+     * that fits at the new angle, so a lit rotate button is never refused.
      */
     fun turnedLine(pristine: Line, current: Line, directionTenths: Int): Line? {
         val (anchorWidth, anchorHeight) = extent(anchor(pristine.span, current.span), pristine.thickness)
         val (width, height) = extent(current.span, current.thickness)
-        val ladder = widgetResizeLadder(anchorWidth, anchorHeight, WidgetResizeKind.FIELDS)
-        val percent = ladder.firstOrNull { it.width == width && it.height == height }?.percentOfOriginal
-            ?: ladder.minByOrNull { abs(it.area - width.toLong() * height) }?.percentOfOriginal
-            ?: 100
+        val percent = widgetSizePercentOf(anchorWidth, anchorHeight, width, height, WidgetResizeKind.FIELDS)
         val target = turned(pristine.span, directionTenths)
         val (targetWidth, targetHeight) = extent(target, pristine.thickness)
-        val size = widgetSizeAt(targetWidth, targetHeight, percent, WidgetResizeKind.FIELDS) ?: return null
+        val size = widgetSizeAtMost(targetWidth, targetHeight, percent, WidgetResizeKind.FIELDS) ?: return null
         return scaled(Line(target, pristine.thickness), size.width, size.height)
     }
 

@@ -97,7 +97,8 @@ object WidgetLayout {
         return placements
     }
 
-    private fun placementOf(
+    /** One record's origin given the rectangles already resolved; see [resolve]. */
+    internal fun placementOf(
         record: WidgetRecord,
         extent: DrawnExtent,
         panel: PanelSize,

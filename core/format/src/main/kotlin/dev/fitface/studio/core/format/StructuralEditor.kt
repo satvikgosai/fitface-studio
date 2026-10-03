@@ -4,9 +4,16 @@ import dev.fitface.studio.core.model.RASTER_RESIZE_CEILING
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.WIDGET_EXTENT_CEILING
 import dev.fitface.studio.core.model.WidgetResizeKind
+import dev.fitface.studio.core.model.artworkBounds
+import dev.fitface.studio.core.model.normalizedRotation
+import dev.fitface.studio.core.model.widgetResizeLadder
 import dev.fitface.studio.core.model.widgetResizeLimit
+import dev.fitface.studio.core.model.widgetSizeAt
+import dev.fitface.studio.core.model.widgetSizeAtMost
+import dev.fitface.studio.core.model.widgetSizePercentOf
 import java.io.ByteArrayOutputStream
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 data class StructuralEdit(
     val container: Fit3Container,
@@ -590,6 +597,8 @@ object StructuralEditor {
         pristine: Fit3Container? = null,
         pristineWidgets: Map<String, WidgetPristine> = emptyMap(),
         targetIndices: Map<String, Int>? = null,
+        /** The present turn of the artwork in each entry, tenths; see [turnArtwork]. */
+        turns: Map<String, Int> = emptyMap(),
     ): StructuralEdit {
         requireValidAndTight(source)
         // The precise per-side bound needs the widget's shipped extent, which only
@@ -600,20 +609,169 @@ object StructuralEditor {
             )
         }
         val replacements = linkedMapOf<Int, ByteArray>()
-        selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y, targetIndices)
-            .forEach { (entry, target) ->
-                replacements[entry.index] = resizeWidgetEntry(
+        val targets = selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y, targetIndices)
+        fun pristineOf(entry: ContainerEntry) = pristineWidgets[entry.basename]?.entry
+            ?: pristine?.entries?.singleOrNull { it.basename == entry.basename }
+        val siblingSizes = siblingArtworkSizes(targets, width, height, turns, ::pristineOf) {
+            pristineWidgets[it.basename]?.sources
+        }
+        targets.forEach { (entry, target) ->
+            val size = siblingSizes[entry.basename]
+            // Already at its own rung: nothing to rewrite in that style.
+            if (size == null && entry.basename in siblingSizes) return@forEach
+            replacements[entry.index] = resizeWidgetEntry(
+                entry = entry,
+                pristineEntry = pristineOf(entry),
+                target = target,
+                width = size?.first ?: width,
+                height = size?.second ?: height,
+                sourceIndices = pristineWidgets[entry.basename]?.sources,
+                turn = turns[entry.basename] ?: 0,
+            )
+        }
+        return rebuild(source, replacements)
+    }
+
+    /**
+     * What each sibling style's artwork is resized to when any of them is turned.
+     *
+     * The request is a rung of the *selected* style's ladder, which is of its turned
+     * original's bounds. A sibling turned differently — or not at all, since turns are
+     * style-local — has a different box, so those absolute numbers would squash or clip it.
+     * Each sibling instead takes the same percentage of its own turned original; a null size
+     * is a sibling already there. Empty when nothing is turned, which leaves every untouched
+     * resize exactly as it was.
+     */
+    private fun siblingArtworkSizes(
+        targets: List<Pair<ContainerEntry, WidgetRecord>>,
+        width: Int,
+        height: Int,
+        turns: Map<String, Int>,
+        pristineOf: (ContainerEntry) -> ContainerEntry?,
+        sourcesOf: (ContainerEntry) -> Map<Int, Int>?,
+    ): Map<String, Pair<Int, Int>?> {
+        val (selectedEntry, selectedTarget) = targets.first()
+        if (turns.isEmpty() || targets.size < 2 ||
+            WidgetSchema.spec(selectedTarget.widgetType).resize != WidgetSchema.ResizeModel.Raster
+        ) {
+            return emptyMap()
+        }
+        val selected = artworkSizes(selectedEntry, pristineOf(selectedEntry), selectedTarget, sourcesOf(selectedEntry))
+            ?: return emptyMap()
+        val (anchorWidth, anchorHeight) = artworkBounds(selected.first.first, selected.first.second,
+            turns[selectedEntry.basename] ?: 0)
+        val percent = widgetSizePercentOf(anchorWidth, anchorHeight, width, height)
+        return targets.drop(1).mapNotNull { (entry, target) ->
+            val (original, current) = artworkSizes(entry, pristineOf(entry), target, sourcesOf(entry))
+                ?: return@mapNotNull null
+            val (siblingWidth, siblingHeight) = artworkBounds(original.first, original.second, turns[entry.basename] ?: 0)
+            val size = widgetSizeAtMost(siblingWidth, siblingHeight, percent) ?: return@mapNotNull null
+            entry.basename to (size.width to size.height).takeIf { it != current }
+        }.toMap()
+    }
+
+    /** The original and current frame size of [target]'s pool, or null without an original. */
+    private fun artworkSizes(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry?,
+        target: WidgetRecord,
+        sourceIndices: Map<Int, Int>?,
+    ): Pair<Pair<Int, Int>, Pair<Int, Int>>? {
+        if (pristineEntry == null) return null
+        val widgets = FaceRecordParser.scanWidgets(entry)
+        val relative = FaceRecordParser.imagesByRelativeOffset(entry)
+        val pool = FaceRecordParser.rasterPool(target, widgets, relative)
+        if (pool.images.isEmpty()) return null
+        val images = FaceRecordParser.scanImages(entry)
+        val origins = pristineFrameOrigins(entry, pristineEntry, widgets, relative, sourceIndices)
+        val original = pool.images.map { (origins[it] ?: return null).let { o -> o.width to o.height } }
+            .toSet().singleOrNull() ?: return null
+        val current = pool.images.map { images[it].width to images[it].height }.toSet().singleOrNull() ?: return null
+        return original to current
+    }
+
+    /**
+     * Turns a Static's or Sprite's artwork to [angleTenths] in the first entry of
+     * [entryBasenames], and in every later entry that carries the widget.
+     *
+     * The image record has no angle, so this redraws the pixels: each frame of the pool is
+     * resampled **from its original** to the size it has on its resize ladder now, then
+     * turned into the larger box a turned image needs — see [artworkBounds]. Nothing about
+     * a turn is recoverable from the pixels, so [turns] supplies each entry's present turn
+     * and the caller stores the new one; without it a later resize or turn would start
+     * from the wrong picture.
+     *
+     * Everything else is resize's contract: the pool is rewritten in place for every widget
+     * that shares it, image count and pointer mapping are asserted, and [rebuild] holds the
+     * container to its ceiling. Each widget of the pool keeps its visual centre, which for
+     * the two alignment codes that measure from the widget's own width means re-solving
+     * the stored position rather than shifting it.
+     *
+     * The selected entry is strict; a sibling that cannot take the turn keeps its artwork.
+     */
+    fun turnArtwork(
+        source: Fit3Container,
+        entryBasenames: List<String>,
+        globalIndex: Int,
+        widgetType: Int,
+        sequenceId: Int,
+        x: Int,
+        y: Int,
+        angleTenths: Int,
+        turns: Map<String, Int> = emptyMap(),
+        pristine: Fit3Container? = null,
+        pristineWidgets: Map<String, WidgetPristine> = emptyMap(),
+        targetIndices: Map<String, Int>? = null,
+    ): StructuralEdit {
+        requireValidAndTight(source)
+        val angle = normalizedRotation(angleTenths)
+        if (angle % 10 != 0) throw Fit3FormatException("Artwork turns in whole degrees.")
+        val replacements = linkedMapOf<Int, ByteArray>()
+        val targets = selectedRecords(source, entryBasenames, globalIndex, widgetType, sequenceId, x, y, targetIndices)
+        targets.forEach { (entry, target) ->
+            val turned = runCatching {
+                turnedPoolEntry(
                     entry = entry,
-                    pristineEntry = pristineWidgets[entry.basename]?.entry ?: pristine?.entries?.singleOrNull {
-                        it.basename == entry.basename
-                    },
+                    pristineEntry = pristineWidgets[entry.basename]?.entry
+                        ?: pristine?.entries?.singleOrNull { it.basename == entry.basename },
                     target = target,
-                    width = width,
-                    height = height,
                     sourceIndices = pristineWidgets[entry.basename]?.sources,
+                    fromTurn = turns[entry.basename] ?: 0,
+                    toTurn = angle,
+                    requested = null,
+                    keepCentre = true,
                 )
             }
+            if (entry === targets.first().first) replacements[entry.index] = turned.getOrThrow()
+            else turned.getOrNull()?.let { replacements[entry.index] = it }
+        }
         return rebuild(source, replacements)
+    }
+
+    /**
+     * For each of [globalIndices], the lowest original image index of the artwork it draws,
+     * absent when any of its frames has no original — the identity a saved turn is kept under.
+     * The originals are paired once for all of them.
+     *
+     * Raster records outlive every widget edit (removal keeps them, duplication shares
+     * them, reordering and added backgrounds leave their indices), so the original artwork
+     * names a turn more durably than any widget index can.
+     */
+    fun artworkOrigins(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry,
+        sourceIndices: Map<Int, Int>?,
+        globalIndices: Set<Int>,
+    ): Map<Int, Int> {
+        val widgets = FaceRecordParser.scanWidgets(entry)
+        val relative = FaceRecordParser.imagesByRelativeOffset(entry)
+        val origins = pristineFrameOrigins(entry, pristineEntry, widgets, relative, sourceIndices)
+        return widgets.filter { it.globalIndex in globalIndices }.mapNotNull { target ->
+            val pool = FaceRecordParser.rasterPool(target, widgets, relative)
+            if (pool.images.isEmpty()) return@mapNotNull null
+            pool.images.map { origins[it]?.index ?: return@mapNotNull null }.minOrNull()
+                ?.let { target.globalIndex to it }
+        }.toMap()
     }
 
     /**
@@ -1061,8 +1219,15 @@ object StructuralEditor {
         width: Int,
         height: Int,
         sourceIndices: Map<Int, Int>?,
+        turn: Int = 0,
     ): ByteArray {
         val spec = WidgetSchema.spec(target.widgetType)
+        // Turned artwork is resized at its turn, from the original, or a resize would
+        // straighten it: its ladder's rungs are of the *turned* bounds.
+        if (spec.resize == WidgetSchema.ResizeModel.Raster && normalizedRotation(turn) != 0) {
+            return turnedPoolEntry(entry, pristineEntry, target, sourceIndices, turn, turn,
+                width to height, keepCentre = false)
+        }
         return when (val model = spec.resize) {
             null -> throw Fit3FormatException(
                 "${entry.basename}: a ${spec.name} widget cannot be resized",
@@ -1470,6 +1635,270 @@ object StructuralEditor {
             throw Fit3FormatException("a resize changed the raster mapping")
         }
         return replacement
+    }
+
+    /**
+     * Redraws a Static's or Sprite's pool at [toTurn] — the shared body of [turnArtwork] and
+     * of resizing artwork that is already turned.
+     *
+     * The size is [requested] for a resize, or for a turn the rung of the resize ladder the
+     * pool is on now, measured at [fromTurn] and taken at [toTurn]: a glyph at 80% stays at
+     * 80% of its original, now turned. RGB565 and RGB565+A are accepted; an opaque pool
+     * stays RGB565 at quarter turns and is stored as RGB565+A at any other angle, for the
+     * corners — see [RasterResampler.turn]. Every frame must have its original, because a
+     * turn is never applied to the output of an earlier one, and the original's format is
+     * what a turn back to zero restores.
+     */
+    private fun turnedPoolEntry(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry?,
+        target: WidgetRecord,
+        sourceIndices: Map<Int, Int>?,
+        fromTurn: Int,
+        toTurn: Int,
+        requested: Pair<Int, Int>?,
+        keepCentre: Boolean,
+    ): ByteArray {
+        val spec = WidgetSchema.spec(target.widgetType)
+        if (spec.resize != WidgetSchema.ResizeModel.Raster) {
+            throw Fit3FormatException("A ${spec.name} widget's artwork cannot be turned.")
+        }
+        val images = FaceRecordParser.scanImages(entry)
+        val widgets = FaceRecordParser.scanWidgets(entry)
+        val sectionStart = images.firstOrNull()?.recordOffset
+            ?: throw Fit3FormatException("${entry.basename}: style contains no images")
+        val relativeImages = images.associateBy { (it.recordOffset - sectionStart).toLong() }
+        FaceRecordParser.imagePointerFields(target, relativeImages)
+        val pool = FaceRecordParser.rasterPool(target, widgets, relativeImages)
+        if (pool.images.isEmpty() || pool.unreadable) {
+            throw Fit3FormatException("${entry.basename}: this widget's artwork cannot be read")
+        }
+        val backgroundIndex = FaceRecordParser.backgroundImage(entry)?.index
+        if (backgroundIndex != null && backgroundIndex in pool.images) {
+            throw Fit3FormatException("A full-face background is replaced from Background, not turned.")
+        }
+        pool.widgets.firstOrNull { it.widgetType != target.widgetType }?.let {
+            throw Fit3FormatException(
+                "${entry.basename}: widget ${it.ordinal} shares this artwork but is type ${it.widgetType}",
+            )
+        }
+        val selected = pool.images.sorted().map(images::get)
+        val signature = selected.map {
+            listOf(it.width, it.height, it.format, it.reserved, it.opaqueTrailerSize)
+        }.toSet().singleOrNull()
+            ?: throw Fit3FormatException("${entry.basename}: pooled rasters do not share one format")
+        if (signature[2] !in TURNED_FORMATS) {
+            throw Fit3FormatException("This picture's colour format cannot be turned.")
+        }
+        if (signature[3] != 0 || signature[4] != OPAQUE_TRAILER_BYTES) {
+            throw Fit3FormatException("${entry.basename}: a turn requires the proven raster trailer schema")
+        }
+        val origins = pristineFrameOrigins(entry, pristineEntry, widgets, relativeImages, sourceIndices)
+        val originals = pool.images.associateWith { index ->
+            origins[index]?.takeIf {
+                it.format in TURNED_FORMATS && it.reserved == 0 &&
+                    it.opaqueTrailerSize == OPAQUE_TRAILER_BYTES
+            } ?: throw Fit3FormatException(
+                "This picture's original artwork is unknown, so it cannot be turned safely.",
+            )
+        }
+        if (originals.values.map(ImageRecord::format).toSet().size != 1) {
+            throw Fit3FormatException("${entry.basename}: the original frames differ in format")
+        }
+        val originEntry = requireNotNull(pristineEntry)
+        val originalSize = originals.values.map { it.width to it.height }.toSet().singleOrNull()
+            ?: throw Fit3FormatException("${entry.basename}: the original frames differ in size")
+        val (originalWidth, originalHeight) = originalSize
+        val currentWidth = signature[0]
+        val currentHeight = signature[1]
+        val (anchorWidth, anchorHeight) = artworkBounds(originalWidth, originalHeight, toTurn)
+        val (width, height) = requested ?: run {
+            // The rung the pool is on now, measured where it is now: at its present turn. An
+            // enlarged picture may not fit that rung at the new angle, so it takes the largest
+            // that does rather than being refused by a button the editor showed as lit.
+            val (fromWidth, fromHeight) = artworkBounds(originalWidth, originalHeight, fromTurn)
+            val percent = widgetSizePercentOf(fromWidth, fromHeight, currentWidth, currentHeight)
+            widgetSizeAtMost(anchorWidth, anchorHeight, percent)?.let { it.width to it.height }
+                ?: throw Fit3FormatException("${entry.basename}: this artwork has no resize ladder")
+        }
+        if (width > widgetResizeLimit(anchorWidth, WidgetResizeKind.RASTER) ||
+            height > widgetResizeLimit(anchorHeight, WidgetResizeKind.RASTER)
+        ) {
+            throw Fit3FormatException("${entry.basename}: ${width}x$height is past this artwork's resize limit")
+        }
+        if (requested == null && normalizedRotation(fromTurn) == normalizedRotation(toTurn)) {
+            throw Fit3FormatException("This widget already uses that rotation.")
+        }
+        if (requested != null && width == currentWidth && height == currentHeight) {
+            throw Fit3FormatException("${entry.basename}: a resize requires a dimension change")
+        }
+
+        val newSection = ByteArrayOutputStream()
+        val mappedOffsets = linkedMapOf<Long, Long>()
+        images.forEach { image ->
+            mappedOffsets[(image.recordOffset - sectionStart).toLong()] = newSection.size().toLong()
+            val recordEnd = image.pixelOffset + image.dataSize
+            if (image.index !in pool.images) {
+                newSection.write(entry.data, image.recordOffset, recordEnd - image.recordOffset)
+            } else {
+                writeTurnedFrame(newSection, entry, image, originals.getValue(image.index), originEntry,
+                    toTurn, width, height, anchorWidth, anchorHeight)
+            }
+        }
+        val moved = mappedOffsets.filter { (old, new) -> old != new }.keys
+        val prefix = entry.data.copyOfRange(0, sectionStart)
+        relocatePointers(
+            entry = entry,
+            target = prefix,
+            widgets = widgets,
+            relativeImages = relativeImages,
+            movedOffsets = moved,
+        ) { _, before -> mappedOffsets.getValue(before) }
+        val section = newSection.toByteArray()
+        val resized = prefix + section
+        resized.putU32(0x0C, section.size)
+        if (keepCentre) {
+            recentrePool(entry, entry.copy(data = resized, size = resized.size), resized,
+                pool.widgets.map { it.globalIndex }.toSet(), currentWidth, currentHeight, width, height)
+        }
+        val parsed = validateRelocatedEntry(entry, resized)
+        val parsedImages = FaceRecordParser.scanImages(parsed)
+        if (parsedImages.size != images.size) {
+            throw Fit3FormatException("a turn changed the image-record count")
+        }
+        pool.images.forEach { index ->
+            if (parsedImages[index].width != width || parsedImages[index].height != height) {
+                throw Fit3FormatException("turned dimensions did not persist")
+            }
+        }
+        images.filterNot { it.index in pool.images }.forEach { before ->
+            val after = parsedImages[before.index]
+            if (after.width != before.width || after.height != before.height) {
+                throw Fit3FormatException("a turn disturbed a raster outside the pool")
+            }
+        }
+        val parsedRelative = parsedImages.associateBy {
+            (it.recordOffset - parsedImages.first().recordOffset).toLong()
+        }
+        val turnedTarget = FaceRecordParser.scanWidgets(parsed).single { it.globalIndex == target.globalIndex }
+        if (FaceRecordParser.imagePointerFields(target, relativeImages).map { it.image.index } !=
+            FaceRecordParser.imagePointerFields(turnedTarget, parsedRelative).map { it.image.index }
+        ) {
+            throw Fit3FormatException("a turn changed the raster mapping")
+        }
+        return resized
+    }
+
+    /** The formats a turn reads and writes; see [RasterResampler.turn]. */
+    private val TURNED_FORMATS = setOf(IMAGE_RGB565, IMAGE_RGB565_ALPHA)
+
+    /**
+     * One frame of a turned pool: the original resampled to the turned content's size,
+     * then turned into the `width × height` box. At no turn this is exactly a resize's
+     * frame, in the original's own format, which is what lets Reset rotation return the
+     * shipped bytes.
+     */
+    private fun writeTurnedFrame(
+        out: ByteArrayOutputStream,
+        entry: ContainerEntry,
+        image: ImageRecord,
+        origin: ImageRecord,
+        originEntry: ContainerEntry,
+        turn: Int,
+        width: Int,
+        height: Int,
+        anchorWidth: Int,
+        anchorHeight: Int,
+    ) {
+        val angle = normalizedRotation(turn)
+        // The picture before it is turned. A quarter turn swaps the box exactly; any other
+        // angle scales the original by how far down its ladder the turned box is.
+        val (contentWidth, contentHeight) = when {
+            angle % 1800 == 0 -> width to height
+            angle % 900 == 0 -> height to width
+            else -> {
+                // The tighter ratio, so the turned content never overhangs its box.
+                val scale = minOf(width.toDouble() / anchorWidth, height.toDouble() / anchorHeight)
+                (origin.width * scale).roundToInt().coerceAtLeast(1) to
+                    (origin.height * scale).roundToInt().coerceAtLeast(1)
+            }
+        }
+        val scaled = RasterResampler.resample(
+            originEntry.data.copyOfRange(origin.samplesOffset, origin.pixelOffset + origin.pixelDataSize),
+            origin.format,
+            origin.width,
+            origin.height,
+            contentWidth,
+            contentHeight,
+        )
+        val turned = if (angle == 0) RasterResampler.Turned(origin.format, scaled)
+        else RasterResampler.turn(scaled, origin.format, contentWidth, contentHeight, angle, width, height)
+        val pixels = turned.samples
+        val trailer = entry.data.copyOfRange(
+            image.pixelOffset + image.pixelDataSize,
+            image.pixelOffset + image.dataSize,
+        )
+        val header = ByteArray(IMAGE_HEADER_SIZE)
+        header.putU16(0, width)
+        header.putU16(2, height)
+        header.putU16(4, turned.format)
+        header.putU16(6, image.reserved)
+        header.putU32(8, pixels.size + trailer.size)
+        out.write(header)
+        out.write(pixels)
+        out.write(trailer)
+    }
+
+    /**
+     * Moves each widget of a turned pool so its rectangle keeps its centre, writing stored
+     * positions into [data].
+     *
+     * Not a shift of the stored coordinate: alignment codes 2 and 3 measure from the
+     * widget's *own* width, and a pool member may be aligned to another member that has
+     * just grown, so the origins are re-solved in record order exactly as `WidgetLayout`
+     * does. The half of the growth is truncated toward zero, which is antisymmetric — turn
+     * and turn back land on the starting position.
+     */
+    private fun recentrePool(
+        before: ContainerEntry,
+        after: ContainerEntry,
+        data: ByteArray,
+        pool: Set<Int>,
+        oldWidth: Int,
+        oldHeight: Int,
+        newWidth: Int,
+        newHeight: Int,
+    ) {
+        val oldPlacements = FaceRecordParser.placements(before)
+        val oldExtents = FaceRecordParser.drawnExtentsOf(before)
+        val records = FaceRecordParser.scanWidgets(after)
+        val extents = FaceRecordParser.drawnExtentsOf(after)
+        val panel = FaceRecordParser.panelSize(after)
+        val rectangles = HashMap<Int, IntArray>()
+        records.forEach { record ->
+            val extent = extents[record.ordinal] ?: DrawnExtent(0, 0)
+            val placement = WidgetLayout.placementOf(record, extent, panel, rectangles)
+            if (record.globalIndex !in pool) {
+                rectangles[record.globalIndex] = intArrayOf(placement.originX + record.x + extent.offsetX,
+                    placement.originY + record.y + extent.offsetY, extent.width, extent.height)
+                return@forEach
+            }
+            val old = oldPlacements.getValue(record.ordinal)
+            if (!old.isMovable || !placement.isMovable) {
+                throw Fit3FormatException("This widget's position cannot be measured, so its artwork cannot be turned.")
+            }
+            val oldExtent = oldExtents.getValue(record.ordinal)
+            val left = old.originX + record.x + oldExtent.offsetX + (oldWidth - newWidth) / 2
+            val top = old.originY + record.y + oldExtent.offsetY + (oldHeight - newHeight) / 2
+            val x = left - placement.originX - extent.offsetX
+            val y = top - placement.originY - extent.offsetY
+            if (x !in Short.MIN_VALUE..Short.MAX_VALUE || y !in Short.MIN_VALUE..Short.MAX_VALUE) {
+                throw Fit3FormatException("A turned widget's position must fit signed 16-bit integers.")
+            }
+            data.putU16(record.recordOffset + 0x18, x and 0xFFFF)
+            data.putU16(record.recordOffset + 0x1A, y and 0xFFFF)
+            rectangles[record.globalIndex] = intArrayOf(left, top, extent.width, extent.height)
+        }
     }
 
     /**

@@ -97,7 +97,7 @@ data class ProjectArchiveContents(
  * fresh one instead of nesting them.
  */
 object ProjectArchive {
-    const val Schema = 3
+    const val Schema = 4
 
     const val ManifestEntry = "fitface/project.json"
     const val EditedEntry = "fitface/edited.bin"

@@ -648,6 +648,14 @@ data class WidgetGuide(
     val rotationTenths: Int? = null,
     val originalRotationTenths: Int? = rotationTenths,
     val rotationKind: WidgetRotationKind? = null,
+    /** Other widgets drawing the same artwork, which a resize or a turn changes with this one. */
+    val sharedArtworkWidgets: Int = 0,
+    /**
+     * The artwork, as shipped, has no transparency, so its whole rectangle draws — and turns.
+     * Unlike [hasOpaqueBackdrop] it stays true once a turn has stored the frames with alpha
+     * for the uncovered corners.
+     */
+    val opaqueArtwork: Boolean = false,
     val duplicateSourceGlobalIndex: Int? = null,
     /** Imports are edited only in the variant where they were added. */
     val importedFromFaceId: String? = null,

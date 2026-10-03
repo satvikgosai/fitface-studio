@@ -54,6 +54,20 @@ class WidgetHitTest {
         assertNull(nextWidgetRotation(line.copy(rotationTenths = null, rotationKind = null), clockwise = true))
     }
 
+    @Test fun turnedArtworkGrowsToItsBoundsAndStepsInWholeDegrees() {
+        assertEquals(80 to 80, dev.fitface.studio.core.model.artworkBounds(80, 80, 0))
+        assertEquals(40 to 80, dev.fitface.studio.core.model.artworkBounds(80, 40, 900))
+        assertEquals(80 to 40, dev.fitface.studio.core.model.artworkBounds(80, 40, 1800))
+        assertEquals(114 to 114, dev.fitface.studio.core.model.artworkBounds(80, 80, 450))
+        assertEquals(98 to 98, dev.fitface.studio.core.model.artworkBounds(80, 80, 150))
+        val picture = guide(5, 10, 10, 80, 80).copy(rotationTenths = 0, rotationKind = WidgetRotationKind.ARTWORK)
+        assertEquals(150, nextWidgetRotation(picture, clockwise = true))
+        assertEquals(3450, nextWidgetRotation(picture, clockwise = false))
+        assertEquals(R.string.editor_rotation_whole_degrees, rotationInputError(picture, 125))
+        // Its box already is the turned artwork, so nothing is added around it.
+        assertEquals(RotationBounds(0, 0, 80, 80), picture.copy(rotationTenths = 450).visualBounds)
+    }
+
     @Test fun decimalRotationInputNormalizesWithoutDroppingPrecision() {
         assertEquals(3180, parseRotationInput("-42"))
         assertEquals(1, parseRotationInput("360.1"))

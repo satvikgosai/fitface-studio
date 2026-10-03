@@ -1014,26 +1014,28 @@ The preview approximates ROM fonts with Android fonts; it does not justify box-o
 
 ### Rotating widgets
 
-`WidgetSchema.RotationModel` declares which records can turn and what a turn rewrites.
-Every rotation is a same-size field patch: no raster, pointer, resource or image count
-changes, both CRC layers are rebuilt and the result validates. Requests are absolute
-angles; selected-style matching is strict and requested siblings are best effort, each
-keeping its own length, range or text. AOD and imports remain variant-local.
+`WidgetSchema.RotationModel` declares which records store a turnable angle; Static and
+Sprite artwork is turned by redrawing it (below). Text, line and arc rotations are
+same-size field patches: no raster, pointer, resource or image count changes, both CRC
+layers are rebuilt and the result validates. Requests are absolute angles;
+selected-style matching is strict and requested siblings are best effort, each keeping
+its own length, range, text or artwork. AOD and imports remain variant-local.
 
-| Type | Model | What turns | Census (99 faces) |
+| Type | Mechanism | What turns | Census (99 faces) |
 | --- | --- | --- | ---: |
 | Composite | `NativeAngle(+0x5C)` | Native tenths-degree angle; text, layout and resources unchanged | 427 records |
 | Rule | `Endpoints` | Endpoint vector about its midpoint, whole degrees | 84 (52 diagonal: `00004`, `00066`, `00089`, `00105`) |
 | Vector arc | `AngleRange(+0x28, +0x2A)` | Start and end together, whole degrees | 71 of 75 |
+| Static, Sprite | Redrawn artwork | Pool resampled from its originals into the turned bounds, whole degrees | 293 Statics and 1,518 Sprites off the background, RGB565 or RGB565+A |
 
-**Nothing else stores an angle.** Face `00105` looks fully rotated, but its tilted digits
+**Only Composite stores an angle.** Face `00105` looks fully rotated, but its tilted digits
 and colon are Sprite and Static frames whose *artwork* is drawn tilted, laid out on a
 staggered diagonal; its icons and dim track lines are painted into the background raster;
-its bright progress lines are Rules; its text is Composite. A Hand's `+0x24/+0x26` angles map the live reading onto
-the dial, so changing them makes the hand show the wrong value. An image arc stores an
-orientation beside a texture raster; whether that texture turns with it is unproven. Turning
-raster artwork would mean resampling it into a larger box, changing byte size and shared
-pools, and would need a persisted angle to survive the pristine-based resize. It is not offered.
+its bright progress lines are Rules; its text is Composite. `00023`'s italic digits are
+likewise drawn italic. A Hand's `+0x24/+0x26` angles map the live reading onto the dial,
+so changing them makes the hand show the wrong value. An image arc stores an orientation
+beside a texture raster; whether that texture turns with it is unproven, so neither is
+offered.
 
 #### Composite text
 
@@ -1066,8 +1068,8 @@ line at 85% stays at 85% of its shipped length. The guide reports that reference
 as `originalWidth/Height`, so `widgetResizeLadder` and the format layer agree on every rung.
 A shrunk diagonal's integer direction wanders by degrees with nobody turning it, so a
 direction within rounding of the pristine one counts as unturned. A resize keeps the start
-point and a turn keeps the midpoint, so a turn–resize–turn sequence can shift a line by a
-pixel or two while its shape returns exactly.
+point and a turn keeps the midpoint, so a turn–resize–turn sequence can shift a line by up
+to half its change in length while its shape returns exactly.
 
 #### Vector arcs
 
@@ -1077,10 +1079,62 @@ so Reset writes back the vendor's exact pair — `(270, 630)` turned to 285° is
 decreasing pairs, `(350, 110)`, are not offered: the preview reads them as a wrapped 120°,
 which the firmware has not been shown to share.
 
+#### Static and Sprite artwork
+
+No image record holds an angle, so a turn redraws the pixels and the app records the
+angle itself (`SessionLineage.artworkTurns`; persistence in
+[Architecture](architecture.md#the-project-archive)). The redraw follows resize's contract:
+
+- **Always from the originals.** Each frame is resampled with `RasterResampler` from its
+  pristine origin to the turned content's size, then turned by `RasterResampler.turn` into
+  the box `artworkBounds` gives. Quarter turns are exact permutations; other angles use
+  premultiplied bilinear sampling, so edges fade into transparent corners. Turning the last
+  result instead would compound blur and grow transparent margins on every tap.
+- **Opaque artwork turns too.** A turn uncovers corners outside the artwork. Quarter
+  turns of plain RGB565 (74 Statics, 640 Sprites) are exact permutations and stay RGB565 at
+  the same size. Any other angle stores the pool as RGB565+A: the picture's own rectangle
+  keeps alpha 255, so it turns exactly as it drew — black box and all — and only the
+  uncovered corners are clear. The watch takes each image's format from its own header
+  (GUI image-format enums 4/5/10), and `00046` ships one Static as RGB565 in three styles
+  and RGB565+A in the fourth, so a widget does not depend on its raster's format. The
+  frames grow by half again; `rebuild` still holds 4 MiB. Turning back to zero restores the
+  original format and bytes. Indexed8 cannot blend; backgrounds, Hands and frames without
+  originals are refused.
+- **The whole pool, in place.** Every widget sharing the frames turns with them (`00105`'s
+  four time digits share ten frames), image count and pointer mapping are asserted, and
+  `rebuild` holds the 4 MiB ceiling. Each widget keeps its visual centre: stored positions
+  are re-solved through `WidgetLayout`, because alignment codes 2 and 3 measure from the
+  widget's own width and pool members can be aligned to one another. The half of the growth
+  truncates toward zero, so turn-and-back returns the exact position.
+- **Turn and resize compose.** The resize ladder of turned artwork is of the turned
+  original's bounds; the guide reports them as `originalWidth/Height`. A resize redraws at
+  the saved turn, and a turn lands on the rung the pool is on now. Turning back to zero at
+  full size reproduces the shipped bytes.
+- **Keyed by artwork.** The turn is saved under the original variant and lowest original
+  image index, or the import origin, so widget removal, restore, duplication and reordering
+  keep it. Saving one moves the project to checkpoint/archive schema 4.
+
+A turned digit turns in place: the time does not swing as a group about a common centre.
+A resize keeps the top-left and a turn keeps the centre, so mixing them moves a widget —
+an 80 px picture turned 45°, halved, then turned back sits about 9 px from where it began —
+while the artwork itself stays exact. A widget removed before its artwork was turned keeps
+its saved position when restored over the larger image.
+
+A turn keeps the resize rung: the same percentage of the original, now turned. A widget
+enlarged near its limit may not fit that rung at the new angle, and then takes the largest
+rung that does instead of being refused. With every style requested, each sibling is
+resized to the selected rung's percentage of *its own* turned original, because turns are
+style-local and the selected style's pixel size would squash a sibling turned differently.
+
 `WidgetRotationTest` turns every catalogue Rule and arc and back, and walks each Rule a
-rung down while turned; `CanvasIntegrityTest` checks a turned line or arc changes only its
-own pixels. Rotation editing has software/corpus/emulator coverage; physical-watch checks
-of changed live text, clipping, turned lines and arcs, and wake behaviour remain unperformed.
+rung down while turned. `ArtworkTurnTest` covers quarter and arbitrary turns, aligned and
+shared widgets, opaque pictures, refusals and resize while turned, and turns 168 distinct
+artwork pools in the first style of the 99 faces and back to their shipped bytes. `CanvasIntegrityTest`
+checks a turned line, arc or picture changes only pixels inside rectangles that changed.
+Rotation editing has software/corpus/emulator coverage; physical-watch checks of changed
+live text, clipping, turned lines, arcs and artwork, and wake behaviour remain unperformed.
+Resized artwork with new dimensions is accepted on hardware; turned artwork, including an
+opaque pool stored with alpha, has not been sent.
 
 ### Adding or replacing backgrounds
 

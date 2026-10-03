@@ -232,6 +232,16 @@ origin pointing at a missing variant. Native bindings and dictionary prefixes st
 unchanged. Earlier schema-3 checkpoints without this resource closure retain their
 original identity-only path contract and upgrade on their next edit.
 
+Schema 4 is schema 3 plus `SessionLineage.artworkTurns`: the angle of each turned
+Static/Sprite artwork, which no byte of the container records and the pixels cannot
+reveal. It is keyed by artwork — `native:<original variant>:<lowest original image index>`
+or `import:<origin id>` — so removal, restore, duplication, reordering and added
+backgrounds need no remap; style deletion drops keys of deleted original variants and a
+commit drops keys of deleted imports. A project is written at schema 4 only while a turn
+exists and returns to 3 when every turn is reset, because readers decode with
+`ignoreUnknownKeys` and an older build would otherwise drop the turn and straighten the
+artwork on its next resize. See [format: rotating widgets](bin-format.md#rotating-widgets).
+
 The same checkpoint commits survivor identities, filtered/remapped removed records
 and active-style fallback with the edited BIN. Packaged PNG files retain pristine
 names; the editor and library resolve them through the survivor map. The library
@@ -255,7 +265,7 @@ those names earlier, but neither behaviour is the containment mechanism.
 | Unopenable pristine container | Same validation/error funnel as package download |
 | Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
 | Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions; schema 3: declared ordered style survivors and validated shared-resource closure |
-| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities, the original digest and valid saved removals |
+| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities, the original digest and valid saved removals; schema 4 also requires saved artwork turns naming existing original artwork or imports |
 
 Clamp manifest strings; an invalid selected-style name becomes no saved selection.
 After validation, creation uses the row/files cleanup contract above. Failed import

@@ -234,7 +234,8 @@ class WidgetRotationTest {
                 val name = entry.basename
                 for (guide in FaceRecordParser.widgetGuides(entry)) {
                     val kind = guide.rotationKind ?: continue
-                    if (kind == WidgetRotationKind.TEXT) continue
+                    // Text has its own sweep above, and artwork its own in `ArtworkTurnTest`.
+                    if (kind == WidgetRotationKind.TEXT || kind == WidgetRotationKind.ARTWORK) continue
                     val label = "${folder.fileName}/$name #${guide.globalIndex}"
                     fun record(c: Fit3Container) = FaceRecordParser.scanWidgets(c.entryByBasename(name))
                         .single { it.globalIndex == guide.globalIndex }

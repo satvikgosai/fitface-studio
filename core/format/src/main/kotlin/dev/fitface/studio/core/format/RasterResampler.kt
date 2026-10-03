@@ -60,6 +60,92 @@ internal object RasterResampler {
         return encode(filtered, hasAlpha, newWidth * newHeight)
     }
 
+    /** A turned frame: its samples, and the format they are in. */
+    class Turned(val format: Int, val samples: ByteArray)
+
+    /**
+     * [samples] turned clockwise by [tenths] about their centre into a
+     * `canvasWidth × canvasHeight` image, for turning a widget's artwork.
+     *
+     * Quarter turns into a canvas of the swapped size are pixel permutations, exact,
+     * reversible and in the [format] they came in — an opaque RGB565 picture stays opaque
+     * and the same size. Any other angle uncovers corners outside the picture, which must
+     * be transparent, so the result is always RGB565+A: an opaque source keeps alpha 255
+     * over its whole rectangle, which therefore turns with it, and only the corners are
+     * clear. That is the opaque picture drawn as before, tilted — the watch reads each
+     * image's format from its own header, and face `00046` ships one Static as RGB565 in
+     * three styles and RGB565+A in the fourth.
+     *
+     * Sampling is bilinear, premultiplied by alpha for the reason [resample] is, so turned
+     * edges fade into the corners instead of picking up the black transparent pixels store.
+     * The caller scales first with [resample]: turning never shrinks, so a turned glyph
+     * keeps the area-averaged quality a resize gives it.
+     */
+    fun turn(
+        samples: ByteArray,
+        format: Int,
+        width: Int,
+        height: Int,
+        tenths: Int,
+        canvasWidth: Int,
+        canvasHeight: Int,
+    ): Turned {
+        val bytesPerPixel = when (format) {
+            IMAGE_RGB565 -> 2
+            IMAGE_RGB565_ALPHA -> 3
+            else -> throw Fit3FormatException("unsupported image format 0x${format.toString(16)}")
+        }
+        if (width <= 0 || height <= 0 || canvasWidth <= 0 || canvasHeight <= 0) {
+            throw Fit3FormatException("raster dimensions must be positive")
+        }
+        if (samples.size != width * height * bytesPerPixel) {
+            throw Fit3FormatException("raster payload does not match its dimensions")
+        }
+        val angle = ((tenths % 3600) + 3600) % 3600
+        val swapped = angle == 900 || angle == 2700
+        val fits = if (swapped) canvasWidth == height && canvasHeight == width
+        else canvasWidth == width && canvasHeight == height
+        if (angle % 900 == 0 && fits) {
+            val out = ByteArray(canvasWidth * canvasHeight * bytesPerPixel)
+            for (y in 0 until canvasHeight) for (x in 0 until canvasWidth) {
+                val (sx, sy) = when (angle) {
+                    0 -> x to y
+                    900 -> y to height - 1 - x
+                    1800 -> width - 1 - x to height - 1 - y
+                    else -> width - 1 - y to x
+                }
+                val from = (sy * width + sx) * bytesPerPixel
+                samples.copyInto(out, (y * canvasWidth + x) * bytesPerPixel, from, from + bytesPerPixel)
+            }
+            return Turned(format, out)
+        }
+        val source = premultiplied(samples, hasAlpha = format == IMAGE_RGB565_ALPHA, width * height)
+        val out = FloatArray(canvasWidth * canvasHeight * 4)
+        val radians = Math.toRadians(angle / 10.0)
+        val c = kotlin.math.cos(radians); val s = kotlin.math.sin(radians)
+        for (y in 0 until canvasHeight) for (x in 0 until canvasWidth) {
+            // The output pixel's centre, turned back into the source: the inverse of a
+            // clockwise turn on a panel whose y runs down, as `WidgetPreviewComposer` does.
+            val dx = x + 0.5 - canvasWidth / 2.0
+            val dy = y + 0.5 - canvasHeight / 2.0
+            val sx = width / 2.0 + dx * c + dy * s - 0.5
+            val sy = height / 2.0 - dx * s + dy * c - 0.5
+            val x0 = floor(sx).toInt(); val y0 = floor(sy).toInt()
+            val fx = (sx - x0).toFloat(); val fy = (sy - y0).toFloat()
+            val target = (y * canvasWidth + x) * 4
+            // The four neighbours, unrolled: this runs per output pixel of every frame.
+            for (corner in 0 until 4) {
+                val px = x0 + (corner and 1); val py = y0 + (corner shr 1)
+                val weight = (if (corner and 1 == 1) fx else 1 - fx) * (if (corner shr 1 == 1) fy else 1 - fy)
+                // Outside the source is transparent, which is what fades the edges.
+                if (weight == 0f || px !in 0 until width || py !in 0 until height) continue
+                val from = (py * width + px) * 4
+                for (channel in 0 until 4) out[target + channel] += source[from + channel] * weight
+            }
+        }
+        return Turned(IMAGE_RGB565_ALPHA, encode(out, hasAlpha = true, canvasWidth * canvasHeight))
+    }
+
     /**
      * For each new pixel along one axis, the source pixels it reads and their weights, which
      * sum to one.

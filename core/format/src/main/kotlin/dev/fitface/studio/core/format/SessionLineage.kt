@@ -14,7 +14,37 @@ data class SessionLineage(
     val widgets: Map<String, Map<Int, NativeWidgetOrigin>>,
     /** Added font/dictionary closure survives deletion of its last widget-owning style. */
     val sharedResources: Map<String, String>? = null,
+    /**
+     * How far each turned artwork has been turned, in whole-degree tenths; absent at zero.
+     *
+     * The image record has no angle and the pixels cannot say what angle they were drawn
+     * at, so this is the only record of a turn — and every later resize or turn redraws
+     * from the original at this angle. Keyed by the *artwork*, [nativeArtworkKey] or
+     * [importArtworkKey], never by a widget index: raster records outlive removal,
+     * duplication and reordering, so the turn needs no remapping when widgets move.
+     */
+    val artworkTurns: Map<String, Int>? = null,
 ) {
+    fun turn(key: String): Int = artworkTurns?.get(key) ?: 0
+
+    fun withTurn(key: String, tenths: Int): SessionLineage {
+        val angle = dev.fitface.studio.core.model.normalizedRotation(tenths)
+        val next = artworkTurns.orEmpty() - key + (if (angle == 0) emptyMap() else mapOf(key to angle))
+        return copy(artworkTurns = next.ifEmpty { null })
+    }
+
+    /** Turns of artwork that no longer exists: a deleted style's, or a deleted import's. */
+    fun withoutStaleTurns(imports: WidgetImportOrigins?): SessionLineage {
+        val kept = artworkTurns.orEmpty().filterKeys { key ->
+            when {
+                key.startsWith(NATIVE) -> key.removePrefix(NATIVE).substringBeforeLast(':') in variants.values
+                key.startsWith(IMPORT) -> imports?.widgets?.any { it.id == key.removePrefix(IMPORT) } == true
+                else -> false
+            }
+        }
+        return copy(artworkTurns = kept.ifEmpty { null })
+    }
+
     fun remap(variant: String, mapping: (Int) -> Int?) = copy(widgets = widgets +
         (variant to widgets.getValue(variant).mapNotNull { (index, origin) ->
             mapping(index)?.let { it to origin }
@@ -75,6 +105,20 @@ data class SessionLineage(
         }
         WidgetImportOrigins.validateResources(original, current, expectedPaths)
         imports?.validate(original, current, expectedPaths)
+        artworkTurns?.forEach { (key, tenths) ->
+            require(tenths in 10..3590 && tenths % 10 == 0) { "A saved artwork turn is invalid." }
+            val known = when {
+                key.startsWith(NATIVE) -> {
+                    val variant = key.removePrefix(NATIVE).substringBeforeLast(':')
+                    val image = key.substringAfterLast(':').toIntOrNull()
+                    variant in variants.values && image != null &&
+                        image in FaceRecordParser.scanImages(original.entryByBasename(variant)).indices
+                }
+                key.startsWith(IMPORT) -> imports?.widgets?.any { it.id == key.removePrefix(IMPORT) } == true
+                else -> false
+            }
+            require(known) { "A saved artwork turn names artwork this face does not have." }
+        }
         if (styles.size != originalStyles.size) {
             val setting = current.entryByBasename("setting.bin")
             require(SettingRecord.parse(setting).styleCount == styles.size &&
@@ -104,15 +148,32 @@ data class SessionLineage(
         }
     }
 
-    fun retainVariants(mapping: Map<String, String>): SessionLineage = copy(
-        variants = variants.mapNotNull { (old, original) -> mapping[old]?.let { it to original } }.toMap(),
-        widgets = widgets.mapNotNull { (old, origins) -> mapping[old]?.let { it to origins } }.toMap(),
-    )
+    fun retainVariants(mapping: Map<String, String>): SessionLineage {
+        val retained = copy(
+            variants = variants.mapNotNull { (old, original) -> mapping[old]?.let { it to original } }.toMap(),
+            widgets = widgets.mapNotNull { (old, origins) -> mapping[old]?.let { it to origins } }.toMap(),
+        )
+        // Native turns name the *original* variant, which a renumbering does not change; a
+        // deleted style's artwork has no surviving variant at all.
+        val kept = artworkTurns?.filterKeys { key ->
+            !key.startsWith(NATIVE) || key.removePrefix(NATIVE).substringBeforeLast(':') in retained.variants.values
+        }
+        return retained.copy(artworkTurns = kept?.ifEmpty { null })
+    }
 
     fun withResources(original: Fit3Container, current: Fit3Container) =
         copy(sharedResources = resourceClosure(original, current))
 
     companion object {
+        private const val NATIVE = "native:"
+        private const val IMPORT = "import:"
+
+        /** A vendor artwork's turn, by its original variant and lowest original image index. */
+        fun nativeArtworkKey(originalVariant: String, imageIndex: Int) = "$NATIVE$originalVariant:$imageIndex"
+
+        /** An imported artwork's turn: each import owns its frames, shared only by its copies. */
+        fun importArtworkKey(originId: String) = "$IMPORT$originId"
+
         private fun resourceClosure(original: Fit3Container, current: Fit3Container): Map<String, String> =
             current.entries.filter { entry ->
                 entry.basename.matches(Regex("font_[A-Za-z0-9_]+\\.bin")) &&

@@ -16,12 +16,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.WidgetArrangement
 import dev.fitface.studio.core.model.WidgetCategory
 import dev.fitface.studio.core.model.WidgetGuide
+import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.WidgetRotationKind
 import dev.fitface.studio.core.model.arrangementTarget
 import dev.fitface.studio.core.model.canRotateTo
@@ -159,20 +161,43 @@ internal fun RotationControls(
                     WidgetRotationKind.TEXT -> R.string.editor_rotation_backdrop
                     WidgetRotationKind.LINE -> R.string.editor_rotation_line
                     WidgetRotationKind.ARC -> R.string.editor_rotation_arc
+                    WidgetRotationKind.ARTWORK -> R.string.editor_rotation_artwork
                 },
             ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.fitText.secondary,
         )
+        // An opaque picture's black box turns with it, which matters on a coloured face.
+        if (kind == WidgetRotationKind.ARTWORK && widget.opaqueArtwork) {
+            Text(
+                stringResource(R.string.editor_rotation_artwork_opaque),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
+        // Said before the tap, as resize says it: a shared digit pool turns every digit.
+        if (kind == WidgetRotationKind.ARTWORK && widget.sharedArtworkWidgets > 0) {
+            Text(
+                pluralStringResource(
+                    R.plurals.editor_rotation_shared,
+                    widget.sharedArtworkWidgets,
+                    widget.sharedArtworkWidgets,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
 /** Why there is nothing to turn, in terms of what the widget is rather than its type number. */
 @StringRes
-private fun unsupportedRotationReason(widget: WidgetGuide): Int = when (widget.category) {
-    WidgetCategory.IMAGE, WidgetCategory.SPRITE, WidgetCategory.ANIMATION,
-    WidgetCategory.ARC, WidgetCategory.BAR -> R.string.editor_rotation_unsupported_artwork
-    WidgetCategory.HAND -> R.string.editor_rotation_unsupported_hand
+private fun unsupportedRotationReason(widget: WidgetGuide): Int = when {
+    widget.placement == WidgetPlacement.BACKGROUND -> R.string.editor_rotation_unsupported_background
+    widget.category == WidgetCategory.HAND -> R.string.editor_rotation_unsupported_hand
+    widget.category == WidgetCategory.ARC || widget.category == WidgetCategory.BAR ->
+        R.string.editor_rotation_unsupported_gauge
+    widget.category == WidgetCategory.IMAGE || widget.category == WidgetCategory.SPRITE ||
+        widget.category == WidgetCategory.ANIMATION -> R.string.editor_rotation_unsupported_artwork
     else -> R.string.editor_rotation_unsupported
 }
 
