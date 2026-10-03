@@ -56,17 +56,8 @@ fun widgetResizeLadder(
     if (originalWidth <= 0 || originalHeight <= 0 || kind == WidgetResizeKind.NONE) {
         return emptyList()
     }
-    val widthLimit = widgetResizeLimit(originalWidth, kind)
-    val heightLimit = widgetResizeLimit(originalHeight, kind)
     return WidgetResizePercents
-        .map { percent ->
-            WidgetSize(
-                percentOfOriginal = percent,
-                width = scaledExtent(originalWidth, percent),
-                height = scaledExtent(originalHeight, percent),
-            )
-        }
-        .filter { it.width <= widthLimit && it.height <= heightLimit }
+        .mapNotNull { percent -> widgetSizeAt(originalWidth, originalHeight, percent, kind) }
         // A small widget's rungs round to the same pixel size — at 5% steps a 4×4 sprite is
         // 4×4 anywhere from 90% to 110%. Keep one rung per size so a tap always changes
         // something, and label it with the percentage nearest 100 so the extent the face
@@ -74,6 +65,29 @@ fun widgetResizeLadder(
         .groupBy { it.width to it.height }
         .map { (_, rungs) -> rungs.minBy { kotlin.math.abs(it.percentOfOriginal - 100) } }
         .sortedBy { it.area }
+}
+
+/**
+ * One rung of [widgetResizeLadder], or null where it is over [widgetResizeLimit].
+ *
+ * Public so a turned Rule can land on the same percentage of its new extent: the format
+ * layer has to compute exactly the size the ladder would offer, or the editor re-offers it.
+ */
+fun widgetSizeAt(
+    originalWidth: Int,
+    originalHeight: Int,
+    percent: Int,
+    kind: WidgetResizeKind = WidgetResizeKind.RASTER,
+): WidgetSize? {
+    if (originalWidth <= 0 || originalHeight <= 0 || kind == WidgetResizeKind.NONE) return null
+    return WidgetSize(
+        percentOfOriginal = percent,
+        width = scaledExtent(originalWidth, percent),
+        height = scaledExtent(originalHeight, percent),
+    ).takeIf {
+        it.width <= widgetResizeLimit(originalWidth, kind) &&
+            it.height <= widgetResizeLimit(originalHeight, kind)
+    }
 }
 
 private fun scaledExtent(extent: Int, percent: Int): Int =

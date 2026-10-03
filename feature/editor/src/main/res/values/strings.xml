@@ -110,21 +110,16 @@
 
     <!-- Selection panel -->
     <string name="editor_selection_widget">@string/ui_widget_number</string>
-    <!-- The selection action bar under the face. Every widget edit lives here now; the
-         inspector keeps the record's facts and is reached from the "more" menu. -->
+    <!-- The selection action bar under the face: stepped edits are one tap each here, and
+         values that are set rather than stepped live in Edit widget, behind its last button. -->
     <string name="editor_selection_facts">#%1$d · %2$d×%3$d · x %4$d y %5$d</string>
     <string name="editor_action_smaller_a11y">Make this widget smaller</string>
     <string name="editor_action_larger_a11y">Make this widget larger</string>
-    <string name="editor_action_color_a11y">Colour</string>
-    <!-- The scope toggle, as a tray button. Its glyph is the rail's own Styles mark and
-         its tint is the state, so the label has to say which state that is. -->
-    <string name="editor_action_scope_on_a11y">Editing all %1$d styles. Tap to edit only this one.</string>
-    <string name="editor_action_scope_off_a11y">Editing this style only. Tap to edit all %1$d.</string>
-    <string name="editor_action_scope_fixed_a11y">This edit reaches one variant and cannot be widened</string>
-    <!-- Shown in the colour menu when the record carries no colour field at all, so the
-         control says why it can do nothing rather than being silently absent. -->
-    <string name="editor_action_no_color">Colour comes from this widget’s artwork.</string>
-    <string name="editor_action_record_details">Record details</string>
+    <string name="editor_action_record_details">Edit widget</string>
+    <!-- The set tray's scope label, beside the picked numbers. A status, not a button:
+         the switch is in Edit widget. Upper-cased by MicroLabel. -->
+    <string name="editor_tray_scope_all">All styles</string>
+    <string name="editor_tray_scope_one">%1$s only</string>
     <!-- One line at 320dp, which is what the selection tray can spare: it sits under the
          face and every line it takes is a line the face loses. -->
     <string name="editor_nudge_hint">tap 1 px · hold to run · drag on the face</string>
@@ -199,7 +194,6 @@
     <string name="editor_widgets_set_edit">Edit on canvas</string>
     <string name="editor_selection_set_title">%1$d selected</string>
     <string name="editor_select_multiple">Select multiple widgets</string>
-    <string name="editor_selection_done">Done</string>
     <string name="editor_add_to_selection">Add widget #%1$d to selection</string>
     <string name="editor_remove_from_selection">Remove widget #%1$d from selection</string>
     <string name="editor_selection_clear">@string/ui_clear_selection</string>
@@ -483,7 +477,11 @@
     <string name="editor_bg_import_replace">Replace background</string>
     <string name="editor_bg_import_add">Add background</string>
     <string name="editor_rotation">Rotate widget</string>
-    <string name="editor_rotation_unsupported">Rotation is available for composite text. This widget type has no supported rotation control yet.</string>
+    <string name="editor_rotation_unsupported">This widget has no angle setting on the watch.</string>
+    <string name="editor_rotation_unsupported_artwork">This widget is a picture with no angle setting. Tilted widgets on other faces have the tilt drawn into their artwork.</string>
+    <string name="editor_rotation_unsupported_hand">A hand already turns to show its reading, so it has no separate angle.</string>
+    <string name="editor_rotation_left">Rotate left 15°</string>
+    <string name="editor_rotation_right">Rotate right 15°</string>
     <string name="editor_rotation_current">Current: %1$s° · Original: %2$s°</string>
     <string name="editor_rotation_degrees">Angle in degrees</string>
     <string name="editor_rotation_reset">Reset rotation</string>
@@ -492,6 +490,9 @@
     <string name="editor_rotation_scope">Applies to: %1$s</string>
     <string name="editor_rotation_invalid">Enter degrees with at most one decimal place.</string>
     <string name="editor_rotation_too_large">This text box is too large to rotate safely. You can set its angle to zero.</string>
+    <string name="editor_rotation_whole_degrees">Lines and arcs turn in whole degrees.</string>
+    <string name="editor_rotation_line">Lines turn about their middle and keep their length and thickness.</string>
+    <string name="editor_rotation_arc">Arcs turn about their centre. Progress still runs from the start of the arc to its end.</string>
     <string name="editor_rotation_backdrop">Tilted text has a black rectangular backdrop. Check the canvas after applying. The sample font may differ from your watch.</string>
     <string name="editor_arrange">Arrange layers</string>
     <string name="editor_arrange_scope">Applies to: %1$s only</string>
@@ -503,6 +504,9 @@
     <string name="editor_arrange_boundaries">Full-face background layers stay fixed. Unavailable actions are at a layer boundary. A move that changes widget alignment will be refused.</string>
     <string name="editor_manage_styles">Manage styles</string>
     <string name="editor_style_delete_action">Delete %1$s</string>
+    <string name="editor_style_delete_title">Delete %1$s?</string>
+    <string name="editor_style_delete_confirm">Delete style</string>
+    <string name="editor_style_delete_one_warning">This permanently removes %1$s and its edits from this project. Reset project restores the original styles but discards all other edits too.</string>
     <string name="editor_styles_delete_title">Delete selected styles?</string>
     <string name="editor_styles_review_deletion">Review deletion</string>
     <string name="editor_styles_delete_confirm">Delete styles</string>

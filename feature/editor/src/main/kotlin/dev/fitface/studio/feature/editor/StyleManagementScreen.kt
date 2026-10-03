@@ -19,13 +19,13 @@ import dev.fitface.studio.core.model.*
 import dev.fitface.studio.core.ui.*
 
 @Composable
-internal fun StyleManagementRoute(projectId: Long, protectedVariant: String? = null, initial: String? = null,
+internal fun StyleManagementRoute(projectId: Long, protectedVariant: String? = null,
     capacity: ContainerCapacity? = null, onDismiss: () -> Unit, onDeleted: (EditorSnapshot) -> Unit,
     viewModel: StyleManagementViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val scroll = rememberScrollState()
     LaunchedEffect(state.confirming) { scroll.scrollTo(0) }
-    LaunchedEffect(Unit) { viewModel.open(projectId, protectedVariant, initial) }
+    LaunchedEffect(Unit) { viewModel.open(projectId, protectedVariant, initial = null) }
     LaunchedEffect(state.deleted) { state.deleted?.let { viewModel.close(); onDeleted(it) } }
     val dismiss = { if (!state.busy) { viewModel.close(); onDismiss() } }
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -99,4 +99,62 @@ internal fun StyleManagementRoute(projectId: Long, protectedVariant: String? = n
             }
         }
     }
+}
+
+/**
+ * A style's ✕ on the Styles page, confirmed the way removing a widget or deleting a project
+ * is: one dialog, Cancel or the destructive action.
+ *
+ * It says what is particular to a style before anything is deleted — the bytes it frees,
+ * how the remaining styles are renumbered and which becomes active — from the same review
+ * Manage styles uses, so the figures are the container's own rather than estimates.
+ * [protectedVariant] is a style a pending, unapplied edit still needs.
+ */
+@Composable
+internal fun DeleteStyleDialog(projectId: Long, style: String, protectedVariant: String?,
+    onDismiss: () -> Unit, onDeleted: (EditorSnapshot) -> Unit,
+    viewModel: StyleManagementViewModel = hiltViewModel()) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.open(projectId, protectedVariant, initial = style, confirm = true) }
+    LaunchedEffect(state.deleted) { state.deleted?.let { viewModel.close(); onDeleted(it) } }
+    val dismiss = { if (!state.busy) { viewModel.close(); onDismiss() } }
+    val label = variantLabel(style)
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text(stringResource(R.string.editor_style_delete_title, label)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                state.review?.let { review ->
+                    val snapshot = review.snapshot
+                    when {
+                        style == state.protectedVariant -> Text(stringResource(R.string.editor_style_protected))
+                        style !in state.chosen -> Text(stringResource(R.string.editor_style_keep_one))
+                        else -> {
+                            Text(stringResource(R.string.editor_style_reclaims, review.reclaimableBytes.getValue(style)))
+                            val mapping = survivingStyleNames(snapshot.styleNames, setOf(style))
+                            val renamed = mapping.filter { (old, next) -> old != next }
+                            if (renamed.isNotEmpty()) {
+                                Text(stringResource(R.string.editor_style_renumbering))
+                                renamed.forEach { (old, next) -> Text("${variantLabel(old)} → ${variantLabel(next)}") }
+                            }
+                            Text(stringResource(R.string.editor_style_active_after, variantLabel(survivingActiveStyle(
+                                snapshot.styleNames, mapping, snapshot.activeStyleName))))
+                            Text(stringResource(R.string.editor_style_delete_one_warning, label),
+                                color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = viewModel::delete, enabled = !state.busy && state.confirming) {
+                Text(stringResource(R.string.editor_style_delete_confirm), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = dismiss, enabled = !state.busy) { Text(stringResource(R.string.editor_cancel)) }
+        },
+    )
 }

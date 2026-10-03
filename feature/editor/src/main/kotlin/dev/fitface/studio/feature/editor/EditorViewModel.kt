@@ -103,7 +103,7 @@ data class EditorUiState(
     val selectedWidgetIndex: Int? = null,
     /**
      * Selection mode, in pick order: one or more items, or empty when inactive.
-     * A singleton stays in this mode until Done/Clear, so the next tap can add an item.
+     * A singleton stays in this mode until Clear, so the next tap can add an item.
      * [selectedWidgetIndex] is null whenever selection mode is active.
      */
     val multiSelection: List<Int> = emptyList(),
@@ -369,16 +369,8 @@ class EditorViewModel @Inject constructor(
         mutableState.value = current.copy(multiSelection = next, selectedWidgetIndex = null)
     }
 
-    fun finishSelection() {
-        val current = mutableState.value
-        if (current.isWorking) return
-        val index = current.multiSelection.singleOrNull()
-        mutableState.value = current.copy(multiSelection = emptyList(), selectedWidgetIndex = index,
-            applyWidgetEditsToAllStyles = current.applyWidgetEditsToAllStyles &&
-                current.snapshot?.widgets?.singleOrNull { it.globalIndex == index }?.importedFromFaceId == null)
-    }
-
     fun clearSelection() {
+        if (mutableState.value.isWorking) return
         mutableState.value = mutableState.value.copy(
             multiSelection = emptyList(),
             selectedWidgetIndex = null,
@@ -944,7 +936,7 @@ class EditorViewModel @Inject constructor(
         val snapshot = current.snapshot ?: return
         val widget = snapshot.widgets.singleOrNull { it.globalIndex == current.selectedWidgetIndex } ?: return
         val angle = dev.fitface.studio.core.model.normalizedRotation(angleTenths)
-        if (widget.rotationTenths == null || widget.rotationTenths == angle) return
+        if (widget.rotationTenths == angle || !dev.fitface.studio.core.model.canRotateTo(widget, angle)) return
         operate {
             repository.rotateWidget(snapshot.selectedVariant.basename, widget.globalIndex,
                 widget.sequenceId, widget.x, widget.y, angle, current.applyWidgetEditsToAllStyles)

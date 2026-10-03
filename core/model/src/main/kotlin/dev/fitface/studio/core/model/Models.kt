@@ -640,9 +640,14 @@ data class WidgetGuide(
     val hasOpaqueBackdrop: Boolean = false,
     val colorArgb: Int?,
     val originalColorArgb: Int? = colorArgb,
-    /** Raw native angle; null when this type has no supported rotation field. */
+    /**
+     * The angle a rotation edits, in tenths; null when this widget cannot be turned.
+     * [rotationKind] says what the number is: a Composite's raw native angle, a Rule's
+     * direction or a vector arc's start.
+     */
     val rotationTenths: Int? = null,
     val originalRotationTenths: Int? = rotationTenths,
+    val rotationKind: WidgetRotationKind? = null,
     val duplicateSourceGlobalIndex: Int? = null,
     /** Imports are edited only in the variant where they were added. */
     val importedFromFaceId: String? = null,

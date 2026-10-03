@@ -44,6 +44,7 @@ import dev.fitface.studio.core.format.WidgetImportOrigin
 import dev.fitface.studio.core.format.WidgetImportOrigins
 import dev.fitface.studio.core.format.WidgetImporter
 import dev.fitface.studio.core.format.WidgetPristine
+import dev.fitface.studio.core.format.WidgetRecord
 import dev.fitface.studio.core.format.pack
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import dev.fitface.studio.core.model.DiagnosticsLog
@@ -71,6 +72,7 @@ import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.WidgetDonor
+import dev.fitface.studio.core.model.WidgetRotationKind
 import dev.fitface.studio.core.model.WidgetDonorVariant
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetImportPreview
@@ -1409,8 +1411,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 val current = requireSession()
                 val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
                 val targets = targetIndices.keys.toList()
+                // A Rule turns at its current resize rung, measured from its pristine line.
                 val edit = FaceEditor.rotateWidget(current.currentContainer, targets, globalIndex,
-                    sequenceId, x, y, angleTenths, targetIndices)
+                    sequenceId, x, y, angleTenths, targetIndices, pristine = current.originalContainer,
+                    pristineWidgets = current.pristineWidgets(targets, styleName, globalIndex))
                 commit(current, edit.container, EditAuditSummary(edit.changedPayloadBytes,
                     edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName)
             }
@@ -2685,6 +2689,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     .associateBy { it.globalIndex }
             }
 
+        private val originalRecordCache = mutableMapOf<String, Map<Int, WidgetRecord>>()
+
+        private fun originalRecordsFor(styleName: String): Map<Int, WidgetRecord> =
+            originalRecordCache.getOrPut(lineage?.variants?.get(styleName) ?: styleName) {
+                FaceRecordParser.scanWidgets(originalEntry(styleName)).associateBy { it.globalIndex }
+            }
+
         fun snapshot(requestedStyle: String? = null): EditorSnapshot {
             val styles = styleEntries()
             if (styles.isEmpty()) throw IllegalArgumentException("No editable style entries found")
@@ -2725,12 +2736,24 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // by identity rather than by index — see `originalWidgetSources`.
             val originalSources = savedSources?.mapNotNull { (index, origin) -> origin.originalIndex?.let { index to it } }?.toMap()
                 ?: FaceRecordParser.originalWidgetSources(selected, originalStyle, importedIndices)
+            val currentRecords by lazy(LazyThreadSafetyMode.NONE) {
+                FaceRecordParser.scanWidgets(selected).associateBy { it.globalIndex }
+            }
             val widgets = FaceRecordParser.widgetGuides(selected).map { widget ->
                 val duplicateSource = duplicateSources[widget.globalIndex]
                 val imported = importOrigins?.find(selected.basename, widget.globalIndex)
                 val original = imported?.let { FaceRecordParser.widgetGuides(it.entry(selected)).single() }
                     ?: originalSources[widget.globalIndex]?.let(originalWidgets::get)
                     ?: duplicateSource?.let(originalWidgets::get)
+                // A Rule's ladder and angle are measured from its pristine line turned to
+                // where it points now, exactly as its resize and rotation are — otherwise a
+                // turned line's rectangle reads as an off-ladder size and its angle as noise.
+                val line = if (widget.rotationKind != WidgetRotationKind.LINE) null else {
+                    (imported?.let { FaceRecordParser.scanWidgets(it.entry(selected)).single() }
+                        ?: (originalSources[widget.globalIndex] ?: duplicateSource)
+                            ?.let(originalRecordsFor(selected.basename)::get))
+                        ?.let { FaceRecordParser.lineAnchor(currentRecords.getValue(widget.globalIndex), it) }
+                }
                 widget.copy(
                     originalX = original?.x ?: widget.x,
                     originalY = original?.y ?: widget.y,
@@ -2743,10 +2766,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     // A resize follows the new raster immediately; the reference
                     // render still shows the old one, so the composer needs the
                     // extent it was drawn at to know what to clear.
-                    originalWidth = original?.width ?: widget.width,
-                    originalHeight = original?.height ?: widget.height,
+                    originalWidth = line?.width ?: original?.width ?: widget.width,
+                    originalHeight = line?.height ?: original?.height ?: widget.height,
                     originalColorArgb = original?.colorArgb ?: widget.colorArgb,
-                    originalRotationTenths = original?.rotationTenths ?: widget.rotationTenths,
+                    rotationTenths = line?.directionTenths ?: widget.rotationTenths,
+                    originalRotationTenths = line?.originalDirectionTenths
+                        ?: original?.rotationTenths ?: widget.rotationTenths,
                     duplicateSourceGlobalIndex = duplicateSource,
                     importedFromFaceId = imported?.faceId,
                 )

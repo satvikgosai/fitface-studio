@@ -226,7 +226,7 @@ class WidgetImportRepositoryTest {
 
     @Test fun reorderedCompositeUsesOriginalCounterpartsForAllStyleRotationAndDuplication() = runBlocking {
         var s = repository.openPackage(face("00105"))
-        val original = s.widgets.first { it.rotationTenths != null }
+        val original = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
         s = repository.reorderWidget("style0.bin", original.globalIndex, original.type, original.sequenceId,
             original.x, original.y, s.widgets.last().globalIndex)
         val reordered = s.widgets.last()
@@ -249,7 +249,7 @@ class WidgetImportRepositoryTest {
 
     @Test fun failedReorderRestoresBothTheBytesAndNativeIdentitiesInMemoryAndOnDisk() = runBlocking {
         var s = repository.openPackage(face("00105"))
-        val original = s.widgets.first { it.rotationTenths != null }
+        val original = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
         s = repository.reorderWidget("style0.bin", original.globalIndex, original.type, original.sequenceId,
             original.x, original.y, s.widgets.last().globalIndex)
         val expected = repository.prepareDirectInstall().copyBytes()
@@ -313,7 +313,7 @@ class WidgetImportRepositoryTest {
 
     @Test fun legacyRemovedWidgetGetsAnIdentityBeforeTheNextEditChangesIndices() = runBlocking {
         var s = repository.openPackage(face("00105"))
-        val native = s.widgets.first { it.rotationTenths != null }
+        val native = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
         s = repository.duplicateWidget("style0.bin", native.globalIndex, native.type, native.sequenceId, native.x, native.y, false)
         val copy = s.widgets.last()
         s = repository.removeWidget("style0.bin", copy.globalIndex, copy.type, copy.sequenceId, copy.x, copy.y, false, false)
@@ -400,7 +400,7 @@ class WidgetImportRepositoryTest {
 
     @Test fun compositeRotationPreservesOriginalThroughDuplicateReopenAndReset() = runBlocking {
         val pristine = repository.openPackage(face("00105"))
-        val widget = pristine.widgets.first { it.rotationTenths != null }
+        val widget = pristine.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
         assertEquals(3180, widget.rotationTenths)
         var s = repository.rotateWidget("style0.bin", widget.globalIndex, widget.sequenceId,
             widget.x, widget.y, 900, false)
@@ -419,6 +419,33 @@ class WidgetImportRepositoryTest {
         assertEquals(3180, s.widgets.last().originalRotationTenths)
         s = repository.resetEdits()
         assertEquals(pristine.widgets.size, s.widgets.size)
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun aTurnedRuleKeepsItsTurnAndLadderThroughResizeReopenAndReset() = runBlocking {
+        val pristine = repository.openPackage(face("00105"))
+        val line = pristine.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.LINE }
+        val shipped = line.rotationTenths!!
+        var s = repository.rotateWidget("style0.bin", line.globalIndex, line.sequenceId, line.x, line.y,
+            shipped + 150, false)
+        var turned = s.widgets.single { it.globalIndex == line.globalIndex }
+        assertEquals(dev.fitface.studio.core.model.normalizedRotation(shipped + 150), turned.rotationTenths)
+        assertEquals(shipped, turned.originalRotationTenths)
+        assertEquals(100, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        assertEquals(listOf("style0.bin"), s.audit?.changedStyles)
+        val smaller = requireNotNull(dev.fitface.studio.core.model.nextWidgetSize(turned, grow = false))
+        s = repository.resizeWidget("style0.bin", turned.globalIndex, turned.type, turned.sequenceId,
+            turned.x, turned.y, smaller.width, smaller.height, false)
+        turned = s.widgets.single { it.globalIndex == line.globalIndex }
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        assertEquals(dev.fitface.studio.core.model.normalizedRotation(shipped + 150), turned.rotationTenths)
+        repository = repository(); s = repository.openProject(s.projectId)
+        turned = s.widgets.single { it.globalIndex == line.globalIndex }
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        s = repository.rotateWidget("style0.bin", turned.globalIndex, turned.sequenceId, turned.x, turned.y,
+            shipped, false)
+        assertEquals(shipped, s.widgets.single { it.globalIndex == line.globalIndex }.rotationTenths)
+        s = repository.resetEdits()
         assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
     }
 

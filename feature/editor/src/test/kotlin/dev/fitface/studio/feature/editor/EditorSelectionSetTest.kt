@@ -107,7 +107,7 @@ class EditorSelectionSetTest {
         assertEquals(1, vm.state.value.selectedWidgetIndex)
         vm.beginSelection(1); vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FORWARD); settle()
         assertEquals(2, repo.reorders.size)
-        vm.finishSelection(); vm.selectWidget(0)
+        vm.clearSelection(); vm.selectWidget(0)
         vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
         assertEquals(2, repo.reorders.size)
     }
@@ -124,7 +124,8 @@ class EditorSelectionSetTest {
     }
 
     @Test fun rotationKeepsSelectionClearsReviewAndHonoursScopeAndNoOp() {
-        val (vm, repo) = opened(listOf(widget(1, 20, 20).copy(type = 13, rotationTenths = 0)))
+        val (vm, repo) = opened(listOf(widget(1, 20, 20).copy(type = 13, rotationTenths = 0,
+            rotationKind = dev.fitface.studio.core.model.WidgetRotationKind.TEXT)))
         vm.selectWidget(1)
         vm.rotateSelectedWidget(3600); settle()
         assertTrue(repo.rotations.isEmpty())
@@ -137,6 +138,16 @@ class EditorSelectionSetTest {
         assertFalse(vm.state.value.isWorking)
         vm.beginSelection(1); vm.rotateSelectedWidget(900); settle()
         assertEquals(listOf(3179), repo.rotations)
+    }
+
+    @Test fun aLineIsTurnedInWholeDegreesAndAFractionIsNotSent() {
+        val (vm, repo) = opened(listOf(widget(1, 20, 20).copy(type = 7, rotationTenths = 350,
+            rotationKind = dev.fitface.studio.core.model.WidgetRotationKind.LINE)))
+        vm.selectWidget(1)
+        vm.rotateSelectedWidget(355); settle()
+        assertTrue(repo.rotations.isEmpty())
+        vm.rotateSelectedWidget(500); settle()
+        assertEquals(listOf(500), repo.rotations)
     }
 
     @Test fun unsupportedWidgetsDoNotSendRotationEdits() {
@@ -176,12 +187,14 @@ class EditorSelectionSetTest {
         assertNull(vm.state.value.selectedWidgetIndex)
     }
 
-    @Test fun doneReturnsASingletonToOrdinaryEditingAndClearDropsIt() {
+    @Test fun clearLeavesSelectionModeAndTheNextTapEditsNormally() {
         val (vm, _) = opened()
         vm.beginSelection(3)
-        vm.finishSelection()
-        assertEquals(3, vm.state.value.selectedWidgetIndex)
+        vm.clearSelection()
+        assertNull(vm.state.value.selectedWidgetIndex)
         assertTrue(vm.state.value.multiSelection.isEmpty())
+        vm.selectWidget(3)
+        assertEquals(3, vm.state.value.selectedWidgetIndex)
         vm.beginSelection(3)
         vm.clearSelection()
         assertNull(vm.state.value.selectedWidgetIndex)
@@ -245,7 +258,7 @@ class EditorSelectionSetTest {
         assertTrue(vm.state.value.isWorking)
         vm.beginSelection(2)
         vm.toggleInSelection(2)
-        vm.finishSelection()
+        vm.clearSelection()
         assertEquals(listOf(1), vm.state.value.multiSelection)
         repository.parkedDuplicate!!.complete(Unit)
         settle()

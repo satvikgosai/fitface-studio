@@ -60,4 +60,16 @@ class StyleManagementViewModelTest {
         pending.complete(snapshot.copy(isDirty = true)); settle()
         coVerify(exactly = 1) { repository.deleteStyles(any(), any()) }
     }
+    @Test fun oneStylesDeleteGoesStraightToConfirmationButNotForAProtectedStyle() {
+        vm.open(7, null, "style2.bin", confirm = true); settle()
+        assertEquals(setOf("style2.bin"), vm.state.value.chosen)
+        assertTrue(vm.state.value.confirming)
+        vm.close()
+        // A style a pending background still needs is not chosen, so nothing can confirm.
+        vm.open(7, "style2.bin", "style2.bin", confirm = true); settle()
+        assertTrue(vm.state.value.chosen.isEmpty())
+        assertFalse(vm.state.value.confirming)
+        vm.delete(); settle()
+        coVerify(exactly = 0) { repository.deleteStyles(any(), any()) }
+    }
 }

@@ -1012,16 +1012,34 @@ one widget per style, 58 serve 2–5, and 32 are shared between numbered styles 
 AOD. Changing one needs a separate shared-resource model and supported-family sizes.
 The preview approximates ROM fonts with Android fonts; it does not justify box-only scaling.
 
-### Rotating Composite text
+### Rotating widgets
 
-The editor changes only the native unsigned tenths-degree angle at Composite
-`+0x5C`, declared by `WidgetSchema.rotation`, then rebuilds both CRC layers and
-validates. Reads retain raw vendor values; requests normalize to `[0, 3600)`.
-Position, alignment, text programs, font, resources and container size stay intact.
-Selected-style matching is strict; requested siblings are best effort. AOD and
-imports remain variant-local. The original native/donor angle survives reopening
-and is offered as Reset rotation. Payload identity excludes this mutable angle
-while retaining the neighbouring fields.
+`WidgetSchema.RotationModel` declares which records can turn and what a turn rewrites.
+Every rotation is a same-size field patch: no raster, pointer, resource or image count
+changes, both CRC layers are rebuilt and the result validates. Requests are absolute
+angles; selected-style matching is strict and requested siblings are best effort, each
+keeping its own length, range or text. AOD and imports remain variant-local.
+
+| Type | Model | What turns | Census (99 faces) |
+| --- | --- | --- | ---: |
+| Composite | `NativeAngle(+0x5C)` | Native tenths-degree angle; text, layout and resources unchanged | 427 records |
+| Rule | `Endpoints` | Endpoint vector about its midpoint, whole degrees | 84 (52 diagonal: `00004`, `00066`, `00089`, `00105`) |
+| Vector arc | `AngleRange(+0x28, +0x2A)` | Start and end together, whole degrees | 71 of 75 |
+
+**Nothing else stores an angle.** Face `00105` looks fully rotated, but its tilted digits
+and colon are Sprite and Static frames whose *artwork* is drawn tilted, laid out on a
+staggered diagonal; its icons and dim track lines are painted into the background raster;
+its bright progress lines are Rules; its text is Composite. A Hand's `+0x24/+0x26` angles map the live reading onto
+the dial, so changing them makes the hand show the wrong value. An image arc stores an
+orientation beside a texture raster; whether that texture turns with it is unproven. Turning
+raster artwork would mean resampling it into a larger box, changing byte size and shared
+pools, and would need a persisted angle to survive the pristine-based resize. It is not offered.
+
+#### Composite text
+
+Reads retain raw vendor values; requests normalize to `[0, 3600)`. The original
+native/donor angle survives reopening and is offered as Reset rotation. Payload identity
+excludes this mutable angle while retaining the neighbouring fields.
 
 Nonzero angles use the firmware's **opaque black RGB888 text canvas**, rotated
 about the integer centre of the stored box. The preview mirrors that behaviour
@@ -1033,10 +1051,36 @@ moved gradually inward.
 The editor limits each newly rotated box to 102,912 pixels (308,736 RGB888 bytes)
 and at most 1,024 pixels per side. This is an editor allocation policy, **not a
 measured total watch RAM budget**. Oversized boxes can still be set to zero.
-Hand sweeps, arc ranges and raster transforms are different capabilities and are
-not exposed as text rotation. Rotation editing has software/corpus coverage;
-physical-watch checks of changed live text, clipping and wake behaviour remain
-unperformed.
+
+#### Rules
+
+A Rule has no angle field: its direction is that of `x,y → +0x1C/+0x1E`, reported in whole
+degrees because integer endpoints cannot hold a finer angle on a panel-sized line. A turn
+rewrites both endpoints about their midpoint (kept to half a pixel) and keeps the colour
+and the `+0x31` flag byte.
+
+Rotation and resize share `RuleGeometry` and one reference: **the pristine line turned to
+the current direction**. Resize scales that span rather than the raw pristine one, so a
+resize no longer undoes a turn; a turn lands on the resize rung the line is on now, so a
+line at 85% stays at 85% of its shipped length. The guide reports that reference's extent
+as `originalWidth/Height`, so `widgetResizeLadder` and the format layer agree on every rung.
+A shrunk diagonal's integer direction wanders by degrees with nobody turning it, so a
+direction within rounding of the pristine one counts as unturned. A resize keeps the start
+point and a turn keeps the midpoint, so a turn–resize–turn sequence can shift a line by a
+pixel or two while its shape returns exactly.
+
+#### Vector arcs
+
+The new start is the requested angle in `[0, 360)` and the end keeps the stored distance,
+so Reset writes back the vendor's exact pair — `(270, 630)` turned to 285° is `(285, 645)`.
+45 catalogue arcs store that full ring; the largest end the editor writes is 719. The four
+decreasing pairs, `(350, 110)`, are not offered: the preview reads them as a wrapped 120°,
+which the firmware has not been shown to share.
+
+`WidgetRotationTest` turns every catalogue Rule and arc and back, and walks each Rule a
+rung down while turned; `CanvasIntegrityTest` checks a turned line or arc changes only its
+own pixels. Rotation editing has software/corpus/emulator coverage; physical-watch checks
+of changed live text, clipping, turned lines and arcs, and wake behaviour remain unperformed.
 
 ### Adding or replacing backgrounds
 

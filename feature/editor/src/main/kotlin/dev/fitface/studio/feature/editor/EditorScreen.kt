@@ -15,7 +15,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,7 +49,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -150,10 +148,8 @@ import dev.fitface.studio.core.ui.FitDetails
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
 import dev.fitface.studio.core.ui.FitChip
-import dev.fitface.studio.core.ui.FitDropdownMenu
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.FitIconButton
-import dev.fitface.studio.core.ui.FitMenuEntry
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.FitTopBar
 import dev.fitface.studio.core.ui.MicroLabel
@@ -275,7 +271,6 @@ fun EditorRoute(
         onWidget = viewModel::selectWidget,
         selection = SelectionActions(
             onBegin = viewModel::beginSelection,
-            onDone = viewModel::finishSelection,
             onClear = viewModel::clearSelection,
             onNudge = viewModel::nudgeSelection,
             onDuplicate = viewModel::duplicateSelection,
@@ -428,13 +423,22 @@ private fun EditorScreen(
     var importingBackground by rememberSaveable { mutableStateOf(false) }
 
     val snapshot = state.snapshot
+    // Two ways to delete styles. Manage styles is for recovering space, where several may
+    // need to go and the style being edited is kept for the pending edit; a style's own ✕ on
+    // the Styles page confirms that one style, and protects it only while an unapplied
+    // background still needs it.
     var managingStyles by rememberSaveable { mutableStateOf(false) }
     var deletingStyle by rememberSaveable { mutableStateOf<String?>(null) }
     if (managingStyles && snapshot != null) StyleManagementRoute(snapshot.projectId,
-        initial = deletingStyle, capacity = state.capacity,
-        protectedVariant = snapshot.selectedVariant.basename.takeIf { deletingStyle == null || state.pendingImage != null },
+        capacity = state.capacity, protectedVariant = snapshot.selectedVariant.basename,
         onDismiss = { managingStyles = false },
         onDeleted = { managingStyles = false; onStylesDeleted(it) })
+    deletingStyle?.let { style ->
+        if (snapshot != null) DeleteStyleDialog(snapshot.projectId, style,
+            protectedVariant = snapshot.selectedVariant.basename.takeIf { state.pendingImage != null },
+            onDismiss = { deletingStyle = null },
+            onDeleted = { deletingStyle = null; onStylesDeleted(it) })
+    }
     if ((importing || importingBackground) && snapshot != null) WidgetImportRoute(snapshot,
         backgroundMode = importingBackground,
         onStylesDeleted = onStylesDeleted,
@@ -448,16 +452,6 @@ private fun EditorScreen(
     val selected = snapshot?.widgets?.singleOrNull {
         it.globalIndex == state.selectedWidgetIndex
     }
-    var rotating by rememberSaveable(snapshot?.selectedVariant?.basename, selected?.globalIndex) { mutableStateOf(false) }
-    if (rotating && snapshot != null && selected != null) RotationDialog(
-        selected, snapshot, state.applyWidgetEditsToAllStyles, !state.isWorking,
-        onRotate = { rotating = false; onRotateWidget(it) }, onDismiss = { rotating = false },
-    )
-    var arranging by rememberSaveable(snapshot?.selectedVariant?.basename, selected?.globalIndex) { mutableStateOf(false) }
-    if (arranging && snapshot != null && selected != null) ArrangementDialog(
-        selected, snapshot, !state.isWorking,
-        onArrange = { arranging = false; onArrangeWidget(it) }, onDismiss = { arranging = false },
-    )
     // No redirect any more: Install is one page, so there is nowhere to be quietly sent
     // instead. Arriving marks the preview reviewed, which is what arms the send button,
     // and `InstallWorkspace` re-marks it on every snapshot so an edit made on the page
@@ -528,7 +522,7 @@ private fun EditorScreen(
                     Column(Modifier.padding(horizontal = 16.dp)) {
                         Text(stringResource(R.string.editor_style_capacity_deficit, capacity.deficit),
                             style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { deletingStyle = null; managingStyles = true }, enabled = !state.isWorking) {
+                        TextButton(onClick = { managingStyles = true }, enabled = !state.isWorking) {
                             Text(stringResource(R.string.editor_manage_styles))
                         }
                     }
@@ -557,11 +551,12 @@ private fun EditorScreen(
                         onRestoreWidget = onRestoreWidget,
                         onImportWidget = { importing = true },
                         onImportBackground = { importingBackground = true },
-                        onManageStyles = { deletingStyle = it; managingStyles = true },
+                        onManageStyles = { managingStyles = true },
+                        onDeleteStyle = { deletingStyle = it },
                         onResizeWidget = onResizeWidget,
                         onWidgetColor = onWidgetColor,
-                        onOpenRotation = { rotating = true },
-                        onOpenArrangement = { arranging = true },
+                        onRotateWidget = onRotateWidget,
+                        onArrangeWidget = onArrangeWidget,
                         onSyncThumbnail = onSyncThumbnail,
                         onTintCyan = onTintCyan,
                         onTintMagenta = onTintMagenta,
@@ -943,18 +938,6 @@ private fun RailItem(
  */
 private val RailLabel = FitFaceType.micro.copy(letterSpacing = 0.sp)
 
-/**
- * The scope toggle's mark: a frame with a stack of rules in it, for "every style".
- *
- * `◫`, the rail's own Styles mark, was the first choice and read as a thin empty box among
- * six solid ones. Picked off a rendered sampler like the rest of the tray — and note what
- * was rejected and why: `☷` reads "many layers" best of all, and sits in Miscellaneous
- * Symbols, the block `⚙` and `ℹ` fall out of into the emoji font on many builds. `≣` is
- * clean but is three bars beside the app menu's `≡`, which is two glyphs one stroke apart
- * doing unrelated things.
- */
-private const val ScopeGlyph = "\u25A4"
-
 /** Between two buttons of the selection tray, on both of its rows. */
 private val ActionGap = 6.dp
 
@@ -1049,11 +1032,12 @@ private fun EditorPageContent(
     onRestoreWidget: (Long) -> Unit,
     onImportWidget: () -> Unit,
     onImportBackground: () -> Unit,
-    onManageStyles: (String?) -> Unit,
+    onManageStyles: () -> Unit,
+    onDeleteStyle: (String) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onWidgetColor: (Int) -> Unit,
-    onOpenRotation: () -> Unit,
-    onOpenArrangement: () -> Unit,
+    onRotateWidget: (Int) -> Unit,
+    onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
     onTintCyan: () -> Unit,
     onTintMagenta: () -> Unit,
@@ -1083,7 +1067,7 @@ private fun EditorPageContent(
     when (page) {
         EditorPage.Canvas -> CanvasWorkspace(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
-            onResizeWidget, onWidgetColor, onOpenRotation, onOpenArrangement, onDuplicateWidget, onRemoveWidget, onApplyAll,
+            onResizeWidget, onRotateWidget, onDuplicateWidget, onRemoveWidget,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
             selection, modifier,
         )
@@ -1104,7 +1088,6 @@ private fun EditorPageContent(
                 if (!building) onNavigate(EditorPage.Canvas)
             },
             onHold = { selection.onBegin(it.globalIndex) },
-            onDoneSet = { selection.onDone(); onNavigate(EditorPage.Canvas) },
             onClearSet = selection.onClear,
             onEditSet = { onNavigate(EditorPage.Canvas) },
             onRestore = onRestoreWidget,
@@ -1113,15 +1096,15 @@ private fun EditorPageContent(
         )
         EditorPage.Inspector -> InspectorWorkspace(
             state, snapshot, selected, onNudgeWidget, onApplyAll, onRemoveWidget,
-            onDuplicateWidget, onResizeWidget, onWidgetColor, onOpenRotation, onOpenArrangement, modifier,
+            onDuplicateWidget, onResizeWidget, onWidgetColor, onRotateWidget, onArrangeWidget, modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
             onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage, onTintCyan,
-            onTintMagenta, { onManageStyles(null) }, modifier,
+            onTintMagenta, onManageStyles, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(
-            snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, onManageStyles, modifier,
+            snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, onDeleteStyle, modifier,
         )
         EditorPage.Install -> InstallWorkspace(
             snapshot = snapshot,
@@ -1165,12 +1148,9 @@ private fun CanvasWorkspace(
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onTransformImage: (Float, Float, Float) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
-    onWidgetColor: (Int) -> Unit,
-    onOpenRotation: () -> Unit,
-    onOpenArrangement: () -> Unit,
+    onRotateWidget: (Int) -> Unit,
     onDuplicateWidget: () -> Unit,
     onRemoveWidget: () -> Unit,
-    onApplyAll: (Boolean) -> Unit,
     onOpenWidgets: () -> Unit,
     onInspect: () -> Unit,
     selection: SelectionActions,
@@ -1200,19 +1180,15 @@ private fun CanvasWorkspace(
                 snapshot = snapshot,
                 onNudgeWidget = onNudgeWidget,
                 onResize = onResizeWidget,
-                onColor = onWidgetColor,
-                onRotate = onOpenRotation,
-                onArrange = onOpenArrangement,
+                onRotate = onRotateWidget,
                 onDuplicate = onDuplicateWidget,
                 onRemove = onRemoveWidget,
-                onApplyAll = onApplyAll,
                 onInspect = onInspect,
-                onSelectMultiple = { selection.onBegin(widget.globalIndex) },
             )
         }
         val tray: @Composable () -> Unit = {
             when {
-                picks.isNotEmpty() -> SelectionSetBar(picks, state, snapshot, selection, onApplyAll)
+                picks.isNotEmpty() -> SelectionSetBar(picks, state, snapshot, selection)
                 selected != null -> actions(selected)
             }
         }
@@ -1398,14 +1374,10 @@ private val InstallPlateHeight = InstallPlateWidth / PanelAspectRatio
  * two scrolls. The complaint was that editing a widget is what this editor is for and it
  * was the hardest thing in it to reach.
  *
- * Now: move and resize are one tap each, colour and the destructive pair are one tap into
- * a menu, and the inspector survives unchanged behind "Record details" — the facts stopped
- * being in front of the actions rather than being deleted.
- *
- * Both menus are [FitDropdownMenu]s rather than a sheet for the reason `FitTopBar`'s is: a
- * `DropdownMenu` is a `Popup`, measured in its own window, so neither one costs this row a
- * single dp. And every entry closes its menu before it invokes anything, because all of
- * them either open a dialog or leave the page.
+ * Now: move, resize, rotate, duplicate and remove are one tap each, and everything that is
+ * set rather than stepped — colour, layer order, the all-styles switch, an exact angle —
+ * is in Edit widget behind `›`, where it has the room to say what it does. The scope every
+ * button here obeys stays visible in `CanvasHint`, directly above the tray.
  */
 @Composable
 private fun SelectionActionBar(
@@ -1414,16 +1386,11 @@ private fun SelectionActionBar(
     snapshot: EditorSnapshot,
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onResize: (Boolean) -> Unit,
-    onColor: (Int) -> Unit,
-    onRotate: () -> Unit,
-    onArrange: () -> Unit,
+    onRotate: (Int) -> Unit,
     onDuplicate: () -> Unit,
     onRemove: () -> Unit,
-    onApplyAll: (Boolean) -> Unit,
     onInspect: () -> Unit,
-    onSelectMultiple: () -> Unit,
 ) {
-    var showColors by remember(widget.globalIndex) { mutableStateOf(false) }
     var confirmRemoval by rememberSaveable(widget.globalIndex) { mutableStateOf(false) }
     if (confirmRemoval) {
         RemoveWidgetDialog(
@@ -1439,28 +1406,19 @@ private fun SelectionActionBar(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
+        // Nothing to the right of the title: the actions are all on the row below, and a
+        // second row of icons up here was three more things to learn for one widget.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Box(Modifier.width(3.dp).height(24.dp).background(MaterialTheme.colorScheme.primary))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    widget.readingLabel(),
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-            }
-            FitIconButton(glyph = "⇅", contentDescription = stringResource(R.string.editor_arrange),
-                onClick = onArrange, enabled = enabled)
-            RotationControl(enabled, onRotate)
-            FitIconButton(
-                glyph = "▦",
-                contentDescription = stringResource(R.string.editor_select_multiple),
-                onClick = onSelectMultiple,
-                enabled = enabled,
+            Text(
+                widget.readingLabel(),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         Text(
@@ -1499,13 +1457,8 @@ private fun SelectionActionBar(
         }
         // One row, every button taking an equal share of it — the same shape as the nudge
         // row above, so the tray reads as one control surface rather than a cluster with a
-        // hole in it. It used to pin `⋯` to the right with a spacer, which left the empty
-        // space in the middle of the only row on this card that could have used the width.
-        //
-        // The two resize buttons are adjacent. They were a button, the size, and a button,
-        // which put the pair that do one job at opposite ends and printed a figure the
-        // header above already prints; dropping that readout is what bought the room for
-        // duplicate and remove, which were a tap deeper for no reason.
+        // hole in it. The pairs that do one job sit together: smaller and larger, then
+        // rotate left and right, then the two that make or remove a widget.
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
             horizontalArrangement = Arrangement.spacedBy(ActionGap),
@@ -1531,6 +1484,10 @@ private fun SelectionActionBar(
                 enabled = enabled && widget.canResize &&
                     nextWidgetSize(widget, grow = true) != null,
             )
+            // Disabled rather than hidden on a widget with no angle, like resize: Edit
+            // widget says why, and a button that vanishes leaves the reader guessing.
+            RotationStepButton(widget, clockwise = false, enabled, onRotate, Modifier.weight(1f))
+            RotationStepButton(widget, clockwise = true, enabled, onRotate, Modifier.weight(1f))
             FitIconButton(
                 glyph = "⧉",
                 contentDescription = stringResource(R.string.editor_duplicate),
@@ -1546,65 +1503,6 @@ private fun SelectionActionBar(
                 enabled = enabled,
                 tint = MaterialTheme.colorScheme.error,
             )
-            Box(Modifier.weight(1f)) {
-                // Always present, even with nothing to set. A control that vanishes when it
-                // cannot act leaves the reader to guess whether this widget has no colour or
-                // the app has no such feature; the menu says which.
-                ColorSwatchButton(
-                    color = widget.colorArgb?.let { Color(it) },
-                    contentDescription = stringResource(R.string.editor_action_color_a11y),
-                    enabled = enabled,
-                    onClick = { showColors = true },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                FitDropdownMenu(showColors, { showColors = false }) {
-                    val current = widget.colorArgb
-                    if (current == null) {
-                        Text(
-                            stringResource(R.string.editor_action_no_color),
-                            modifier = Modifier.widthIn(max = 240.dp).padding(16.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        WidgetColors.forEach { (labelId, argb) ->
-                            FitMenuEntry(
-                                // A menu cannot show a chip's selected border, so the
-                                // one in force says so in the label. Without it the menu
-                                // offers four colours and never says which is on.
-                                label = checkedLabel(stringResource(labelId), current == argb),
-                                tint = Color(argb),
-                            ) { showColors = false; onColor(argb) }
-                        }
-                    }
-                }
-            }
-            // The scope toggle, which used to be a line of the overflow menu. `◫` is the
-            // rail's own glyph for Styles, which is exactly what this governs, and the tint
-            // is the state: primary when the edit reaches every style, inert when it does
-            // not. Disabled rather than hidden where it governs nothing — an always-on
-            // edit is never joined to a style and an imported widget carries its own scope
-            // — because a control that vanishes leaves the reader guessing which it was.
-            run {
-                val all = state.applyWidgetEditsToAllStyles
-                val scoped = !snapshot.isAodSelected && snapshot.styleNames.size > 1 &&
-                    widget.importedFromFaceId == null
-                FitIconButton(
-                    glyph = ScopeGlyph,
-                    contentDescription = stringResource(
-                        when {
-                            !scoped -> R.string.editor_action_scope_fixed_a11y
-                            all -> R.string.editor_action_scope_on_a11y
-                            else -> R.string.editor_action_scope_off_a11y
-                        },
-                        snapshot.styleNames.size,
-                    ),
-                    onClick = { onApplyAll(!all) },
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled && scoped,
-                    selected = all && scoped,
-                )
-            }
             // Last, so its right edge is pinned to the card's padding: an action that is
             // always present must not slide sideways when a neighbour's state changes.
             // `›` rather than a second `⋯` — the canvas header already carries one, and
@@ -1631,52 +1529,27 @@ private fun SelectionActionBar(
 }
 
 /**
- * The selected widget's colour, as a swatch rather than a tinted glyph.
+ * Which styles the set tray's buttons reach — a label, not a control.
  *
- * A `FitIconButton` showing `●` in the widget's own colour is what this replaced, and it is
- * invisible for the two colours a watch face reaches for most: face `00046`'s weekday label
- * is `FF000000`, which is a black glyph on a dark button. The colour is *drawn* here, inside
- * a hairline ring, so black and white both read against the surface — and so does "this
- * record has no colour field", which is the ring with nothing in it.
- *
- * The geometry is `FitIconButton`'s, deliberately: it sits in a row with two of them.
+ * The switch moved to Edit widget, but a set's nudges, duplicates and removals still follow
+ * it, and the canvas hint above a set explains picking rather than scope — so the tray says
+ * whether a tap changes one style or all of them. Nothing on a one-style face, where there
+ * is no other style to reach. An imported widget stays in the style it was added to.
  */
 @Composable
-private fun ColorSwatchButton(
-    color: Color?,
-    contentDescription: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val ring = MaterialTheme.colorScheme.outlineVariant
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.size(38.dp).then(modifier).semantics {
-            this.contentDescription = contentDescription
+private fun TrayScopeLabel(state: EditorUiState, snapshot: EditorSnapshot, imported: Boolean) {
+    if (!snapshot.isAodSelected && snapshot.styleNames.size <= 1) return
+    val all = state.editsReachOtherStyles && !imported
+    MicroLabel(
+        if (all) {
+            stringResource(R.string.editor_tray_scope_all)
+        } else {
+            stringResource(R.string.editor_tray_scope_one, snapshot.selectedVariantLabel())
         },
-        shape = MaterialTheme.shapes.small,
-        contentPadding = PaddingValues(0.dp),
-        border = BorderStroke(1.dp, ring.copy(alpha = if (enabled) 1f else .45f)),
-    ) {
-        Box(
-            Modifier.size(16.dp)
-                .then(if (color == null) Modifier else Modifier.background(color, CircleShape))
-                .border(1.dp, ring, CircleShape),
-        )
-    }
+        Modifier.padding(start = 8.dp),
+        color = if (all) MaterialTheme.colorScheme.primary else null,
+    )
 }
-
-/**
- * A menu entry that is either on or off, with the tick in the label.
- *
- * `FitMenuEntry` is one string, and a `DropdownMenuItem`'s leading slot is not in this
- * design's vocabulary — so the state goes where the label is. The gap is an en space, which
- * keeps the unticked entries aligned with the ticked ones in a proportional face.
- */
-private fun checkedLabel(label: String, checked: Boolean) =
-    if (checked) "\u2713\u2002$label" else "\u2002\u2002$label"
 
 /** The four colours a Pair's record can carry, in the order the inspector lists them. */
 private val WidgetColors = listOf(
@@ -1761,7 +1634,6 @@ private val EditorUiState.editsReachOtherStyles: Boolean
  */
 internal class SelectionActions(
     val onBegin: (Int) -> Unit,
-    val onDone: () -> Unit,
     val onClear: () -> Unit,
     val onNudge: (Int, Int) -> Unit,
     val onDuplicate: () -> Unit,
@@ -1773,7 +1645,7 @@ internal class SelectionActions(
  *
  * The single tray's shape, row for row, so the face above does not change size when a set
  * starts: the same header line, the same four arrows, the same seven buttons. The ones a set
- * cannot do — resize, colour, the record's details — are there and disabled, the rule every
+ * cannot do — resize, rotate, Edit widget — are there and disabled, the rule every
  * control on this tray follows, so the reader sees that a set cannot do them rather than
  * wondering where they went.
  *
@@ -1786,7 +1658,6 @@ private fun SelectionSetBar(
     state: EditorUiState,
     snapshot: EditorSnapshot,
     selection: SelectionActions,
-    onApplyAll: (Boolean) -> Unit,
 ) {
     var confirmRemoval by rememberSaveable { mutableStateOf(false) }
     if (confirmRemoval) {
@@ -1815,25 +1686,19 @@ private fun SelectionSetBar(
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                 )
-                Text(
-                    // In pick order, the numbers on the face: which widgets, not how big.
-                    picks.joinToString(" · ") { "#${it.globalIndex}" },
-                    color = MaterialTheme.colorScheme.primary,
-                    style = FitFaceType.numeric,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            // A plain text action, so the header keeps the single tray's height.
-            if (picks.size == 1) {
-                Text(
-                    stringResource(R.string.editor_selection_done),
-                    modifier = Modifier.clip(MaterialTheme.shapes.small)
-                        .clickable(enabled = enabled, role = Role.Button, onClick = selection.onDone)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        // In pick order, the numbers on the face: which widgets, not how big.
+                        picks.joinToString(" · ") { "#${it.globalIndex}" },
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = FitFaceType.numeric,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // Stock members follow the switch; an all-imported set cannot.
+                    TrayScopeLabel(state, snapshot, imported = picks.all { it.importedFromFaceId != null })
+                }
             }
             Text(
                 stringResource(R.string.editor_selection_clear),
@@ -1878,6 +1743,9 @@ private fun SelectionSetBar(
                 modifier = Modifier.weight(1f),
                 enabled = false,
             )
+            // Each member turns about its own centre, which is not turning the set.
+            RotationStepButton(null, clockwise = false, enabled = false, onRotate = {}, Modifier.weight(1f))
+            RotationStepButton(null, clockwise = true, enabled = false, onRotate = {}, Modifier.weight(1f))
             FitIconButton(
                 glyph = "⧉",
                 contentDescription = if (picks.size == 1) stringResource(R.string.editor_duplicate)
@@ -1895,35 +1763,6 @@ private fun SelectionSetBar(
                 enabled = enabled,
                 tint = MaterialTheme.colorScheme.error,
             )
-            ColorSwatchButton(
-                color = null,
-                contentDescription = stringResource(R.string.editor_action_color_a11y),
-                enabled = false,
-                onClick = {},
-                modifier = Modifier.weight(1f),
-            )
-            run {
-                // It governs the stock members; an imported one keeps its own style either
-                // way, which is what the repository enforces per widget.
-                val all = state.applyWidgetEditsToAllStyles
-                val scoped = !snapshot.isAodSelected && snapshot.styleNames.size > 1 &&
-                    picks.any { it.importedFromFaceId == null }
-                FitIconButton(
-                    glyph = ScopeGlyph,
-                    contentDescription = stringResource(
-                        when {
-                            !scoped -> R.string.editor_action_scope_fixed_a11y
-                            all -> R.string.editor_action_scope_on_a11y
-                            else -> R.string.editor_action_scope_off_a11y
-                        },
-                        snapshot.styleNames.size,
-                    ),
-                    onClick = { onApplyAll(!all) },
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled && scoped,
-                    selected = all && scoped,
-                )
-            }
             FitIconButton(
                 glyph = "›",
                 contentDescription = stringResource(R.string.editor_action_record_details),
@@ -2213,7 +2052,6 @@ private fun WidgetsWorkspace(
     onSelect: (WidgetGuide) -> Unit,
     /** Holding a row adds it to the set, as holding a widget on the canvas does. */
     onHold: (WidgetGuide) -> Unit,
-    onDoneSet: () -> Unit,
     onClearSet: () -> Unit,
     onEditSet: () -> Unit,
     onRestore: (Long) -> Unit,
@@ -2320,7 +2158,7 @@ private fun WidgetsWorkspace(
         // far the list scrolls. The tray that moves, duplicates and removes a set is on the
         // face; this says what is chosen and goes there.
         if (picks.isNotEmpty()) {
-            WidgetSetFooter(picks, enabled, onClearSet, onEditSet, onDoneSet)
+            WidgetSetFooter(picks, enabled, onClearSet, onEditSet)
         }
     }
 }
@@ -2331,7 +2169,6 @@ private fun WidgetSetFooter(
     enabled: Boolean,
     onClear: () -> Unit,
     onEdit: () -> Unit,
-    onDone: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
@@ -2351,16 +2188,6 @@ private fun WidgetSetFooter(
                     style = FitFaceType.numeric,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (picks.size == 1) {
-                Text(
-                    stringResource(R.string.editor_selection_done),
-                    modifier = Modifier.clip(MaterialTheme.shapes.small)
-                        .clickable(enabled = enabled, role = Role.Button, onClick = onDone)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             Text(
@@ -2713,8 +2540,8 @@ private fun InspectorWorkspace(
     onDuplicate: () -> Unit,
     onResize: (Boolean) -> Unit,
     onColor: (Int) -> Unit,
-    onRotate: () -> Unit,
-    onArrange: () -> Unit,
+    onRotate: (Int) -> Unit,
+    onArrange: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (widget == null) {
@@ -2780,6 +2607,59 @@ private fun InspectorWorkspace(
                 label = stringResource(R.string.editor_label_opaque),
             )
         }
+        // Edits first, in the order they are reached for, and the record's facts after
+        // them: this page is where a widget is edited, not only where it is described.
+        // The scope leads because every control below it follows it.
+        if (widget.importedFromFaceId != null) {
+            Text(stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+        } else if (snapshot.isAodSelected) {
+            Text(
+                stringResource(R.string.editor_apply_all_aod),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        } else if (snapshot.styleNames.size == 1) {
+            // A switch with nothing on its other side is a control that does nothing.
+            Text(
+                stringResource(R.string.editor_apply_all_single),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        } else {
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                    .clickable { onApplyAll(!state.applyWidgetEditsToAllStyles) }.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.editor_apply_all_title),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        if (state.applyWidgetEditsToAllStyles) {
+                            pluralStringResource(
+                                R.plurals.editor_apply_all_on,
+                                snapshot.styleNames.size,
+                                snapshot.styleNames.size,
+                            )
+                        } else {
+                            stringResource(
+                                R.string.editor_apply_all_off,
+                                snapshot.selectedVariantLabel(),
+                            )
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = state.applyWidgetEditsToAllStyles, onCheckedChange = onApplyAll)
+            }
+        }
         Column {
             MicroLabel(stringResource(R.string.editor_position_heading))
             Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2830,6 +2710,34 @@ private fun InspectorWorkspace(
                 color = MaterialTheme.fitText.secondary,
             )
         }
+        WidgetSizeControls(widget, !state.isWorking, onResize)
+        RotationControls(widget, snapshot, state.applyWidgetEditsToAllStyles, !state.isWorking, onRotate)
+        widget.colorArgb?.let { currentColor ->
+            val colors = WidgetColors.map { (labelId, argb) -> stringResource(labelId) to argb }
+            Column {
+                MicroLabel(
+                    stringResource(
+                        R.string.editor_pair_color,
+                        currentColor.toUInt().toString(16).padStart(8, '0').uppercase(),
+                    ),
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    colors.forEach { (label, color) ->
+                        FitChip(
+                            text = label,
+                            selected = currentColor == color,
+                            onClick = { onColor(color) },
+                            modifier = Modifier.weight(1f),
+                            enabled = !state.isWorking,
+                        )
+                    }
+                }
+            }
+        }
+        ArrangementControls(widget, snapshot, !state.isWorking, onArrange)
         Column(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
@@ -2887,85 +2795,6 @@ private fun InspectorWorkspace(
                     Modifier.padding(top = 10.dp),
                     MaterialTheme.colorScheme.tertiary,
                 )
-            }
-        }
-        FitButton(stringResource(R.string.editor_arrange), onArrange, enabled = !state.isWorking,
-            style = FitButtonStyle.Secondary)
-        RotationControl(!state.isWorking, onRotate, labelled = true)
-        WidgetSizeControls(widget, !state.isWorking, onResize)
-        widget.colorArgb?.let { currentColor ->
-            val colors = WidgetColors.map { (labelId, argb) -> stringResource(labelId) to argb }
-            Column {
-                MicroLabel(
-                    stringResource(
-                        R.string.editor_pair_color,
-                        currentColor.toUInt().toString(16).padStart(8, '0').uppercase(),
-                    ),
-                )
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    colors.forEach { (label, color) ->
-                        FitChip(
-                            text = label,
-                            selected = currentColor == color,
-                            onClick = { onColor(color) },
-                            modifier = Modifier.weight(1f),
-                            enabled = !state.isWorking,
-                        )
-                    }
-                }
-            }
-        }
-        if (widget.importedFromFaceId != null) {
-            Text(stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
-        } else if (snapshot.isAodSelected) {
-            Text(
-                stringResource(R.string.editor_apply_all_aod),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        } else if (snapshot.styleNames.size == 1) {
-            // A switch with nothing on its other side is a control that does nothing.
-            Text(
-                stringResource(R.string.editor_apply_all_single),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        } else {
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                    .clickable { onApplyAll(!state.applyWidgetEditsToAllStyles) }.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.editor_apply_all_title),
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        if (state.applyWidgetEditsToAllStyles) {
-                            pluralStringResource(
-                                R.plurals.editor_apply_all_on,
-                                snapshot.styleNames.size,
-                                snapshot.styleNames.size,
-                            )
-                        } else {
-                            stringResource(
-                                R.string.editor_apply_all_off,
-                                snapshot.selectedVariantLabel(),
-                            )
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = state.applyWidgetEditsToAllStyles, onCheckedChange = onApplyAll)
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3548,7 +3377,7 @@ private fun StylesWorkspace(
     working: Boolean,
     onVariant: (EditorVariant) -> Unit,
     onSyncThumbnail: () -> Unit,
-    onManageStyles: (String?) -> Unit,
+    onDeleteStyle: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -3627,10 +3456,18 @@ private fun StylesWorkspace(
                     )
                 }
                 if (selected) Text("●", color = MaterialTheme.colorScheme.primary)
-            }
-            if (!isAod) TextButton(onClick = { onManageStyles(variant.basename) },
-                enabled = enabled && snapshot.styleNames.size > 1) {
-                Text(stringResource(R.string.editor_style_delete_action, label))
+                // The row's own ✕, as a widget's remove is in the tray: the card is the
+                // thing being deleted, and the dialog behind it says what that costs.
+                // Disabled on the last style rather than hidden, with the reason below.
+                if (!isAod) {
+                    FitIconButton(
+                        glyph = "✕",
+                        contentDescription = stringResource(R.string.editor_style_delete_action, label),
+                        onClick = { onDeleteStyle(variant.basename) },
+                        enabled = enabled && snapshot.styleNames.size > 1,
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
         item {
@@ -5593,96 +5430,5 @@ private fun DeleteProjectDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
         },
-    )
-}
-
-
-@Composable
-private fun RotationControl(enabled: Boolean, onOpen: () -> Unit, labelled: Boolean = false) {
-    if (labelled) FitButton(stringResource(R.string.editor_rotation), onOpen,
-        Modifier.fillMaxWidth(), enabled, style = FitButtonStyle.Secondary)
-    else FitIconButton("↻", stringResource(R.string.editor_rotation), onOpen, enabled = enabled)
-}
-
-@Composable
-private fun RotationDialog(widget: WidgetGuide, snapshot: EditorSnapshot, allStyles: Boolean,
-    enabled: Boolean, onRotate: (Int) -> Unit, onDismiss: () -> Unit) {
-    val current = widget.rotationTenths
-    var angle by rememberSaveable(widget.globalIndex, current) { mutableStateOf(rotationInput(current ?: 0)) }
-    val parsed = parseRotationInput(angle)
-    val safe = parsed != null && (parsed == 0 || dev.fitface.studio.core.model.canRotateText(widget.width, widget.height))
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.editor_rotation)) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (current == null) {
-                    Text(stringResource(R.string.editor_rotation_unsupported))
-                } else {
-                    Text(stringResource(R.string.editor_rotation_current, rotationInput(current),
-                        rotationInput(widget.originalRotationTenths ?: current)))
-                    Text(if (!snapshot.isAodSelected && allStyles && widget.importedFromFaceId == null)
-                        stringResource(R.string.editor_rotation_scope_all)
-                        else stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename)))
-                    OutlinedTextField(angle, { angle = it }, Modifier.fillMaxWidth(), singleLine = true,
-                        label = { Text(stringResource(R.string.editor_rotation_degrees)) }, isError = parsed == null)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FitChip("−15°", false, { angle = rotationInput((parsed ?: current) - 150) })
-                        FitChip("+15°", false, { angle = rotationInput((parsed ?: current) + 150) })
-                        FitChip(stringResource(R.string.editor_rotation_reset), false,
-                            { angle = rotationInput(widget.originalRotationTenths ?: current) })
-                    }
-                    if (!safe) Text(stringResource(if (parsed == null) R.string.editor_rotation_invalid
-                        else R.string.editor_rotation_too_large), color = MaterialTheme.colorScheme.error)
-                    Text(stringResource(R.string.editor_rotation_backdrop), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary)
-                }
-            }
-        },
-        confirmButton = {
-            if (current != null) TextButton(onClick = { parsed?.let(onRotate) },
-                enabled = enabled && safe && parsed != current) { Text(stringResource(R.string.editor_rotation_apply)) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) } },
-    )
-}
-
-internal fun rotationInput(tenths: Int): String {
-    val angle = dev.fitface.studio.core.model.normalizedRotation(tenths)
-    return if (angle % 10 == 0) (angle / 10).toString() else "${angle / 10}.${angle % 10}"
-}
-
-/** Accept decimal degrees to tenths, including negative/full turns; never truncate precision. */
-internal fun parseRotationInput(input: String): Int? = runCatching {
-    val value = input.trim().replace(',', '.').toBigDecimal().movePointRight(1).intValueExact()
-    dev.fitface.studio.core.model.normalizedRotation(value)
-}.getOrNull()
-
-@Composable
-private fun ArrangementDialog(widget: WidgetGuide, snapshot: EditorSnapshot, enabled: Boolean,
-    onArrange: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.editor_arrange)) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.editor_arrange_scope, variantLabel(snapshot.selectedVariant.basename)))
-                Text(stringResource(R.string.editor_arrange_description))
-                dev.fitface.studio.core.model.WidgetArrangement.entries.reversed().forEach { action ->
-                    val label = when (action) {
-                        dev.fitface.studio.core.model.WidgetArrangement.FRONT -> R.string.editor_arrange_front
-                        dev.fitface.studio.core.model.WidgetArrangement.FORWARD -> R.string.editor_arrange_forward
-                        dev.fitface.studio.core.model.WidgetArrangement.BACKWARD -> R.string.editor_arrange_backward
-                        dev.fitface.studio.core.model.WidgetArrangement.BACK -> R.string.editor_arrange_back
-                    }
-                    FitButton(stringResource(label), { onArrange(action) }, Modifier.fillMaxWidth(),
-                        enabled = enabled && dev.fitface.studio.core.model.arrangementTarget(snapshot.widgets, widget.globalIndex, action) != null,
-                        style = FitButtonStyle.Secondary)
-                }
-                Text(stringResource(R.string.editor_arrange_boundaries), style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.fitText.secondary)
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) } },
     )
 }

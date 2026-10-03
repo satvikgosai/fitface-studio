@@ -208,32 +208,98 @@ object FaceEditor {
         return finalize(source, output, changedEntries, changed)
     }
 
-    /** Changes the native Composite angle without rewriting its text or layout. */
+    /**
+     * Turns one widget to [angleTenths] in the first entry of [entryBasenames], and in
+     * every later entry that carries it — a same-size field patch for each of the three
+     * [WidgetSchema.RotationModel]s.
+     *
+     * - A Composite's native angle changes alone: text, layout and resources stay intact.
+     * - A Rule's endpoints turn about their midpoint, at the resize rung it is on now,
+     *   measured against its pristine line from [pristine]/[pristineWidgets] — see
+     *   [RuleGeometry]. Its colour is untouched and its thickness stays on that rung.
+     * - A vector arc's start becomes [angleTenths] and its end keeps the stored distance
+     *   from it, so a reset writes back the vendor's exact pair.
+     *
+     * The angle is absolute, so siblings take the same angle, each keeping its own length,
+     * range or text; a sibling that cannot take it is skipped, as other best-effort edits.
+     */
     fun rotateWidget(source: Fit3Container, entryBasenames: List<String>, globalIndex: Int,
-        sequenceId: Int, x: Int, y: Int, angleTenths: Int, targetIndices: Map<String, Int>? = null): ContainerEdit {
+        sequenceId: Int, x: Int, y: Int, angleTenths: Int, targetIndices: Map<String, Int>? = null,
+        pristine: Fit3Container? = null, pristineWidgets: Map<String, WidgetPristine> = emptyMap()): ContainerEdit {
         requireEditable(source)
         val angle = dev.fitface.studio.core.model.normalizedRotation(angleTenths)
         val resolved = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
-            records.singleOrNull { it.globalIndex == globalIndex && it.widgetType == WIDGET_COMP &&
+            records.singleOrNull { it.globalIndex == globalIndex && WidgetSchema.spec(it.widgetType).rotation != null &&
                 it.sequenceId == sequenceId && it.x == x && it.y == y }
         }
-        fun allowed(record: WidgetRecord) = angle == 0 ||
-            dev.fitface.studio.core.model.canRotateText(record.storedWidth ?: 0, record.storedHeight ?: 0)
-        if (!allowed(resolved.first().second)) throw Fit3FormatException(
-            "This text box is too large to rotate safely. Its angle can still be reset to zero.")
         val output = source.toByteArray()
-        var changed = 0
-        val entries = resolved.filter { allowed(it.second) }.mapNotNull { (entry, record) ->
-            val offset = entry.offset + record.recordOffset + requireNotNull(WidgetSchema.spec(record.widgetType).rotation).offset
-            if (output.u16(offset) == angle) null else {
-                val before = output.copyOfRange(offset, offset + 2)
-                output.putU16(offset, angle)
-                changed += (0..1).count { before[it] != output[offset + it] }
-                entry
+        val patches = resolved.map { (entry, record) ->
+            val patch = runCatching {
+                rotationPatch(entry, record, angle, pristineWidgets[entry.basename]?.let { it.entry to it.sources }
+                    ?: pristine?.entries?.singleOrNull { it.basename == entry.basename }?.let { it to null })
             }
+            // The selected style is strict; a sibling that cannot take the angle keeps its own.
+            if (entry === resolved.first().first) patch.getOrThrow() to entry else patch.getOrNull()?.let { it to entry }
+        }
+        var changed = 0
+        val entries = patches.mapNotNull { pair ->
+            val (patch, entry) = pair ?: return@mapNotNull null
+            val before = changed
+            patch.forEach { (field, value) ->
+                val offset = entry.offset + field
+                val previous = output.copyOfRange(offset, offset + 2)
+                output.putU16(offset, value and 0xFFFF)
+                changed += (0..1).count { previous[it] != output[offset + it] }
+            }
+            entry.takeIf { changed > before }
         }
         if (changed == 0) throw Fit3FormatException("This widget already uses that rotation.")
         return finalize(source, output, entries, changed)
+    }
+
+    /** Halfword writes, as offsets from the start of the entry, that give [record] [angle]. */
+    private fun rotationPatch(entry: ContainerEntry, record: WidgetRecord, angle: Int,
+        pristine: Pair<ContainerEntry, Map<Int, Int>?>?): List<Pair<Int, Int>> {
+        val base = record.recordOffset
+        return when (val model = WidgetSchema.spec(record.widgetType).rotation) {
+            null -> throw Fit3FormatException("A ${WidgetSchema.spec(record.widgetType).name} widget cannot be rotated.")
+            is WidgetSchema.RotationModel.NativeAngle -> {
+                if (angle != 0 && !dev.fitface.studio.core.model.canRotateText(record.storedWidth ?: 0, record.storedHeight ?: 0)) {
+                    throw Fit3FormatException("This text box is too large to rotate safely. Its angle can still be reset to zero.")
+                }
+                listOf(base + model.offset to angle)
+            }
+            is WidgetSchema.RotationModel.AngleRange -> {
+                if (angle % 10 != 0) throw Fit3FormatException("Arc angles are whole degrees.")
+                val start = entry.data.u16(base + model.startOffset).toShort().toInt()
+                val end = entry.data.u16(base + model.endOffset).toShort().toInt()
+                if (end - start !in 0..360) throw Fit3FormatException("This arc's range cannot be turned safely.")
+                listOf(base + model.startOffset to angle / 10, base + model.endOffset to angle / 10 + end - start)
+            }
+            WidgetSchema.RotationModel.Endpoints -> {
+                if (angle % 10 != 0) throw Fit3FormatException("Line angles are whole degrees.")
+                val origin = pristine?.let { (pristineEntry, sources) ->
+                    StructuralEditor.pristineRecord(entry, pristineEntry, record, sources)
+                }?.takeIf { RuleGeometry.span(it).length > 0 } ?: record
+                val current = RuleGeometry.Line(RuleGeometry.span(record), RuleGeometry.thickness(record))
+                if (current.span.length == 0.0) throw Fit3FormatException("A line with no length has no direction to turn.")
+                val line = RuleGeometry.turnedLine(
+                    RuleGeometry.Line(RuleGeometry.span(origin), RuleGeometry.thickness(origin)), current, angle,
+                ) ?: throw Fit3FormatException("This line is too long to turn at its current size. Make it smaller first.")
+                val (startX, startY) = RuleGeometry.startKeepingMidpoint(record.x, record.y, current.span, line.span)
+                val fields = listOf(startX, startY, startX + line.span.x, startY + line.span.y)
+                if (fields.any { it !in Short.MIN_VALUE..Short.MAX_VALUE }) {
+                    throw Fit3FormatException("Turned line endpoints must fit signed 16-bit integers.")
+                }
+                buildList {
+                    add(base + 0x18 to startX); add(base + 0x1A to startY)
+                    add(base + 0x1C to fields[2]); add(base + 0x1E to fields[3])
+                    // `+0x30` is a byte beside the `+0x31` diagnostic flag, so the halfword
+                    // written back keeps that flag's byte as it is.
+                    line.thickness?.let { add(base + 0x30 to ((entry.data[base + 0x31].toInt() and 0xFF) shl 8 or it)) }
+                }
+            }
+        }
     }
 
     fun replaceBackgrounds(

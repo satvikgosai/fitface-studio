@@ -28,7 +28,8 @@ class StyleManagementViewModel @Inject constructor(private val repository: Watch
     val state = mutable.asStateFlow()
     private var opened = false
 
-    fun open(projectId: Long, protectedVariant: String?, initial: String?) {
+    /** [confirm] goes straight to the confirmation for [initial], as one style's ✕ does. */
+    fun open(projectId: Long, protectedVariant: String?, initial: String?, confirm: Boolean = false) {
         if (opened) return
         opened = true
         mutable.value = StyleManagementUiState(protectedVariant = protectedVariant, busy = true)
@@ -38,6 +39,7 @@ class StyleManagementViewModel @Inject constructor(private val repository: Watch
                 require(review.snapshot.projectId == projectId) { "The open project changed. Close and try again." }
                 mutable.update { it.copy(review = review, busy = false) }
                 if (initial != null) toggle(initial)
+                if (confirm) review()
             } catch (error: Exception) { failure(error) }
         }
     }

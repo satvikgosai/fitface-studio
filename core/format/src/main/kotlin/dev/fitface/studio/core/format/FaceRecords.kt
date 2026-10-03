@@ -7,6 +7,7 @@ import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetImageLayer
 import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.WidgetResizeKind
+import dev.fitface.studio.core.model.WidgetRotationKind
 import kotlin.math.abs
 
 const val STYLE_MAGIC = 0x12345678L
@@ -850,6 +851,54 @@ object FaceRecordParser {
         return WidgetLayout.resolve(records, drawnExtents(records, images), panelSize(entry))
     }
 
+    /**
+     * The angle a rotation edits, and what kind of angle it is, or null where this record
+     * cannot be turned — see [WidgetSchema.RotationModel].
+     *
+     * A Rule's is the direction of its current endpoints; the editor later reports the
+     * pristine direction instead while rounding alone explains the difference.
+     */
+    fun rotationOf(entry: ContainerEntry, record: WidgetRecord): Pair<Int, WidgetRotationKind>? =
+        when (val model = WidgetSchema.spec(record.widgetType).rotation) {
+            null -> null
+            is WidgetSchema.RotationModel.NativeAngle ->
+                entry.data.u16(record.recordOffset + model.offset) to WidgetRotationKind.TEXT
+            WidgetSchema.RotationModel.Endpoints ->
+                RuleGeometry.direction(RuleGeometry.span(record))?.let { it to WidgetRotationKind.LINE }
+            is WidgetSchema.RotationModel.AngleRange -> {
+                val start = entry.data.u16(record.recordOffset + model.startOffset).toShort().toInt()
+                val end = entry.data.u16(record.recordOffset + model.endOffset).toShort().toInt()
+                (Math.floorMod(start, 360) * 10).takeIf { end - start in 0..360 }
+                    ?.let { it to WidgetRotationKind.ARC }
+            }
+        }
+
+    /**
+     * A Rule measured against its pristine record: the direction to report, and the
+     * extent its resize ladder is a percentage of — the pristine line turned to where
+     * [current] points, which is what both a resize and a rotation scale from.
+     */
+    data class LineAnchor(
+        val directionTenths: Int?,
+        val originalDirectionTenths: Int?,
+        val width: Int,
+        val height: Int,
+    )
+
+    fun lineAnchor(current: WidgetRecord, pristine: WidgetRecord): LineAnchor {
+        // A pristine line with no length has no direction to keep; measure the current one.
+        val origin = pristine.takeIf { RuleGeometry.span(it).length > 0 } ?: current
+        val pristineSpan = RuleGeometry.span(origin)
+        val anchor = RuleGeometry.anchor(pristineSpan, RuleGeometry.span(current))
+        val (width, height) = RuleGeometry.extent(anchor, RuleGeometry.thickness(origin))
+        return LineAnchor(
+            directionTenths = RuleGeometry.direction(anchor) ?: RuleGeometry.direction(RuleGeometry.span(current)),
+            originalDirectionTenths = RuleGeometry.direction(pristineSpan),
+            width = width,
+            height = height,
+        )
+    }
+
     fun widgetGuides(entry: ContainerEntry): List<WidgetGuide> {
         val records = scanWidgets(entry)
         val images = scanImages(entry)
@@ -970,9 +1019,8 @@ object FaceRecordParser {
                 },
                 hasOpaqueBackdrop = opaqueBackdrop && placement == WidgetPlacement.CANVAS,
                 colorArgb = pairColor.takeIf { canEditPair },
-                rotationTenths = WidgetSchema.spec(it.widgetType).rotation?.let { field ->
-                    entry.data.u16(it.recordOffset + field.offset)
-                },
+                rotationTenths = rotationOf(entry, it)?.first,
+                rotationKind = rotationOf(entry, it)?.second,
                 supportMessage = when {
                     !place.isMovable ->
                         "This widget’s position cannot be measured safely, so moving is disabled. " +
@@ -1126,9 +1174,9 @@ object FaceRecordParser {
         add("type=${record.widgetType}")
         add("seq=${record.sequenceId}")
         add(images[record.unknown20]?.let { "u20=img${it.index}" } ?: "u20=${record.unknown20}")
+        val rotation = WidgetSchema.spec(record.widgetType).rotation
         record.words.forEachIndexed { index, word ->
-            val rotation = WidgetSchema.spec(record.widgetType).rotation
-            val stableWord = if (rotation?.offset == WIDGET_FIXED_SIZE + index * 4) word and 0xFFFF0000L else word
+            val stableWord = rotation?.stableWord(WIDGET_FIXED_SIZE + index * 4, word) ?: word
             add(images[stableWord]?.let { "img${it.index}" } ?: "raw$stableWord")
         }
     }

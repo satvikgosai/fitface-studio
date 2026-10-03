@@ -385,12 +385,6 @@ object StructuralEditor {
 
     private const val StaticWidgetType = 1
 
-    /** Fallback thickness for a Rule that stores an implausible one — as `drawnExtents`. */
-    private const val RULE_FALLBACK_THICKNESS = 8
-
-    /** Below this, a Rule's stored thickness is not the number its extent came from. */
-    private const val RULE_MINIMUM_THICKNESS = 2
-
     /** Pixel formats [RasterResampler] can read, so the ones a resize may touch. */
     private val RESAMPLED_FORMATS = setOf(IMAGE_RGB565, IMAGE_RGB565_ALPHA, IMAGE_INDEXED8)
 
@@ -1141,8 +1135,9 @@ object StructuralEditor {
         sourceIndices: Map<Int, Int>?,
     ): ByteArray {
         val origin = pristineEntry?.let { pristineRecord(entry, it, target, sourceIndices) } ?: target
-        val spanX = origin.raw1C.toShort().toInt() - origin.x
-        val spanY = origin.raw1E.toShort().toInt() - origin.y
+        // A turned line keeps its turn: the pristine span is pointed where the current one
+        // points before it is scaled, or a resize would quietly undo every rotation.
+        //
         // The extent a Rule reports is its span **or its thickness**, whichever is larger —
         // the floor `drawnExtents` applies — so that is what the requested size is a
         // fraction of, and the thickness has to scale with it.
@@ -1157,33 +1152,20 @@ object StructuralEditor {
         // same ratio makes the whole extent scale linearly, which is exactly what the
         // ladder assumes: `max(|dx|, t)` and `max(|dy|, t)` both multiply by the ratio, so
         // the extent the guide reports afterwards is the rung that was asked for.
-        val storedThickness = origin.ruleThickness
-        val thickness = storedThickness?.takeIf { it >= RULE_MINIMUM_THICKNESS }
-            ?: RULE_FALLBACK_THICKNESS
-        val reportedWidth = maxOf(abs(spanX), thickness)
-        val reportedHeight = maxOf(abs(spanY), thickness)
-        val endX = target.x + scaledSpan(spanX, width, reportedWidth)
-        val endY = target.y + scaledSpan(spanY, height, reportedHeight)
+        //
         // Only when the record's own byte is the one the extent was measured from. A record
         // storing something below the floor is not describing a thickness this layer
         // understands, and scaling the substituted value would write a number the producer
         // never had. No catalogue Rule does that — they run 4 to 59.
-        // Where an axis of the reported extent *is* the thickness, the requested value for
-        // that axis is what the thickness has to become — not a second rounding of the same
-        // number. The ladder scales the reported extent by a percentage and this scales it
-        // by a ratio of pixels, and on face `00049` the two disagreed by one: the rung asked
-        // for 92×10 and a ratio-scaled thickness came back 92×9, which is the same
-        // off-the-ladder state the throw used to be, one step later.
-        val scaledThickness = storedThickness
-            ?.takeIf { it >= RULE_MINIMUM_THICKNESS }
-            ?.let {
-                val scaled = if (reportedHeight == thickness) {
-                    height
-                } else {
-                    scaledExtent(it, width, reportedWidth)
-                }
-                scaled.coerceIn(RULE_MINIMUM_THICKNESS, 0xFF)
-            }
+        val anchor = RuleGeometry.anchor(RuleGeometry.span(origin), RuleGeometry.span(target))
+        val resized = RuleGeometry.scaled(
+            RuleGeometry.Line(anchor, RuleGeometry.thickness(origin)),
+            width,
+            height,
+        )
+        val endX = target.x + resized.span.x
+        val endY = target.y + resized.span.y
+        val scaledThickness = resized.thickness
         val unchanged = endX == target.raw1C.toShort().toInt() &&
             endY == target.raw1E.toShort().toInt() &&
             (scaledThickness == null || scaledThickness == target.ruleThickness)
@@ -1676,7 +1658,7 @@ object StructuralEditor {
      * structural edit and a Static's data source is `0` in 678 of 681 records, so neither
      * on its own names a record.
      */
-    private fun pristineRecord(
+    internal fun pristineRecord(
         entry: ContainerEntry,
         pristineEntry: ContainerEntry,
         target: WidgetRecord,

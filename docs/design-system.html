@@ -296,7 +296,6 @@
   .nudge.compact { min-height: 38px; }
   .selection-actions { display: flex; gap: 5px; margin-top: 7px; }
   .selection-actions .icon-btn { flex: 1; min-width: 0; width: auto; }
-  .colour-swatch { width: 16px; height: 16px; border: 1px solid var(--on-surface-var); border-radius: 3px; background: black; }
   .rules { overflow-wrap: anywhere; }
   .rules h3 { margin: 32px 0 12px; font-size: 18px; }
   .rules ul { padding-left: 22px; max-width: 960px; line-height: 1.65; }
@@ -571,13 +570,12 @@
           <div class="rail-item"><span class="rail-glyph">⇧</span><span class="rail-label">Install</span></div>
         </div>
 
-        <div class="caption">SelectionActionBar — all edits under the face</div>
+        <div class="caption">SelectionActionBar — stepped edits under the face</div>
         <div class="peek bleed">
           <div class="peek-top"><div class="peek-accent"></div><div>
             <div class="peek-name">Hour digit</div>
             <div class="peek-geo">#2 · 40×62 · x 77 y 50</div>
           </div></div>
-          <div class="micro" style="margin-top:8px">This style</div>
           <div class="peek-nudges">
             <div class="nudge compact" aria-label="Move left"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M14 9H4M8 5L4 9L8 13" transform="rotate(0 9 9)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
             <div class="nudge compact" aria-label="Move up"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M14 9H4M8 5L4 9L8 13" transform="rotate(90 9 9)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -586,9 +584,9 @@
           </div>
           <div class="selection-actions">
             <div class="icon-btn" aria-label="Smaller">−</div><div class="icon-btn" aria-label="Larger">+</div>
+            <div class="icon-btn" aria-label="Rotate left 15°">↺</div><div class="icon-btn" aria-label="Rotate right 15°">↻</div>
             <div class="icon-btn" aria-label="Duplicate">⧉</div><div class="icon-btn" aria-label="Remove">✕</div>
-            <div class="icon-btn" aria-label="Colour"><span class="colour-swatch"></span></div>
-            <div class="icon-btn" aria-label="Apply to all styles">▤</div><div class="icon-btn" aria-label="Record details">›</div>
+            <div class="icon-btn" aria-label="Edit widget">›</div>
           </div>
           <div class="micro" style="margin-top:8px">Tap to move · hold to keep moving</div>
         </div>
@@ -750,13 +748,12 @@
           <div class="rail-item"><span class="rail-glyph">⇧</span><span class="rail-label">Install</span></div>
         </div>
 
-        <div class="caption">SelectionActionBar — all edits under the face</div>
+        <div class="caption">SelectionActionBar — stepped edits under the face</div>
         <div class="peek bleed">
           <div class="peek-top"><div class="peek-accent"></div><div>
             <div class="peek-name">Hour digit</div>
             <div class="peek-geo">#2 · 40×62 · x 77 y 50</div>
           </div></div>
-          <div class="micro" style="margin-top:8px">This style</div>
           <div class="peek-nudges">
             <div class="nudge compact" aria-label="Move left"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M14 9H4M8 5L4 9L8 13" transform="rotate(0 9 9)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
             <div class="nudge compact" aria-label="Move up"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M14 9H4M8 5L4 9L8 13" transform="rotate(90 9 9)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -765,9 +762,9 @@
           </div>
           <div class="selection-actions">
             <div class="icon-btn" aria-label="Smaller">−</div><div class="icon-btn" aria-label="Larger">+</div>
+            <div class="icon-btn" aria-label="Rotate left 15°">↺</div><div class="icon-btn" aria-label="Rotate right 15°">↻</div>
             <div class="icon-btn" aria-label="Duplicate">⧉</div><div class="icon-btn" aria-label="Remove">✕</div>
-            <div class="icon-btn" aria-label="Colour"><span class="colour-swatch"></span></div>
-            <div class="icon-btn" aria-label="Apply to all styles">▤</div><div class="icon-btn" aria-label="Record details">›</div>
+            <div class="icon-btn" aria-label="Edit widget">›</div>
           </div>
           <div class="micro" style="margin-top:8px">Tap to move · hold to keep moving</div>
         </div>
@@ -958,7 +955,7 @@
     <div class="ia-col">
       <div class="ia-h">L1 · EDITOR HOME</div>
       <div class="ia-page">Canvas<span>preview · drag · nudge</span></div>
-      <div class="ia-peek">Selection actions<span>nudge · resize · colour · scope · details</span></div>
+      <div class="ia-peek">Selection actions<span>nudge · resize · rotate · duplicate · remove · edit</span></div>
     </div>
     <div class="ia-arm"><div></div></div>
     <div class="ia-col" style="min-width:210px">
@@ -997,21 +994,21 @@
   <ul>
     <li>Top-bar actions are 38dp icon buttons with accessible labels. Keep the title column flexible and the always-present app menu last. Do not align a single action against the centre of a two-line title column. <code>FitTopBarLayoutTest</code> measures width and anchoring, not device truncation.</li>
     <li><code>FitDropdownMenu</code>/<code>FitMenuEntry</code> share typography across app and project menus. Popup contents cost no bar width. Close before callbacks; destructive entries use error colour and go last. <code>≡</code> means app actions; <code>⋯</code> means project actions (row menu or Canvas → Project). They intentionally coexist on Canvas.</li>
-    <li>Use rendered glyph samples on Android before adding symbols. <code>⚙</code>/<code>ℹ</code> can become emoji, <code>❐</code> lost its duplicate shape and <code>␡</code> rendered tiny letters. Scope is <code>▤</code>; nudge arrows are drawn paths, not font arrows with mismatched baselines.</li>
+    <li>Use rendered glyph samples on Android before adding symbols. <code>⚙</code>/<code>ℹ</code> can become emoji, <code>❐</code> lost its duplicate shape and <code>␡</code> rendered tiny letters. Rotate is <code>↺</code> <code>↻</code>, checked on the Android 16 emulator; nudge arrows are drawn paths, not font arrows with mismatched baselines.</li>
     <li>Library tabs share one header/inset component. Measure the taller subtitle, retain the hidden one with alpha zero and cleared semantics, and keep the action floor at 48dp. Hidden import uses Refresh's slot on Projects. Crash tint and “Report crash” change wording/colour only, never geometry. <code>LibraryHeaderLayoutTest</code> covers both tabs and the developer flag.</li>
     <li>Dialog text slots scroll once at the outer slot; nested scrolling still clips text above it. About stays short enough for landscape, with a one-sentence independent/non-affiliated statement, labelled version and project link. <code>AboutCopyTest</code> pins meaning/length; <code>LinkAnnotation.Url</code> uses the URI handler without a UI-layer Context/Intent.</li>
   </ul>
 
   <h3 id="canvas-interaction">Canvas and selection</h3>
   <ul>
-    <li>Five rail destinations: Canvas, Widgets, Background, Styles, Install. Back leaves the editor; Canvas is a destination, not a hidden mode. Widgets is a picker: a single selection goes to Canvas, a set stays in the list. Inspector is secondary Record details. Navigate out of Inspector after a removal-count change, not merely a cleared selection.</li>
-    <li><code>SelectionActionBar</code> has four drawn nudge arrows and seven actions: smaller, larger, duplicate, remove, colour, scope, details. Both rows fill width. Apply the icon button's size before the caller modifier so weight controls width while height stays 38dp; don't repeat the header's dimensions in the tray. Compact buttons serve this tray.</li>
-    <li>Scope defaults to selected style. Its toggle uses filled tint, border and glyph; colour alone does not communicate selection. Keep it visible but disabled for AOD, imported widgets and single-style faces. Colour menus show <code>checkedLabel</code> and close before action; use a drawn bordered swatch so black remains visible.</li>
+    <li>Five rail destinations: Canvas, Widgets, Background, Styles, Install. Back leaves the editor; Canvas is a destination, not a hidden mode. Widgets is a picker: a single selection goes to Canvas, a set stays in the list. Inspector is Edit widget, reached by the tray's <code>›</code>. Navigate out of Inspector after a removal-count change, not merely a cleared selection.</li>
+    <li><code>SelectionActionBar</code> has four drawn nudge arrows and seven actions: smaller, larger, rotate left, rotate right, duplicate, remove, Edit widget. Nothing sits beside its title; the set tray's only header action is Clear. Both rows fill width. Apply the icon button's size before the caller modifier so weight controls width while height stays 38dp; don't repeat the header's dimensions in the tray. Compact buttons serve this tray.</li>
+    <li>Edit widget holds what is set rather than stepped. Its order is scope switch, position, size, rotation, colour, layer order, then the record's facts and duplicate/remove: every control follows the scope above it. Scope defaults to selected style; AOD, imported widgets and single-style faces explain why it is fixed instead of offering a switch. Tray edits follow the same scope, which <code>CanvasHint</code> states above the single tray and a label states in the set tray.</li>
     <li><code>RepeatingNudgeButton</code> needs a click fallback for fast taps and a repeated flag to avoid one extra step on release. <code>EditorViewModelTest</code> checks queued movement. Queue from pending/in-flight targets, never a stale snapshot; coalesce to the latest target. Restoring position must cancel outstanding movement.</li>
     <li>Keep gesture inputs current with <code>rememberUpdatedState</code>; do not restart <code>pointerInput</code> on every snapshot. <code>stepDragAxis</code> accumulates unclamped finger travel and clamps only output, so returning from an edge stays under the finger.</li>
-    <li>Arrange layers is a labelled tap action on the single-widget tray and in Record details. Its scrollable dialog offers Bring to front, Bring forward, Send backward and Send to back, with selected-variant-only scope. Disable actions at boundaries and explain fixed full-face backgrounds. Close before the edit callback; refused alignment changes use the persistent editor error. Selection follows the moved widget. Host dialog state outside responsive content. The tray puts coordinates below the title/action row so three labelled icons do not truncate geometry.</li>
-    <li>Rotate widget is a labelled tap action on the single-widget tray and in Record details. Its dialog lives outside the responsive tray so an orientation change retains the pending angle. The scrollable body shows current/original angles and edit scope, accepts tenths of a degree, and offers 15-degree steps and Reset rotation. Apply commits the chosen angle; Cancel leaves it unchanged. Unsupported types explain the limitation. Keep the opaque black text backdrop and approximate-font limitation visible.</li>
-    <li>The first hold enters selection mode, including on the already-selected widget. Repeated holds keep an item selected; taps toggle membership. A remaining singleton stays in selection mode until Done returns it to ordinary editing. Clear, bare canvas or removing the final pick exits. The single-widget tray and widget rows provide labelled tap alternatives to holding. Widgets stays open while selecting, including one item; Edit on canvas opens the set controls. Set drag is disabled, including for one item. Nudge by the most constrained member's shared step. Duplicate/remove use single-widget calls, stop at first refusal and report committed results; remove highest index first.</li>
+    <li>Arrange layers lives in Edit widget as four buttons: Bring to front, Bring forward, Send backward and Send to back, with selected-variant-only scope. Disable actions at boundaries and explain fixed full-face backgrounds. Refused alignment changes use the persistent editor error. Selection follows the moved widget.</li>
+    <li>Rotation is the tray's <code>↺</code> <code>↻</code> (15° per tap) and, in Edit widget, the same buttons plus current/original angles, scope, an exact angle and Reset rotation, all on the page. Text, lines and vector arcs turn; lines and arcs take whole degrees. Disable the buttons rather than hide them for other types, and explain in Edit widget that their tilt is artwork. Keep the opaque black text backdrop and approximate-font limitation visible for text.</li>
+    <li>The first hold enters selection mode, including on the already-selected widget. Repeated holds keep an item selected; taps toggle membership. A singleton stays in selection mode with the set tray; Clear, bare canvas or removing the final pick exits. There is no Done: a plain tap then selects one widget for ordinary editing. Widget rows' <code>+</code> is the labelled tap alternative to holding. Widgets stays open while selecting, including one item; Edit on canvas opens the set controls. Set drag is disabled, including for one item. Nudge by the most constrained member's shared step. Duplicate/remove use single-widget calls, stop at first refusal and report committed results; remove highest index first.</li>
     <li>Publish all visual set targets together in <code>pendingSetMove</code>; <code>setMoveSegments</code> preserves intervening z-order while individual commits finish. Keep the tray's height stable and unsupported set actions disabled.</li>
   </ul>
 
@@ -1034,7 +1031,7 @@
   <h3 id="widget-import">Donor imports</h3>
   <ul>
     <li><strong>Donor backgrounds:</strong> Background offers “From another watch face” beside image picking. Reuse the donor catalogue and variant labels, show only the primary background asset, and explain missing or additional full-panel artwork. Review is UNAPPLIED, renders the encoded result, has tap-accessible Before/After controls and lists both affected and skipped variants. Apply commits; back/cancel does not. Keep source/review errors in the picker and all content scrollable at large text or short height.</li>
-    <li><strong>Style deletion:</strong> Each numbered style has a labelled Delete action. Manage styles shows current resource previews, exact bytes reclaimed, remaining numbering and active-style fallback before an explicit destructive confirmation. Keep at least one numbered style; AOD is separate and cannot be deleted. Explain that Reset restores all pristine styles while discarding other edits. Keep the selection and confirmation across orientation changes, with scrolling content and reachable actions.</li>
+    <li><strong>Style deletion:</strong> Each numbered style card has its own error-tinted <code>✕</code>, disabled on the last style. It opens one confirmation dialog, like removing a widget: exact bytes reclaimed, renumbering, active-style fallback and the Reset consequence, then Cancel or Delete style. A style still needed by an unapplied background says so and cannot be confirmed. Manage styles, with previews and several picks, serves capacity recovery. Keep at least one numbered style; AOD is separate and cannot be deleted. Keep the selection and confirmation across orientation changes, with scrolling content and reachable actions.</li>
     <li><strong>Capacity recovery:</strong> Only typed BIN-capacity failures offer Manage styles; partial background additions offer it too. Protect the pending target style, retain image placement and donor picks, and regenerate Review after deletion. Do not re-add successful widgets from a partial batch. State that confirmed deletion was saved separately and cancelling the pending edit does not undo it. Errors remain in the dialog that owns them.</li>
     <li>A full-screen child from Widgets, not a sixth rail tab. Reuse catalogue grid and shared components; no separate Projects tab. Say whether each donor is cached or requires download, and show unavailable widgets with refusal reasons in List.</li>
     <li>Pick on the donor face with the editor's hit testing, or use rows for hands without outlines. Number picks in insertion/z-order. Selection offers <strong>Review widget(s)</strong>; only the review's <strong>Add</strong> commits. Face size means used bytes. Single-ticket pricing is exact; sets say “at least” and retain partial-save consequences.</li>
