@@ -1273,9 +1273,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun recolorPairWidget(
+    override suspend fun recolorWidget(
         styleName: String,
         globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
         x: Int,
         y: Int,
@@ -1285,11 +1286,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
         mutex.withLock {
             val current = requireSession()
             val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
-            val styleNames = targetIndices.keys.toList()
-            val edit = FaceEditor.recolorPairWidgetAcrossStyles(
+            val edit = FaceEditor.recolorWidgetAcrossStyles(
                 source = current.currentContainer,
-                entryBasenames = styleNames,
+                entryBasenames = targetIndices.keys.toList(),
                 globalIndex = globalIndex,
+                widgetType = widgetType,
                 sequenceId = sequenceId,
                 x = x,
                 y = y,
@@ -1302,8 +1303,53 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 EditAuditSummary(
                     edit.changedPayloadBytes,
                     edit.changedStyles,
-                    operation = "Pair widget color changed " +
-                        editScope(styleName, applyToAllStyles),
+                    operation = "Widget colour changed " + editScope(styleName, applyToAllStyles),
+                ),
+                styleName,
+            )
+        }
+    }
+
+    override suspend fun resetWidgetColor(
+        styleName: String,
+        globalIndex: Int,
+        widgetType: Int,
+        sequenceId: Int,
+        x: Int,
+        y: Int,
+        applyToAllStyles: Boolean,
+    ): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val current = requireSession()
+            val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
+            // Each style's own original, because styles often differ in nothing but colour.
+            val colors = targetIndices.mapNotNull { (variant, index) ->
+                current.originalColor(variant, index)?.let { variant to it }
+            }.toMap()
+            if (styleName !in colors) {
+                throw WatchFaceException(
+                    "This widget's original colour is not known, so it cannot be reset.",
+                    "reset colour: no original for $styleName #$globalIndex",
+                )
+            }
+            val edit = FaceEditor.recolorWidgetAcrossStyles(
+                source = current.currentContainer,
+                entryBasenames = targetIndices.keys.toList(),
+                globalIndex = globalIndex,
+                widgetType = widgetType,
+                sequenceId = sequenceId,
+                x = x,
+                y = y,
+                colors = colors,
+                targetIndices = targetIndices,
+            )
+            commit(
+                current,
+                edit.container,
+                EditAuditSummary(
+                    edit.changedPayloadBytes,
+                    edit.changedStyles,
+                    operation = "Widget colour reset " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
             )
@@ -2339,6 +2385,17 @@ class WatchFaceRepositoryImpl @Inject constructor(
             return previous.copy(widgets = previous.widgets + WidgetImportOrigin(
                 UUID.randomUUID().toString(), faceId, variant,
                 Base64.getEncoder().encodeToString(result.baseline.data), listOf(result.globalIndex)))
+        }
+
+        /**
+         * The colour [index] in [variant] shipped with: its import's baseline record, or the
+         * original it — or the widget it was duplicated from — is saved against.
+         */
+        fun originalColor(variant: String, index: Int): Int? {
+            val record = importOrigins?.find(variant, index)
+                ?.let { FaceRecordParser.scanWidgets(it.entry(currentContainer.entryByBasename(variant))).single() }
+                ?: identities().widgets[variant]?.get(index)?.originalIndex?.let(originalRecordsFor(variant)::get)
+            return record?.colorWord?.takeIf { it ushr 24 == 0xFFL }?.toInt()
         }
 
         fun widgetTargetIndices(styleName: String, applyToAllStyles: Boolean, index: Int): Map<String, Int> {

@@ -398,6 +398,59 @@ class WidgetImportRepositoryTest {
         assertEquals("00008", repository.openProject(loaded.projectId).widgets.last().importedFromFaceId)
     }
 
+    /**
+     * `00106`'s four styles are one theme in four accents: its date composite is teal, lime,
+     * peach and lavender. Any colour lands in every style, survives reopening, and Reset
+     * returns each style to *its own* accent — then the container is the shipped one.
+     */
+    @Test fun aColourLandsInEveryStyleAndResetReturnsEachToItsOwn() = runBlocking {
+        val pristine = repository.openPackage(face("00106"))
+        val styles = pristine.styleNames
+        fun color(s: EditorSnapshot, index: Int) = s.widgets.single { it.globalIndex == index }.colorArgb
+        val comp = pristine.widgets.first { it.type == 13 && it.colorArgb != null }
+        val shipped = styles.associateWith { color(repository.currentSnapshot(it), comp.globalIndex) }
+        assertEquals("the styles must differ for this to mean anything", styles.size, shipped.values.toSet().size)
+        val red = 0xFFFF_2000.toInt()
+        var s = repository.currentSnapshot(styles.first())
+        s = repository.recolorWidget(styles.first(), comp.globalIndex, comp.type, comp.sequenceId,
+            comp.x, comp.y, red, true)
+        assertEquals(styles, s.audit?.changedStyles)
+        styles.forEach { assertEquals(it, red, color(repository.currentSnapshot(it), comp.globalIndex)) }
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(red, color(s, comp.globalIndex))
+        assertEquals(shipped[s.selectedVariant.basename], s.widgets.single { it.globalIndex == comp.globalIndex }.originalColorArgb)
+        s = repository.resetWidgetColor(s.selectedVariant.basename, comp.globalIndex, comp.type,
+            comp.sequenceId, comp.x, comp.y, true)
+        styles.forEach { assertEquals(it, shipped[it], color(repository.currentSnapshot(it), comp.globalIndex)) }
+        assertArrayEquals(bin("00106"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    /**
+     * A rule, a value and an arc take any colour in the selected style alone, and a copy
+     * resets to the colour of the widget it was copied from.
+     */
+    @Test fun rulesValuesAndArcsRecolourInTheirStyleAndACopyResetsToItsSource() = runBlocking {
+        for ((id, type) in listOf("00106" to 7, "00106" to 5, "00023" to 6)) {
+            val pristine = repository.openPackage(face(id))
+            val widget = pristine.widgets.first { it.type == type && it.colorArgb != null }
+            val blue = 0xFF20_40FF.toInt()
+            var s = repository.recolorWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+                widget.x, widget.y, blue, false)
+            assertEquals("$id type $type", listOf("style0.bin"), s.audit?.changedStyles)
+            assertEquals(blue, s.widgets.single { it.globalIndex == widget.globalIndex }.colorArgb)
+            assertTrue(pixels(s, widget.globalIndex).any { it ushr 24 == 0xFF && it and 0xFFFFFF == 0x2040FF })
+            s = repository.duplicateWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+                widget.x, widget.y, false)
+            val copy = s.widgets.last()
+            assertEquals(blue, copy.colorArgb)
+            assertEquals(widget.colorArgb, copy.originalColorArgb)
+            s = repository.resetWidgetColor("style0.bin", copy.globalIndex, copy.type, copy.sequenceId,
+                copy.x, copy.y, false)
+            assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
+            assertEquals(blue, s.widgets.single { it.globalIndex == widget.globalIndex }.colorArgb)
+        }
+    }
+
     @Test fun compositeRotationPreservesOriginalThroughDuplicateReopenAndReset() = runBlocking {
         val pristine = repository.openPackage(face("00105"))
         val widget = pristine.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
@@ -576,10 +629,16 @@ class WidgetImportRepositoryTest {
             assertEquals(id, widget.importedFromFaceId)
             assertTrue(pixels(s, widget.globalIndex).any { it ushr 24 != 0 })
             if (widget.type == 5) {
-                s = repository.recolorPairWidget(s.selectedVariant.basename, widget.globalIndex,
+                s = repository.recolorWidget(s.selectedVariant.basename, widget.globalIndex, widget.type,
                     widget.sequenceId, widget.x, widget.y, 0xFF00FF00.toInt(), true)
                 assertEquals(0xFF00FF00.toInt(), s.widgets.last().colorArgb)
                 assertEquals(widget.originalColorArgb, s.widgets.last().originalColorArgb)
+                // An import resets to the colour its donor shipped it with.
+                if (widget.colorArgb != 0xFF00FF00.toInt()) {
+                    s = repository.resetWidgetColor(s.selectedVariant.basename, widget.globalIndex, widget.type,
+                        widget.sequenceId, widget.x, widget.y, true)
+                    assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
+                }
             }
             s = move(s, widget)
             val moved = s.widgets.last()

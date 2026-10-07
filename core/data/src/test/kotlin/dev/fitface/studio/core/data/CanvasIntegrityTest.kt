@@ -192,6 +192,48 @@ class CanvasIntegrityTest {
         }
     }
 
+    /**
+     * A recolour redraws one widget in its new colour and nothing else: a value, a composite
+     * and a rule on `00106`, and a vector arc on `00023`. Every other layer is identical,
+     * every changed pixel of the face lies inside the widget's rectangle, and its solid
+     * pixels are the new colour.
+     */
+    @Test fun recolouringAWidgetChangesOnlyItsOwnPixelsToTheNewColour() {
+        val color = 0xFFFF_2000.toInt()
+        var checked = 0
+        for ((id, type) in listOf("00106" to 5, "00106" to 13, "00106" to 7, "00023" to 6)) {
+            val path = containers.firstOrNull { it.fileName.toString().contains(id) } ?: continue
+            val original = Fit3Container.parse(Files.readAllBytes(path))
+            val entry = original.entryByBasename("style0.bin")
+            val widget = FaceRecordParser.widgetGuides(entry).first { it.type == type && it.colorArgb != null }
+            val edited = FaceEditor.recolorWidgetAcrossStyles(original, listOf(entry.basename), widget.globalIndex,
+                widget.type, widget.sequenceId, widget.x, widget.y, color).container
+            val old = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
+            val new = WidgetPreviewComposer.compose(edited.entryByBasename(entry.basename), edited.entries,
+                WidgetTextRasterizer::render)
+            old.widgetImageLayers.filter { it.globalIndex != widget.globalIndex }.forEach { untouched ->
+                val same = new.widgetImageLayers.single { it.globalIndex == untouched.globalIndex }
+                org.junit.Assert.assertArrayEquals("$id #${untouched.globalIndex}", untouched.frame.argb, same.frame.argb)
+            }
+            val solid = new.widgetImageLayers.single { it.globalIndex == widget.globalIndex }.frame.argb
+                .filter { it ushr 24 == 0xFF }
+            assertTrue("$id type $type drew no solid pixel", solid.isNotEmpty())
+            assertTrue("$id type $type kept another colour", solid.all { it and 0xFFFFFF == color and 0xFFFFFF })
+            val width = old.composed.width
+            val changed = old.composed.argb.indices.filter { old.composed.argb[it] != new.composed.argb[it] }
+            assertTrue("$id type $type: the recolour must show", changed.isNotEmpty())
+            val pad = 16
+            changed.forEach { pixel ->
+                val x = pixel % width; val y = pixel / width
+                assertTrue("$id type $type: pixel $x,$y changed outside the widget",
+                    x in widget.drawLeft - pad until widget.drawLeft + widget.width + pad &&
+                        y in widget.drawTop - pad until widget.drawTop + widget.height + pad)
+            }
+            checked++
+        }
+        org.junit.Assume.assumeTrue("corpus faces 00106/00023 missing", checked > 0)
+    }
+
     /** One face's canvas, assembled exactly the way `WatchFaceRepositoryImpl` does. */
     private class Canvas(
         val guides: List<WidgetGuide>,

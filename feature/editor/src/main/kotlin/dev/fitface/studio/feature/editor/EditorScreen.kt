@@ -390,7 +390,7 @@ private fun EditorScreen(
     onBackgroundImported: (EditorSnapshot) -> Unit,
     onStylesDeleted: (EditorSnapshot) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
-    onWidgetColor: (Int) -> Unit,
+    onWidgetColor: (Int?) -> Unit,
     onRotateWidget: (Int) -> Unit,
     onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -1035,7 +1035,7 @@ private fun EditorPageContent(
     onManageStyles: () -> Unit,
     onDeleteStyle: (String) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
-    onWidgetColor: (Int) -> Unit,
+    onWidgetColor: (Int?) -> Unit,
     onRotateWidget: (Int) -> Unit,
     onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -1550,14 +1550,6 @@ private fun TrayScopeLabel(state: EditorUiState, snapshot: EditorSnapshot, impor
         color = if (all) MaterialTheme.colorScheme.primary else null,
     )
 }
-
-/** The four colours a Pair's record can carry, in the order the inspector lists them. */
-private val WidgetColors = listOf(
-    R.string.editor_color_white to 0xFFFF_FFFF.toInt(),
-    R.string.editor_color_cyan to 0xFF00_FFFF.toInt(),
-    R.string.editor_color_pink to 0xFFFF_3DDC.toInt(),
-    R.string.editor_color_green to 0xFF00_FF00.toInt(),
-)
 
 /**
  * Removal's confirmation, shared by the action bar and the inspector.
@@ -2539,7 +2531,7 @@ private fun InspectorWorkspace(
     onRemove: () -> Unit,
     onDuplicate: () -> Unit,
     onResize: (Boolean) -> Unit,
-    onColor: (Int) -> Unit,
+    onColor: (Int?) -> Unit,
     onRotate: (Int) -> Unit,
     onArrange: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     modifier: Modifier = Modifier,
@@ -2712,31 +2704,7 @@ private fun InspectorWorkspace(
         }
         WidgetSizeControls(widget, !state.isWorking, onResize)
         RotationControls(widget, snapshot, state.applyWidgetEditsToAllStyles, !state.isWorking, onRotate)
-        widget.colorArgb?.let { currentColor ->
-            val colors = WidgetColors.map { (labelId, argb) -> stringResource(labelId) to argb }
-            Column {
-                MicroLabel(
-                    stringResource(
-                        R.string.editor_pair_color,
-                        currentColor.toUInt().toString(16).padStart(8, '0').uppercase(),
-                    ),
-                )
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    colors.forEach { (label, color) ->
-                        FitChip(
-                            text = label,
-                            selected = currentColor == color,
-                            onClick = { onColor(color) },
-                            modifier = Modifier.weight(1f),
-                            enabled = !state.isWorking,
-                        )
-                    }
-                }
-            }
-        }
+        ColorControls(widget, snapshot, state.applyWidgetEditsToAllStyles, !state.isWorking, onColor)
         ArrangementControls(widget, snapshot, !state.isWorking, onArrange)
         Column(
             Modifier.fillMaxWidth()

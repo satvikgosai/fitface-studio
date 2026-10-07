@@ -174,6 +174,18 @@ object WidgetSchema {
         }
     }
 
+    /**
+     * Where a type stores its colour, if it stores one — in this table for the reason
+     * [RotationModel] is.
+     *
+     * Every colour is a whole AARRGGBB word at [offset]: the watch converts its RGB to
+     * RGB565 (`0x2C106428`) and never reads the alpha byte. [copies] are words the
+     * producer keeps equal to it — every catalogue Rule and arc does — and the watch never
+     * reads; an edit rewrites a copy only where it still equals the colour, so a record
+     * that broke the convention keeps its own bytes.
+     */
+    data class ColorModel(val offset: Int, val copies: List<Int> = emptyList())
+
     data class Spec(
         val type: Int,
         val name: String,
@@ -211,7 +223,19 @@ object WidgetSchema {
         val resize: ResizeModel? = null,
         /** How this type turns, or null for one this app cannot rotate. */
         val rotation: RotationModel? = null,
+        /** Where this type's colour is, or null for one that stores none. */
+        val color: ColorModel? = null,
     ) {
+        /**
+         * [word] with its angle and colour fields cleared, for identity: both are mutable
+         * properties of a widget, not part of which widget it is.
+         */
+        fun stableWord(wordOffset: Int, word: Long): Long {
+            val turned = rotation?.stableWord(wordOffset, word) ?: word
+            val colorWords = color?.let { listOf(it.offset) + it.copies }.orEmpty()
+            return if (wordOffset in colorWords) 0L else turned
+        }
+
         /** The exact size a record of this type must have, given its own bytes. */
         fun expectedSize(record: ByteArray, base: Int): Int? = when (val layout = pointers) {
             is PointerLayout.Table -> {
@@ -304,6 +328,7 @@ object WidgetSchema {
         hasStoredExtent = true,
         pointers = PointerLayout.None,
         sources = null,
+        color = ColorModel(0x24),
     )
 
     private val VECTOR_ARC = Spec(
@@ -322,6 +347,9 @@ object WidgetSchema {
         // cheapest resize in the format, and the only one that adds no bytes at all.
         resize = ResizeModel.Box,
         rotation = RotationModel.AngleRange(startOffset = 0x28, endOffset = 0x2A),
+        // `+0x34` is the fill the constructor reads; `+0x38` copies it in all 75 arcs.
+        // `+0x2C/+0x30` hold a track colour no code path draws, so they are left alone.
+        color = ColorModel(0x34, copies = listOf(0x38)),
     )
 
     private val BADGE = Spec(
@@ -338,6 +366,9 @@ object WidgetSchema {
         sources = setOf(29, 37, 41, 48, 70, 71, 115),
         resize = ResizeModel.Endpoint,
         rotation = RotationModel.Endpoints,
+        // `+0x28` is the colour the constructor reads; `+0x2C` copies it in all 84 Rules.
+        // `+0x20/+0x24` are never read and differ from it, so they are left alone.
+        color = ColorModel(0x28, copies = listOf(0x2C)),
     )
 
     private val SOURCE_GROUP = Spec(
@@ -368,6 +399,7 @@ object WidgetSchema {
         sources = null,
         followsCommonSource = false,
         rotation = RotationModel.NativeAngle(0x5C),
+        color = ColorModel(0x58),
     )
 
     private val IMAGE_ARC = Spec(

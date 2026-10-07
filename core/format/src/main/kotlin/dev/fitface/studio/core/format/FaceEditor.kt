@@ -155,55 +155,85 @@ object FaceEditor {
         return finalize(source, output, listOf(entry), changed)
     }
 
-    fun recolorPairWidgetAcrossStyles(
+    /** [recolorWidgetAcrossStyles] with one colour for every entry. */
+    fun recolorWidgetAcrossStyles(
         source: Fit3Container,
         entryBasenames: List<String>,
         globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
         x: Int,
         y: Int,
         colorArgb: Int,
         targetIndices: Map<String, Int>? = null,
+    ): ContainerEdit = recolorWidgetAcrossStyles(
+        source, entryBasenames, globalIndex, widgetType, sequenceId, x, y,
+        entryBasenames.associateWith { colorArgb }, targetIndices,
+    )
+
+    /**
+     * Sets one widget's colour in the first entry of [entryBasenames], and in every later
+     * entry that carries it — a same-size patch of its type's [WidgetSchema.ColorModel].
+     *
+     * [colors] gives each entry its own, because a reset returns every style to the
+     * colour *it* shipped with: styles often differ in nothing else (`00106`'s four are
+     * one theme in four accents), so one colour for all of them would be a recolour.
+     * An entry without one is left alone.
+     *
+     * A sibling whose colour word is not opaque ARGB is not the shape this rewrite is
+     * proven against, so it keeps its own colour instead of being corrupted — the same
+     * "best effort away from the selected style" rule as every cross-style edit.
+     */
+    fun recolorWidgetAcrossStyles(
+        source: Fit3Container,
+        entryBasenames: List<String>,
+        globalIndex: Int,
+        widgetType: Int,
+        sequenceId: Int,
+        x: Int,
+        y: Int,
+        colors: Map<String, Int>,
+        targetIndices: Map<String, Int>? = null,
     ): ContainerEdit {
         requireEditable(source)
-        if (colorArgb ushr 24 != 0xFF) {
-            throw Fit3FormatException("Pair widget color must be opaque ARGB")
+        val model = WidgetSchema.spec(widgetType).color
+            ?: throw Fit3FormatException("widget type $widgetType stores no colour")
+        if (colors.values.any { it ushr 24 != 0xFF }) {
+            throw Fit3FormatException("widget colour must be opaque ARGB")
         }
         val resolved = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
             records.singleOrNull {
                 it.globalIndex == globalIndex &&
-                    it.widgetType == WIDGET_PAIR &&
+                    it.widgetType == widgetType &&
                     it.sequenceId == sequenceId &&
                     it.x == x &&
                     it.y == y
             }
         }
-        if (resolved.first().second.words.firstOrNull()?.ushr(24) != 0xFFL) {
-            throw Fit3FormatException("Pair widget does not expose an opaque color word")
+        if (resolved.first().second.colorWord?.ushr(24) != 0xFFL) {
+            throw Fit3FormatException("widget does not expose an opaque colour word")
         }
-        // A sibling whose colour word is not opaque ARGB is not the schema this
-        // rewrite is proven against, so it keeps its own colour instead of being
-        // corrupted — the same "best effort away from the selected style" rule.
-        val targets = resolved.filter { (_, record) ->
-            record.words.firstOrNull()?.ushr(24) == 0xFFL
+        val targets = resolved.filter { (entry, record) ->
+            record.colorWord?.ushr(24) == 0xFFL && entry.basename in colors
         }
         val output = source.toByteArray()
         val before = output.copyOf()
         targets.forEach { (entry, record) ->
-            output.putU32(
-                entry.offset + record.recordOffset + WIDGET_FIXED_SIZE,
-                colorArgb.toLong() and 0xFFFF_FFFFL,
-            )
+            val color = colors.getValue(entry.basename).toLong() and 0xFFFF_FFFFL
+            val stored = requireNotNull(record.colorWord)
+            (listOf(model.offset) + model.copies.filter { record.word(it) == stored }).forEach { field ->
+                output.putU32(entry.offset + record.fieldOffset(field), color)
+            }
         }
         var changed = 0
         val changedEntries = targets.mapNotNull { (entry, record) ->
-            val start = entry.offset + record.recordOffset + WIDGET_FIXED_SIZE
-            val entryChanged = (start until start + 4).count { before[it] != output[it] }
+            val start = entry.offset + record.recordOffset
+            val entryChanged = (start until start + record.recordSize).count { before[it] != output[it] }
             changed += entryChanged
             entry.takeIf { entryChanged > 0 }
         }
         if (changed == 0) {
-            throw Fit3FormatException("Pair widget already uses that color")
+            throw Fit3FormatException("widget already uses that colour")
         }
         return finalize(source, output, changedEntries, changed)
     }

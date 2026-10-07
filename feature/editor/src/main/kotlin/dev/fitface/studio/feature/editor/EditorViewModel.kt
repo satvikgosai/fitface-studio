@@ -943,22 +943,29 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun setSelectedWidgetColor(colorArgb: Int) {
-        val snapshot = mutableState.value.snapshot ?: return
+    /**
+     * Sets the selected widget's colour, or — given null — returns it to the colour each
+     * style in scope shipped with.
+     */
+    fun setSelectedWidgetColor(colorArgb: Int?) {
+        val current = mutableState.value
+        if (current.isWorking) return
+        val snapshot = current.snapshot ?: return
         val selected = snapshot.widgets.singleOrNull {
-            it.globalIndex == mutableState.value.selectedWidgetIndex
+            it.globalIndex == current.selectedWidgetIndex
         } ?: return
         if (selected.colorArgb == null || selected.colorArgb == colorArgb) return
+        if (colorArgb != null && colorArgb ushr 24 != 0xFF) return
+        val style = snapshot.selectedVariant.basename
+        val allStyles = current.applyWidgetEditsToAllStyles
         operate {
-            repository.recolorPairWidget(
-                styleName = snapshot.selectedVariant.basename,
-                globalIndex = selected.globalIndex,
-                sequenceId = selected.sequenceId,
-                x = selected.x,
-                y = selected.y,
-                colorArgb = colorArgb,
-                applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
-            )
+            if (colorArgb == null) {
+                repository.resetWidgetColor(style, selected.globalIndex, selected.type,
+                    selected.sequenceId, selected.x, selected.y, allStyles)
+            } else {
+                repository.recolorWidget(style, selected.globalIndex, selected.type,
+                    selected.sequenceId, selected.x, selected.y, colorArgb, allStyles)
+            }
         }
     }
 

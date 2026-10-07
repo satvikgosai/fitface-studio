@@ -50,11 +50,11 @@ the app. The watch photo shows a real Bluetooth install.
   Export a project to a ZIP file and import it later, on this phone or another.
 - Replace, tint or add a background where the face has room for it, including
   copying the background from another face.
-- Move, resize, recolour, duplicate and remove supported widgets; restore removed
-  stock widgets and add widgets from other faces. Arrange widgets in front of or
-  behind each other. Rotate text, lines, arc gauges and pictures in 15° steps or to an
-  exact angle, with an original-angle reset; pictures are redrawn from their original
-  artwork.
+- Move, resize, duplicate and remove supported widgets, and set text, lines and arc
+  gauges to any colour. Restore removed stock widgets and add widgets from other faces.
+  Arrange widgets in front of or behind each other. Rotate text, lines, arc gauges and
+  pictures in 15° steps or to an exact angle, with an original-angle reset; pictures are
+  redrawn from their original artwork.
 - Edit the selected style, opt into matching widgets across styles, or edit the
   always-on display separately.
 - Delete unused styles with an exact space-saving review, including when an edit

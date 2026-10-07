@@ -1140,6 +1140,37 @@ live text, clipping, turned lines, arcs and artwork, and wake behaviour remain u
 Resized artwork with new dimensions is accepted on hardware; turned artwork, including an
 opaque pool stored with alpha, has not been sent.
 
+### Recolouring widgets
+
+`WidgetSchema.ColorModel` declares where a type's colour is. Every colour is one whole
+AARRGGBB word; the firmware converts its RGB to RGB565 (`0x2C106428`) and never reads the
+alpha byte, so any opaque RGB is a valid colour and the watch shows it at 16-bit depth.
+Vendor styles use arbitrary values (`00106`: teal, lime, peach and lavender accents).
+
+| Type | Colour read | Copies kept equal | Unread, left alone |
+| --- | --- | --- | --- |
+| Pair (live text) | `+0x24` | — | — |
+| Composite text | `+0x58` | — | — |
+| Rule | `+0x28` | `+0x2C` (all 84) | `+0x20`, `+0x24` |
+| Vector arc | `+0x34` | `+0x38` (all 75) | track `+0x2C`, `+0x30` |
+
+All 1,320 of these colour words in the 99-face catalogue are opaque. A recolour is a
+same-size patch: the colour word, plus each copy that still equals it before the edit, so a
+record that broke the convention keeps its own bytes. The requested colour must be opaque;
+the selected record must carry an opaque colour word, and a sibling style that does not is
+skipped. Picture widgets have no colour field; tinting their pixels is not offered.
+
+Colour is not identity: `payloadKey` masks colour words as it masks angles. Reset returns
+**each style in scope to its own original** — the import baseline, or the original (or
+duplicate source) saved in `SessionLineage` — because styles often differ only in colour.
+An older rule refused colour to any Pair sharing a sequence with another in its style (74
+of 734); edits match by index, type, sequence and position, so those are colourable now.
+
+`WidgetColorTest` patches each type on synthetic records, checks copies, refusals and
+identity, and recolours every colourable widget in the first style of the 99 faces and back
+to its shipped bytes. `CanvasIntegrityTest` checks a recolour changes only that widget's
+pixels. Pair colour is hardware-proven; Composite, Rule and arc colour have not been sent.
+
 ### Adding or replacing backgrounds
 
 Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.
@@ -1270,7 +1301,8 @@ widget import, and original/modified standalone-BIN installation.
 
 These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
 need particular attention; imported type/source combinations remain incompletely
-verified. No AOD edit (including added background), imported-image deletion, or the
+verified. Composite, Rule and vector arc recolours are software/corpus/emulator checked
+only. No AOD edit (including added background), imported-image deletion, or the
 single-style custom-template recipe has been verified on a watch. Resource preview
 tests prove joins and edit invariants, not exact ROM fonts, antialiasing or live data.
 `AodCanvasSweepTest` covers all 99 AOD entries in software. Other firmware may

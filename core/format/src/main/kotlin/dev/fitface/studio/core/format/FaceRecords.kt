@@ -187,6 +187,13 @@ data class WidgetRecord(
             else -> null
         }
 
+    /** The type's stored colour, `0xAARRGGBB`, or null for a type that stores none. */
+    val colorWord: Long?
+        get() = WidgetSchema.specOrNull(widgetType)?.color?.let { word(it.offset) }
+
+    /** The whole word at [offset] of the type-specific tail, or null outside it. */
+    fun word(offset: Int): Long? = wordFor(offset)?.takeIf { (_, shift) -> shift == 0 }?.first
+
     /** A Rule's stored line thickness. */
     val ruleThickness: Int?
         get() = if (widgetType == WIDGET_BADGE) {
@@ -915,14 +922,10 @@ object FaceRecordParser {
         val extents = drawnExtents(records, imagesByRelativeOffset)
         val placements = WidgetLayout.resolve(records, extents, panel)
         return records.map {
-            val pairMatches = records.count { candidate ->
-                candidate.widgetType == WIDGET_PAIR && candidate.sequenceId == it.sequenceId
-            }
-            val pairColor = it.words.firstOrNull()?.takeIf { word ->
-                word ushr 24 == 0xFFL
-            }?.toInt()
-            val canEditPair = it.widgetType == WIDGET_PAIR && pairMatches == 1 &&
-                pairColor != null
+            // Opaque in every one of the catalogue's 1,320 colour words; anything else is
+            // not the shape the colour edit is proven against, so it offers none.
+            val color = it.colorWord?.takeIf { word -> word ushr 24 == 0xFFL }?.toInt()
+            val canEditPair = it.widgetType == WIDGET_PAIR && color != null
             val referencedImages = referencedImages(it, imagesByRelativeOffset)
             val paintsBackground = background != null &&
                 referencedImages.any { image -> image.recordOffset == background.recordOffset }
@@ -1034,7 +1037,7 @@ object FaceRecordParser {
                     it.widgetType == WIDGET_SPRITE && count > 0
                 },
                 hasOpaqueBackdrop = opaqueBackdrop && placement == WidgetPlacement.CANVAS,
-                colorArgb = pairColor.takeIf { canEditPair },
+                colorArgb = color,
                 rotationTenths = (rotationOf(entry, it) ?: artworkTurn)?.first,
                 rotationKind = (rotationOf(entry, it) ?: artworkTurn)?.second,
                 sharedArtworkWidgets = resizePool?.widgets?.count { other -> other.ordinal != it.ordinal } ?: 0,
@@ -1066,7 +1069,7 @@ object FaceRecordParser {
                             )
                     placement == WidgetPlacement.HIDDEN ->
                         "No selectable outline. Use the arrows to move it."
-                    canEditPair -> "Drag to move; choose a solid colour below."
+                    canEditPair -> "Drag to move, or change its colour."
                     resizeKind == WidgetResizeKind.RASTER && resizePool != null ->
                         resizeMessage(resizePool, it)
                     resizeKind == WidgetResizeKind.FIELDS ->
@@ -1192,9 +1195,9 @@ object FaceRecordParser {
         add("type=${record.widgetType}")
         add("seq=${record.sequenceId}")
         add(images[record.unknown20]?.let { "u20=img${it.index}" } ?: "u20=${record.unknown20}")
-        val rotation = WidgetSchema.spec(record.widgetType).rotation
+        val spec = WidgetSchema.spec(record.widgetType)
         record.words.forEachIndexed { index, word ->
-            val stableWord = rotation?.stableWord(WIDGET_FIXED_SIZE + index * 4, word) ?: word
+            val stableWord = spec.stableWord(WIDGET_FIXED_SIZE + index * 4, word)
             add(images[stableWord]?.let { "img${it.index}" } ?: "raw$stableWord")
         }
     }

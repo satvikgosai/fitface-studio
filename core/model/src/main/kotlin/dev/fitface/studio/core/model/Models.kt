@@ -638,6 +638,7 @@ data class WidgetGuide(
     val frameCount: Int? = null,
     /** The watch paints this widget's full rectangle, hiding whatever is behind it. */
     val hasOpaqueBackdrop: Boolean = false,
+    /** The stored colour of a text, Rule or vector arc widget; null where none can be set. */
     val colorArgb: Int?,
     val originalColorArgb: Int? = colorArgb,
     /**
@@ -1228,13 +1229,32 @@ interface WatchFaceRepository {
         colorArgb: Int,
     ): EditorSnapshot
 
-    suspend fun recolorPairWidget(
+    /**
+     * Sets a text, Rule or vector arc widget's stored colour — any opaque RGB — in the
+     * selected style, or wherever it exists across styles when [applyToAllStyles].
+     */
+    suspend fun recolorWidget(
         styleName: String,
         globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
         x: Int,
         y: Int,
         colorArgb: Int,
+        applyToAllStyles: Boolean,
+    ): EditorSnapshot
+
+    /**
+     * Returns the widget to the colour it shipped with in **each** style it is edited in,
+     * not the selected style's colour everywhere: styles often differ only in colour.
+     */
+    suspend fun resetWidgetColor(
+        styleName: String,
+        globalIndex: Int,
+        widgetType: Int,
+        sequenceId: Int,
+        x: Int,
+        y: Int,
         applyToAllStyles: Boolean,
     ): EditorSnapshot
 
