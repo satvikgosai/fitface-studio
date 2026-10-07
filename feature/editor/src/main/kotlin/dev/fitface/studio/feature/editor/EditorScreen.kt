@@ -2601,57 +2601,6 @@ private fun InspectorWorkspace(
         }
         // Edits first, in the order they are reached for, and the record's facts after
         // them: this page is where a widget is edited, not only where it is described.
-        // The scope leads because every control below it follows it.
-        if (widget.importedFromFaceId != null) {
-            Text(stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
-        } else if (snapshot.isAodSelected) {
-            Text(
-                stringResource(R.string.editor_apply_all_aod),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        } else if (snapshot.styleNames.size == 1) {
-            // A switch with nothing on its other side is a control that does nothing.
-            Text(
-                stringResource(R.string.editor_apply_all_single),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        } else {
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                    .clickable { onApplyAll(!state.applyWidgetEditsToAllStyles) }.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.editor_apply_all_title),
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        if (state.applyWidgetEditsToAllStyles) {
-                            pluralStringResource(
-                                R.plurals.editor_apply_all_on,
-                                snapshot.styleNames.size,
-                                snapshot.styleNames.size,
-                            )
-                        } else {
-                            stringResource(
-                                R.string.editor_apply_all_off,
-                                snapshot.selectedVariantLabel(),
-                            )
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = state.applyWidgetEditsToAllStyles, onCheckedChange = onApplyAll)
-            }
-        }
         Column {
             MicroLabel(stringResource(R.string.editor_position_heading))
             Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2763,6 +2712,59 @@ private fun InspectorWorkspace(
                     Modifier.padding(top = 10.dp),
                     MaterialTheme.colorScheme.tertiary,
                 )
+            }
+        }
+        // The scope sits directly above Duplicate and Remove, where it was before 0.2.0's
+        // reordering: it governs those two as much as the edits above, and rotation and
+        // colour each repeat it in their own "Applies to" line.
+        if (widget.importedFromFaceId != null) {
+            Text(stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+        } else if (snapshot.isAodSelected) {
+            Text(
+                stringResource(R.string.editor_apply_all_aod),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        } else if (snapshot.styleNames.size == 1) {
+            // A switch with nothing on its other side is a control that does nothing.
+            Text(
+                stringResource(R.string.editor_apply_all_single),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        } else {
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                    .clickable { onApplyAll(!state.applyWidgetEditsToAllStyles) }.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.editor_apply_all_title),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        if (state.applyWidgetEditsToAllStyles) {
+                            pluralStringResource(
+                                R.plurals.editor_apply_all_on,
+                                snapshot.styleNames.size,
+                                snapshot.styleNames.size,
+                            )
+                        } else {
+                            stringResource(
+                                R.string.editor_apply_all_off,
+                                snapshot.selectedVariantLabel(),
+                            )
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = state.applyWidgetEditsToAllStyles, onCheckedChange = onApplyAll)
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
