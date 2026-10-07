@@ -49,7 +49,8 @@ data class WidgetImportOrigins(
     }
 
     /** Fail closed before opening an archive or committing provenance-dependent bytes. */
-    fun validate(original: Fit3Container, current: Fit3Container) {
+    fun validate(original: Fit3Container, current: Fit3Container,
+        expectedPaths: List<String> = original.entries.map { it.path }) {
         require(originalSha256 == digest(original.toByteArray())) { "Imported artwork belongs to a different original face." }
         require(widgets.isNotEmpty() && widgets.size <= 256) { "Invalid imported artwork table." }
         require(widgets.map { it.id }.distinct().size == widgets.size) { "Duplicate imported artwork identity." }
@@ -57,25 +58,7 @@ data class WidgetImportOrigins(
         require(widgets.sumOf { it.baseline.length.toLong() } <= MAX_BASE64_BYTES) {
             "This project has too much saved imported artwork. Start a new project to add more."
         }
-        val oldPaths = original.entries.map { it.path }
-        require(current.entries.take(oldPaths.size).map { it.path } == oldPaths) { "The edited entry paths do not belong to this face." }
-        val prefix = oldPaths.first().substringBeforeLast('/') + "/"
-        current.entries.drop(oldPaths.size).forEach {
-            require(it.path == prefix + it.basename && it.basename.matches(Regex("font_[A-Za-z0-9_]+\\.bin"))) {
-                "Unexpected resource added to the face."
-            }
-        }
-        // Imports may extend dictionaries, never rewrite the strings native widgets name.
-        FaceResources.fontBindings(original).forEach { binding ->
-            require(binding.data.contentEquals(current.entryByBasename(binding.basename).data)) {
-                "A native font binding was replaced."
-            }
-        }
-        FaceResources.dictionaries(original).forEach { dictionary ->
-            val before = LocaleDictionary.parse(dictionary).items
-            val after = LocaleDictionary.parse(current.entryByBasename(dictionary.basename)).items
-            require(after.take(before.size) == before) { "A native text dictionary was replaced." }
-        }
+        validateResources(original, current, expectedPaths)
         val claimed = mutableSetOf<Pair<String, Int>>()
         widgets.forEach { origin ->
             require(origin.id.length in 1..64 && origin.faceId.matches(Regex("\\d{5}"))) { "Invalid donor identity." }
@@ -101,6 +84,28 @@ data class WidgetImportOrigins(
     }
 
     companion object {
+        internal fun validateResources(original: Fit3Container, current: Fit3Container, expectedPaths: List<String>) {
+            val oldPaths = expectedPaths
+            require(current.entries.take(oldPaths.size).map { it.path } == oldPaths) { "The edited entry paths do not belong to this face." }
+            val prefix = oldPaths.first().substringBeforeLast('/') + "/"
+            current.entries.drop(oldPaths.size).forEach {
+                require(it.path == prefix + it.basename && it.basename.matches(Regex("font_[A-Za-z0-9_]+\\.bin"))) {
+                    "Unexpected resource added to the face."
+                }
+            }
+            // Imports may extend dictionaries, never rewrite the strings native widgets name.
+            FaceResources.fontBindings(original).forEach { binding ->
+                require(binding.data.contentEquals(current.entryByBasename(binding.basename).data)) {
+                    "A native font binding was replaced."
+                }
+            }
+            FaceResources.dictionaries(original).forEach { dictionary ->
+                val before = LocaleDictionary.parse(dictionary).items
+                val after = LocaleDictionary.parse(current.entryByBasename(dictionary.basename)).items
+                require(after.take(before.size) == before) { "A native text dictionary was replaced." }
+            }
+        }
+
         // Leaves room for two 4 MiB containers and previews inside the 16 MiB archive cap.
         const val MAX_BASE64_BYTES = 6L * 1024 * 1024
         fun digest(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")

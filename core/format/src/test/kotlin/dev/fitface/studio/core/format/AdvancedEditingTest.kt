@@ -119,10 +119,11 @@ class AdvancedEditingTest {
             source.entryByBasename(styles.first()),
         ).single { it.globalIndex == 1 && it.widgetType == 5 && it.sequenceId == 17 }
         val color = 0xFF12AB34.toInt()
-        val edit = FaceEditor.recolorPairWidgetAcrossStyles(
+        val edit = FaceEditor.recolorWidgetAcrossStyles(
             source = source,
             entryBasenames = styles,
             globalIndex = selected.globalIndex,
+            widgetType = selected.widgetType,
             sequenceId = selected.sequenceId,
             x = selected.x,
             y = selected.y,

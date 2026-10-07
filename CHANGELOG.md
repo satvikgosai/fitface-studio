@@ -4,6 +4,37 @@ User-visible changes per version. APKs are on the
 [releases page](https://github.com/satvikgosai/fitface-studio/releases); technical references are in
 the [documentation index](docs/README.md).
 
+## 0.2.1 (code `21`) — 2026-10-07
+
+Fixed:
+
+- On faces with many widgets, a duplicated or restored widget could appear somewhere
+  else, even outside the face. Copies now appear beside their original, and restored
+  widgets return to where they were.
+- **Duplicate** placed the copy exactly on top of its original, so an accidental tap
+  went unnoticed. The copy now lands a few pixels to the side.
+- Removing a copy made with **Duplicate** deletes it instead of adding it to the
+  Removed list. Removed originals can still be restored.
+- Holding the widget that was already selected now starts selecting several.
+
+Added:
+
+- Rotate text, lines, arc gauges and pictures in 15° steps, or to an exact angle, with
+  **Reset rotation** to return to the original. Pictures are redrawn from their
+  original artwork.
+- Set text, lines and arc gauges to any colour, using a one-tap colour, sliders or a hex
+  code. **Reset colour** returns each style to its own original colour.
+- Bring a widget to the front or send it behind others.
+- **Edit widget**, the last button under a selected widget, holds rotation, colour,
+  layer order and the switch for editing matching widgets in all styles.
+- Copy the background from another watch face, with a before-and-after review.
+- Delete styles you do not use, each showing how much space it frees. When an edit
+  needs more room than the watch allows, the app offers to delete styles and keeps
+  the edit waiting.
+- **Export** a project to a ZIP file from its menu, and **Import** it later on the
+  Projects tab, on this phone or another.
+- A **+** on each widget in the Widgets list adds it to a selection without holding.
+
 ## 0.2.0 (code `20`) — 2026-09-29
 
 Fixed:

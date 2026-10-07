@@ -638,8 +638,25 @@ data class WidgetGuide(
     val frameCount: Int? = null,
     /** The watch paints this widget's full rectangle, hiding whatever is behind it. */
     val hasOpaqueBackdrop: Boolean = false,
+    /** The stored colour of a text, Rule or vector arc widget; null where none can be set. */
     val colorArgb: Int?,
     val originalColorArgb: Int? = colorArgb,
+    /**
+     * The angle a rotation edits, in tenths; null when this widget cannot be turned.
+     * [rotationKind] says what the number is: a Composite's raw native angle, a Rule's
+     * direction or a vector arc's start.
+     */
+    val rotationTenths: Int? = null,
+    val originalRotationTenths: Int? = rotationTenths,
+    val rotationKind: WidgetRotationKind? = null,
+    /** Other widgets drawing the same artwork, which a resize or a turn changes with this one. */
+    val sharedArtworkWidgets: Int = 0,
+    /**
+     * The artwork, as shipped, has no transparency, so its whole rectangle draws — and turns.
+     * Unlike [hasOpaqueBackdrop] it stays true once a turn has stored the frames with alpha
+     * for the uncovered corners.
+     */
+    val opaqueArtwork: Boolean = false,
     val duplicateSourceGlobalIndex: Int? = null,
     /** Imports are edited only in the variant where they were added. */
     val importedFromFaceId: String? = null,
@@ -742,6 +759,9 @@ data class RemovedWidget(
     val followsReading: Boolean = false,
     val recordsByVariant: Map<String, ByteArray>,
     val importOriginId: String? = null,
+    val nativeIdentityRecorded: Boolean = false,
+    val nativeSourceIndices: Map<String, Int> = emptyMap(),
+    val duplicateSourceVariants: Set<String> = emptySet(),
 ) {
     /** What it draws, named — the same label the widget list shows for a live record. */
     val category: WidgetCategory get() = WidgetCategory.forWidgetType(widgetType)
@@ -823,6 +843,8 @@ data class EditorSnapshot(
     val activeStyleName: String,
     /** Face entries whose payload actually differs from the pristine container. */
     val editedVariantNames: Set<String> = emptySet(),
+    /** Current name to pristine name, stable across style deletions. */
+    val originalVariants: Map<String, String> = variants.associate { it.basename to it.basename },
     /**
      * The always-on display's own generated thumbnail, for its Styles-page row when it
      * is not [selectedVariant] — there is no packaged AOD preview to show instead, the
@@ -1094,6 +1116,8 @@ class DirectInstallPayload(
 }
 
 interface WatchFaceRepository {
+    suspend fun styleManagement(): StyleManagement = throw UnsupportedOperationException()
+    suspend fun deleteStyles(names: Set<String>, revision: String): EditorSnapshot = throw UnsupportedOperationException()
     /** Loads an independent catalogue package without creating/opening a donor project. */
     suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = throw UnsupportedOperationException()
     suspend fun widgetDonorVariant(handle: String, variant: String): WidgetDonorVariant = throw UnsupportedOperationException()
@@ -1101,6 +1125,11 @@ interface WatchFaceRepository {
         projectId: Long, targetVariant: String): WidgetImportPreview = throw UnsupportedOperationException()
     suspend fun importWidget(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
     suspend fun releaseWidgetDonor(handle: String) {}
+    suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
+        throw UnsupportedOperationException()
+    suspend fun previewBackgroundImport(handle: String, donorVariant: String,
+        projectId: Long, targetVariant: String): BackgroundImportPreview = throw UnsupportedOperationException()
+    suspend fun importBackground(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
     fun observeProjects(): Flow<List<ProjectSummary>>
 
     fun observeImageFit(): Flow<ImageFit>
@@ -1152,7 +1181,7 @@ interface WatchFaceRepository {
      *
      * [destinationUri] is a document the reader chose in the system picker, and it is the one
      * place this app writes outside its private storage — see invariant 5 in
-     * `docs/architecture.md`. Behind [DeveloperGate], because it is a debugging tool.
+     * `docs/architecture.md`.
      */
     suspend fun exportProject(projectId: Long, destinationUri: String): ExportedProject
 
@@ -1166,14 +1195,6 @@ interface WatchFaceRepository {
      * projects, which is also what makes an archive usable as a checkpoint.
      */
     suspend fun importProject(sourceUri: String): ImportedProject
-
-    /**
-     * Whether the export and import controls are on screen. Off on a fresh install, and
-     * turned on only by the phrase [DeveloperGate] holds.
-     */
-    fun observeDeveloperTools(): Flow<Boolean>
-
-    suspend fun setDeveloperTools(enabled: Boolean)
 
     suspend fun currentSnapshot(styleName: String? = null): EditorSnapshot
 
@@ -1208,13 +1229,32 @@ interface WatchFaceRepository {
         colorArgb: Int,
     ): EditorSnapshot
 
-    suspend fun recolorPairWidget(
+    /**
+     * Sets a text, Rule or vector arc widget's stored colour — any opaque RGB — in the
+     * selected style, or wherever it exists across styles when [applyToAllStyles].
+     */
+    suspend fun recolorWidget(
         styleName: String,
         globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
         x: Int,
         y: Int,
         colorArgb: Int,
+        applyToAllStyles: Boolean,
+    ): EditorSnapshot
+
+    /**
+     * Returns the widget to the colour it shipped with in **each** style it is edited in,
+     * not the selected style's colour everywhere: styles often differ only in colour.
+     */
+    suspend fun resetWidgetColor(
+        styleName: String,
+        globalIndex: Int,
+        widgetType: Int,
+        sequenceId: Int,
+        x: Int,
+        y: Int,
         applyToAllStyles: Boolean,
     ): EditorSnapshot
 
@@ -1227,6 +1267,13 @@ interface WatchFaceRepository {
         y: Int,
         applyToAllStyles: Boolean,
     ): EditorSnapshot
+
+    suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
+        x: Int, y: Int, destination: Int): EditorSnapshot = throw UnsupportedOperationException("Widget arrangement is unavailable")
+
+    suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
+        x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot =
+        throw UnsupportedOperationException("Widget rotation is unavailable")
 
     suspend fun resizeBackground(width: Int, height: Int): EditorSnapshot
 

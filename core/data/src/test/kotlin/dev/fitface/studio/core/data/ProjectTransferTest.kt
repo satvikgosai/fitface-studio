@@ -25,7 +25,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -488,18 +487,6 @@ class ProjectTransferTest {
         // And it is still a working project, which is the point of clamping rather than
         // refusing: none of the above makes the archive unusable.
         assertEquals(position(original), position(repository.openProject(imported.id)))
-    }
-
-    /** Off on a fresh install, and remembered once it is on. */
-    @Test
-    fun theDeveloperToolsAreOffUntilTheyAreTurnedOn() = runBlocking {
-        assertFalse(repository.observeDeveloperTools().first())
-
-        repository.setDeveloperTools(true)
-        assertTrue(repository.observeDeveloperTools().first())
-
-        repository.setDeveloperTools(false)
-        assertFalse(repository.observeDeveloperTools().first())
     }
 
     // --- helpers ---

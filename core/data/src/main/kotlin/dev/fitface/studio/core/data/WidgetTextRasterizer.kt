@@ -12,8 +12,8 @@ internal object WidgetTextRasterizer {
     fun render(text: WidgetText, width: Int, height: Int): PreviewFrame {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         try {
-            // The rotated Comp constructor allocates RGB888, not an alpha canvas.
-            if (text.rotationDegrees != 0.0) bitmap.eraseColor(0xFF000000.toInt())
+            // Left transparent at every angle: the rotated Comp canvas is RGB565 + alpha,
+            // cleared to opacity 0 before each draw, so only the glyphs cover the face.
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = text.color
                 textSize = text.font.pixelSize.toFloat()

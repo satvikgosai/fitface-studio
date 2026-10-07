@@ -42,6 +42,7 @@ object FaceEditor {
         sequenceId: Int,
         x: Int,
         y: Int,
+        targetIndices: Map<String, Int>? = null,
     ): ContainerEdit {
         requireEditable(source)
         if (x !in Short.MIN_VALUE..Short.MAX_VALUE ||
@@ -49,7 +50,7 @@ object FaceEditor {
         ) {
             throw Fit3FormatException("widget coordinates must fit signed 16-bit integers")
         }
-        val targets = StyleWidgetMatch.resolve(source, entryBasenames) { _, records ->
+        val targets = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
             records.singleOrNull {
                 it.globalIndex == globalIndex &&
                     it.widgetType == widgetType &&
@@ -154,56 +155,181 @@ object FaceEditor {
         return finalize(source, output, listOf(entry), changed)
     }
 
-    fun recolorPairWidgetAcrossStyles(
+    /** [recolorWidgetAcrossStyles] with one colour for every entry. */
+    fun recolorWidgetAcrossStyles(
         source: Fit3Container,
         entryBasenames: List<String>,
         globalIndex: Int,
+        widgetType: Int,
         sequenceId: Int,
         x: Int,
         y: Int,
         colorArgb: Int,
+        targetIndices: Map<String, Int>? = null,
+    ): ContainerEdit = recolorWidgetAcrossStyles(
+        source, entryBasenames, globalIndex, widgetType, sequenceId, x, y,
+        entryBasenames.associateWith { colorArgb }, targetIndices,
+    )
+
+    /**
+     * Sets one widget's colour in the first entry of [entryBasenames], and in every later
+     * entry that carries it — a same-size patch of its type's [WidgetSchema.ColorModel].
+     *
+     * [colors] gives each entry its own, because a reset returns every style to the
+     * colour *it* shipped with: styles often differ in nothing else (`00106`'s four are
+     * one theme in four accents), so one colour for all of them would be a recolour.
+     * An entry without one is left alone.
+     *
+     * A sibling whose colour word is not opaque ARGB is not the shape this rewrite is
+     * proven against, so it keeps its own colour instead of being corrupted — the same
+     * "best effort away from the selected style" rule as every cross-style edit.
+     */
+    fun recolorWidgetAcrossStyles(
+        source: Fit3Container,
+        entryBasenames: List<String>,
+        globalIndex: Int,
+        widgetType: Int,
+        sequenceId: Int,
+        x: Int,
+        y: Int,
+        colors: Map<String, Int>,
+        targetIndices: Map<String, Int>? = null,
     ): ContainerEdit {
         requireEditable(source)
-        if (colorArgb ushr 24 != 0xFF) {
-            throw Fit3FormatException("Pair widget color must be opaque ARGB")
+        val model = WidgetSchema.spec(widgetType).color
+            ?: throw Fit3FormatException("widget type $widgetType stores no colour")
+        if (colors.values.any { it ushr 24 != 0xFF }) {
+            throw Fit3FormatException("widget colour must be opaque ARGB")
         }
-        val resolved = StyleWidgetMatch.resolve(source, entryBasenames) { _, records ->
+        val resolved = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
             records.singleOrNull {
                 it.globalIndex == globalIndex &&
-                    it.widgetType == WIDGET_PAIR &&
+                    it.widgetType == widgetType &&
                     it.sequenceId == sequenceId &&
                     it.x == x &&
                     it.y == y
             }
         }
-        if (resolved.first().second.words.firstOrNull()?.ushr(24) != 0xFFL) {
-            throw Fit3FormatException("Pair widget does not expose an opaque color word")
+        if (resolved.first().second.colorWord?.ushr(24) != 0xFFL) {
+            throw Fit3FormatException("widget does not expose an opaque colour word")
         }
-        // A sibling whose colour word is not opaque ARGB is not the schema this
-        // rewrite is proven against, so it keeps its own colour instead of being
-        // corrupted — the same "best effort away from the selected style" rule.
-        val targets = resolved.filter { (_, record) ->
-            record.words.firstOrNull()?.ushr(24) == 0xFFL
+        val targets = resolved.filter { (entry, record) ->
+            record.colorWord?.ushr(24) == 0xFFL && entry.basename in colors
         }
         val output = source.toByteArray()
         val before = output.copyOf()
         targets.forEach { (entry, record) ->
-            output.putU32(
-                entry.offset + record.recordOffset + WIDGET_FIXED_SIZE,
-                colorArgb.toLong() and 0xFFFF_FFFFL,
-            )
+            val color = colors.getValue(entry.basename).toLong() and 0xFFFF_FFFFL
+            val stored = requireNotNull(record.colorWord)
+            (listOf(model.offset) + model.copies.filter { record.word(it) == stored }).forEach { field ->
+                output.putU32(entry.offset + record.fieldOffset(field), color)
+            }
         }
         var changed = 0
         val changedEntries = targets.mapNotNull { (entry, record) ->
-            val start = entry.offset + record.recordOffset + WIDGET_FIXED_SIZE
-            val entryChanged = (start until start + 4).count { before[it] != output[it] }
+            val start = entry.offset + record.recordOffset
+            val entryChanged = (start until start + record.recordSize).count { before[it] != output[it] }
             changed += entryChanged
             entry.takeIf { entryChanged > 0 }
         }
         if (changed == 0) {
-            throw Fit3FormatException("Pair widget already uses that color")
+            throw Fit3FormatException("widget already uses that colour")
         }
         return finalize(source, output, changedEntries, changed)
+    }
+
+    /**
+     * Turns one widget to [angleTenths] in the first entry of [entryBasenames], and in
+     * every later entry that carries it — a same-size field patch for each of the three
+     * [WidgetSchema.RotationModel]s.
+     *
+     * - A Composite's native angle changes alone: text, layout and resources stay intact.
+     * - A Rule's endpoints turn about their midpoint, at the resize rung it is on now,
+     *   measured against its pristine line from [pristine]/[pristineWidgets] — see
+     *   [RuleGeometry]. Its colour is untouched and its thickness stays on that rung.
+     * - A vector arc's start becomes [angleTenths] and its end keeps the stored distance
+     *   from it, so a reset writes back the vendor's exact pair.
+     *
+     * The angle is absolute, so siblings take the same angle, each keeping its own length,
+     * range or text; a sibling that cannot take it is skipped, as other best-effort edits.
+     */
+    fun rotateWidget(source: Fit3Container, entryBasenames: List<String>, globalIndex: Int,
+        sequenceId: Int, x: Int, y: Int, angleTenths: Int, targetIndices: Map<String, Int>? = null,
+        pristine: Fit3Container? = null, pristineWidgets: Map<String, WidgetPristine> = emptyMap()): ContainerEdit {
+        requireEditable(source)
+        val angle = dev.fitface.studio.core.model.normalizedRotation(angleTenths)
+        val resolved = StyleWidgetMatch.resolve(source, entryBasenames, targetIndices) { _, records ->
+            records.singleOrNull { it.globalIndex == globalIndex && WidgetSchema.spec(it.widgetType).rotation != null &&
+                it.sequenceId == sequenceId && it.x == x && it.y == y }
+        }
+        val output = source.toByteArray()
+        val patches = resolved.map { (entry, record) ->
+            val patch = runCatching {
+                rotationPatch(entry, record, angle, pristineWidgets[entry.basename]?.let { it.entry to it.sources }
+                    ?: pristine?.entries?.singleOrNull { it.basename == entry.basename }?.let { it to null })
+            }
+            // The selected style is strict; a sibling that cannot take the angle keeps its own.
+            if (entry === resolved.first().first) patch.getOrThrow() to entry else patch.getOrNull()?.let { it to entry }
+        }
+        var changed = 0
+        val entries = patches.mapNotNull { pair ->
+            val (patch, entry) = pair ?: return@mapNotNull null
+            val before = changed
+            patch.forEach { (field, value) ->
+                val offset = entry.offset + field
+                val previous = output.copyOfRange(offset, offset + 2)
+                output.putU16(offset, value and 0xFFFF)
+                changed += (0..1).count { previous[it] != output[offset + it] }
+            }
+            entry.takeIf { changed > before }
+        }
+        if (changed == 0) throw Fit3FormatException("This widget already uses that rotation.")
+        return finalize(source, output, entries, changed)
+    }
+
+    /** Halfword writes, as offsets from the start of the entry, that give [record] [angle]. */
+    private fun rotationPatch(entry: ContainerEntry, record: WidgetRecord, angle: Int,
+        pristine: Pair<ContainerEntry, Map<Int, Int>?>?): List<Pair<Int, Int>> {
+        val base = record.recordOffset
+        return when (val model = WidgetSchema.spec(record.widgetType).rotation) {
+            null -> throw Fit3FormatException("A ${WidgetSchema.spec(record.widgetType).name} widget cannot be rotated.")
+            is WidgetSchema.RotationModel.NativeAngle -> {
+                if (angle != 0 && !dev.fitface.studio.core.model.canRotateText(record.storedWidth ?: 0, record.storedHeight ?: 0)) {
+                    throw Fit3FormatException("This text box is too large to rotate safely. Its angle can still be reset to zero.")
+                }
+                listOf(base + model.offset to angle)
+            }
+            is WidgetSchema.RotationModel.AngleRange -> {
+                if (angle % 10 != 0) throw Fit3FormatException("Arc angles are whole degrees.")
+                val start = entry.data.u16(base + model.startOffset).toShort().toInt()
+                val end = entry.data.u16(base + model.endOffset).toShort().toInt()
+                if (end - start !in 0..360) throw Fit3FormatException("This arc's range cannot be turned safely.")
+                listOf(base + model.startOffset to angle / 10, base + model.endOffset to angle / 10 + end - start)
+            }
+            WidgetSchema.RotationModel.Endpoints -> {
+                if (angle % 10 != 0) throw Fit3FormatException("Line angles are whole degrees.")
+                val origin = pristine?.let { (pristineEntry, sources) ->
+                    StructuralEditor.pristineRecord(entry, pristineEntry, record, sources)
+                }?.takeIf { RuleGeometry.span(it).length > 0 } ?: record
+                val current = RuleGeometry.Line(RuleGeometry.span(record), RuleGeometry.thickness(record))
+                if (current.span.length == 0.0) throw Fit3FormatException("A line with no length has no direction to turn.")
+                val line = RuleGeometry.turnedLine(
+                    RuleGeometry.Line(RuleGeometry.span(origin), RuleGeometry.thickness(origin)), current, angle,
+                ) ?: throw Fit3FormatException("This line is too long to turn at its current size. Make it smaller first.")
+                val (startX, startY) = RuleGeometry.startKeepingMidpoint(record.x, record.y, current.span, line.span)
+                val fields = listOf(startX, startY, startX + line.span.x, startY + line.span.y)
+                if (fields.any { it !in Short.MIN_VALUE..Short.MAX_VALUE }) {
+                    throw Fit3FormatException("Turned line endpoints must fit signed 16-bit integers.")
+                }
+                buildList {
+                    add(base + 0x18 to startX); add(base + 0x1A to startY)
+                    add(base + 0x1C to fields[2]); add(base + 0x1E to fields[3])
+                    // `+0x30` is a byte beside the `+0x31` diagnostic flag, so the halfword
+                    // written back keeps that flag's byte as it is.
+                    line.thickness?.let { add(base + 0x30 to ((entry.data[base + 0x31].toInt() and 0xFF) shl 8 or it)) }
+                }
+            }
+        }
     }
 
     fun replaceBackgrounds(

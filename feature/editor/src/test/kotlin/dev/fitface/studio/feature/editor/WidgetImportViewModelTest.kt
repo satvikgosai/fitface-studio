@@ -41,6 +41,132 @@ class WidgetImportViewModelTest {
     private fun open() { vm.openFace(face); settle() }
     private fun frame() = PreviewFrame(1, 1, intArrayOf(0))
 
+    private fun openBackground() {
+        coEvery { repository.backgroundDonorVariant("donor", "style0.bin") } returns BackgroundDonorVariant(frame(), 1)
+        coEvery { repository.previewBackgroundImport("donor", "style0.bin", 7, "style0.bin") } returns
+            BackgroundImportPreview("background", frame(), listOf("style0.bin"), emptyList(), false, 0, 100)
+        vm.start(snapshot, backgroundMode = true); settle(); open()
+    }
+
+    private class CapacityError : Exception("capacity"), ContainerCapacityFailure {
+        override val capacity = ContainerCapacity(4_000_000, 4_300_000)
+    }
+
+    @Test fun clearingFailedPicksAlsoClearsTheCapacityRecoveryReason() {
+        open()
+        coEvery { repository.previewWidgetImport(any(), any(), any(), any(), any()) } throws CapacityError()
+        vm.togglePick(3); settle()
+        assertNotNull(vm.state.value.capacity)
+        vm.clearSelectedWidget(); settle()
+        assertNull(vm.state.value.capacity)
+        assertNull(vm.state.value.preview)
+    }
+
+    @Test fun styleDeletionKeepsDonorAndPicksButRepricesTheRenumberedTarget() {
+        val target = snapshot.copy(selectedVariant = EditorVariant("style2.bin", VariantKind.STYLE, 2),
+            originalVariants = mapOf("style2.bin" to "style2.bin"))
+        vm.start(target); settle(); open()
+        coEvery { repository.previewWidgetImport("donor", "style0.bin", 3, 7, "style2.bin") } throws CapacityError()
+        vm.togglePick(3); settle()
+        assertNotNull(vm.state.value.capacity)
+        priceAndCommit(3, snapshot)
+        val after = snapshot.copy(isDirty = true, originalVariants = mapOf("style0.bin" to "style2.bin"))
+        vm.acceptStyleDeletion(after); settle()
+        assertEquals(donor, vm.state.value.donor)
+        assertEquals(listOf(3), vm.state.value.picks)
+        assertEquals(WidgetImportStage.REVIEW, vm.state.value.stage)
+        assertEquals("t3", vm.state.value.preview!!.ticket)
+        assertTrue(vm.state.value.stylesDeleted)
+        assertNull(vm.state.value.capacity)
+        coVerify(exactly = 0) { repository.importWidget(any()) }
+        coVerify(exactly = 0) { repository.releaseWidgetDonor(any()) }
+    }
+
+    @Test fun batchCapacityRecoveryRetriesOnlyFailedAndQueuedPicksAfterFreshReview() {
+        open()
+        listOf(3, 5, 4).forEach { priceAndCommit(it, snapshot.copy(isDirty = true)) }
+        coEvery { repository.importWidget("t5") } throws CapacityError()
+        vm.togglePick(3); vm.togglePick(5); vm.togglePick(4); settle()
+        vm.addPicks(); settle()
+        assertEquals(1, vm.state.value.batchAdded)
+        assertNotNull(vm.state.value.capacity)
+        vm.acceptStyleDeletion(snapshot.copy(isDirty = true)); settle()
+        assertEquals(WidgetImportStage.REVIEW, vm.state.value.stage)
+        assertEquals(listOf(5, 4), vm.state.value.picks)
+        coVerify(exactly = 1) { repository.importWidget("t3") }
+        coEvery { repository.importWidget("t5") } returns snapshot.copy(isDirty = true)
+        vm.addPicks(); settle()
+        assertEquals(3, vm.state.value.batchAdded)
+        coVerify(exactly = 1) { repository.importWidget("t3") }
+        coVerify(exactly = 2) { repository.importWidget("t5") }
+        coVerify(exactly = 1) { repository.importWidget("t4") }
+    }
+
+    @Test fun capacityRecoveryDoesNotApplyBackgroundOrOfferRecoveryForOtherLimits() {
+        openBackground()
+        coEvery { repository.previewBackgroundImport(any(), any(), any(), any()) } throws CapacityError()
+        vm.reviewBackground(); settle()
+        assertNotNull(vm.state.value.capacity)
+        coEvery { repository.previewBackgroundImport(any(), any(), any(), any()) } returns
+            BackgroundImportPreview("fresh", frame(), listOf("style0.bin"), emptyList(), true, 100, 200)
+        vm.acceptStyleDeletion(snapshot.copy(isDirty = true)); settle()
+        assertEquals("fresh", vm.state.value.backgroundPreview!!.ticket)
+        coVerify(exactly = 0) { repository.importBackground(any()) }
+        vm.back(); settle()
+        coEvery { repository.previewBackgroundImport(any(), any(), any(), any()) } throws WatchFaceException("Font table is full")
+        vm.reviewBackground(); settle()
+        assertNull(vm.state.value.capacity)
+        assertEquals("Font table is full", vm.state.value.error)
+    }
+
+    @Test fun backgroundReviewRequiresExplicitApplyAndCancelDoesNotSave() {
+        openBackground()
+        assertTrue(vm.state.value.backgroundMode)
+        coVerify(exactly = 0) { repository.widgetDonorVariant(any(), any()) }
+        vm.reviewBackground(); settle()
+        assertEquals(WidgetImportStage.REVIEW, vm.state.value.stage)
+        coVerify(exactly = 0) { repository.importBackground(any()) }
+        vm.back(); settle()
+        assertEquals(WidgetImportStage.WIDGETS, vm.state.value.stage)
+        vm.applyBackground(); settle()
+        coVerify(exactly = 0) { repository.importBackground(any()) }
+        vm.reviewBackground(); settle()
+        coEvery { repository.importBackground("background") } returns snapshot.copy(isDirty = true)
+        vm.applyBackground(); settle()
+        assertTrue(vm.state.value.imported!!.isDirty)
+        coVerify(exactly = 1) { repository.importBackground("background") }
+    }
+
+    @Test fun missingBackgroundCannotBeReviewedAndReviewFailureStaysInThePicker() {
+        openBackground()
+        coEvery { repository.previewBackgroundImport(any(), any(), any(), any()) } throws WatchFaceException("No room")
+        vm.reviewBackground(); settle()
+        assertEquals("No room", vm.state.value.error)
+        assertEquals(WidgetImportStage.WIDGETS, vm.state.value.stage)
+        vm.close(); settle()
+        coEvery { repository.backgroundDonorVariant(any(), any()) } returns BackgroundDonorVariant(null, 0)
+        vm.start(snapshot, backgroundMode = true); settle(); open()
+        vm.reviewBackground(); settle()
+        assertNull(vm.state.value.backgroundPreview)
+        assertFalse(vm.state.value.busy)
+        coVerify(exactly = 1) { repository.previewBackgroundImport(any(), any(), any(), any()) }
+    }
+
+    @Test fun cancelledBackgroundReviewCannotPublishOrCommitALateCandidate() {
+        openBackground()
+        val deferred = CompletableDeferred<BackgroundImportPreview>()
+        coEvery { repository.previewBackgroundImport(any(), any(), any(), any()) } coAnswers { deferred.await() }
+        vm.reviewBackground(); settle()
+        assertTrue(vm.state.value.busy)
+        vm.back(); settle()
+        deferred.complete(BackgroundImportPreview("late", frame(), emptyList(), emptyList(), false, 0, 100))
+        settle()
+        assertNull(vm.state.value.backgroundPreview)
+        assertFalse(vm.state.value.busy)
+        assertNull(vm.state.value.error)
+        coVerify(exactly = 0) { repository.importBackground(any()) }
+    }
+
     @Test fun cachedPackageUsesTheSameDownloadCacheApiAndNeverOpensAProject() {
         open()
         assertTrue(vm.state.value.selectedFaceCached)

@@ -308,7 +308,7 @@ private fun LibraryScreen(
                     onOpen = onProjectClick,
                     onRename = onRenameProject,
                     onDuplicate = onDuplicateProject,
-                    onExport = onExportProject.takeIf { state.developerTools },
+                    onExport = onExportProject,
                     onRemove = onDeleteProject,
                     onStartCustomFace = onStartCustomFace,
                     modifier = Modifier.fillMaxSize(),
@@ -395,11 +395,8 @@ internal fun LibraryHeader(
             )
             // One slot, one page each. REFRESH belongs to the catalogue and IMPORT to the
             // projects, and neither page ever shows both — so the row's width budget is the
-            // same whichever is in it, and the touch-target floor above already made the two
-            // pages the same height whether or not anything was.
-            //
-            // IMPORT is absent rather than disabled when the tools are locked, which is the
-            // whole of `DeveloperGate`: a greyed-out control is a control to ask about.
+            // same whichever is in it, and the touch-target floor above keeps the two pages
+            // the same height.
             if (page == LibraryPage.WatchFaces) {
                 TextButton(onClick = onRefresh, enabled = !loading) {
                     Text(
@@ -413,7 +410,7 @@ internal fun LibraryHeader(
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
-            } else if (state.developerTools) {
+            } else {
                 TextButton(onClick = onImport, enabled = !state.isWorking) {
                     Text(
                         stringResource(R.string.library_action_import),
@@ -1044,8 +1041,7 @@ private fun ProjectsList(
     onOpen: (ProjectSummary) -> Unit,
     onRename: (ProjectSummary) -> Unit,
     onDuplicate: (ProjectSummary) -> Unit,
-    /** Null while the tools are locked, which is what keeps the entry off the menu. */
-    onExport: ((ProjectSummary) -> Unit)?,
+    onExport: (ProjectSummary) -> Unit,
     onRemove: (ProjectSummary) -> Unit,
     onStartCustomFace: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -1139,7 +1135,7 @@ private fun ProjectsList(
                     onDismissMenu = { openMenuFor = null },
                     onRename = { onRename(project) },
                     onDuplicate = { onDuplicate(project) },
-                    onExport = onExport?.let { export -> { export(project) } },
+                    onExport = { onExport(project) },
                     onRemove = { onRemove(project) },
                 )
             }
@@ -1301,7 +1297,7 @@ private fun ProjectRow(
     onDismissMenu: () -> Unit,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
-    onExport: (() -> Unit)?,
+    onExport: () -> Unit,
     onRemove: () -> Unit,
 ) {
     Row(
@@ -1397,8 +1393,7 @@ private fun ProjectMenu(
     onDismiss: () -> Unit,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
-    /** Null while `DeveloperGate` is locked, and then there is no entry at all. */
-    onExport: (() -> Unit)?,
+    onExport: () -> Unit,
     onRemove: () -> Unit,
 ) {
     Box {
@@ -1422,12 +1417,10 @@ private fun ProjectMenu(
             }
             // Above Delete because it is not destructive, and below Duplicate because the
             // two are the same idea one step apart — a copy that stays here, and a copy that
-            // leaves. Absent entirely while the tools are locked.
-            onExport?.let { export ->
-                FitMenuEntry(stringResource(R.string.library_project_export)) {
-                    onDismiss()
-                    export()
-                }
+            // leaves.
+            FitMenuEntry(stringResource(R.string.library_project_export)) {
+                onDismiss()
+                onExport()
             }
             // Last, and the only one that is destructive. Nothing above it can lose work,
             // so the entry that can is the one furthest from where the menu opens.

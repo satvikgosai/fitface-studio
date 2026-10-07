@@ -136,12 +136,9 @@ internal object WidgetPreviewComposer {
     internal fun rotate(frame: PreviewFrame, pivotX: Int, pivotY: Int, angle: Double): Rotated {
         if (angle % 360 == 0.0) return Rotated(frame, 0, 0)
         val c = cos(Math.toRadians(angle)); val s = sin(Math.toRadians(angle))
-        val corners = listOf(0 to 0, frame.width to 0, 0 to frame.height, frame.width to frame.height)
-        val xs = corners.map { (x, y) -> pivotX + (x - pivotX) * c - (y - pivotY) * s }
-        val ys = corners.map { (x, y) -> pivotY + (x - pivotX) * s + (y - pivotY) * c }
-        val left = floor(xs.min()).toInt(); val top = floor(ys.min()).toInt()
-        val w = ceil(xs.max()).toInt() - left + 1
-        val h = ceil(ys.max()).toInt() - top + 1
+        val bounds = dev.fitface.studio.core.model.rotationBounds(frame.width, frame.height, pivotX, pivotY, angle)
+        val left = bounds.left; val top = bounds.top
+        val w = bounds.width; val h = bounds.height
         val pixels = IntArray(w * h)
         for (y in 0 until h) for (x in 0 until w) {
             val dx = x + left - pivotX; val dy = y + top - pivotY

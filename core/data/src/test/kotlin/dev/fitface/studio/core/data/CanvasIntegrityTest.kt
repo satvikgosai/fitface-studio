@@ -1,5 +1,6 @@
 package dev.fitface.studio.core.data
 
+import dev.fitface.studio.core.format.BackgroundImporter
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
@@ -57,6 +58,180 @@ class CanvasIntegrityTest {
             .sortedBy { it.fileName.toString() }
             .toList()
         assumeTrue("corpus holds no containers", containers.isNotEmpty())
+    }
+
+    @Test fun deletingFirstAndMiddleStylesPreservesEverySurvivorsCurrentResourceRender() {
+        containers.forEach { path ->
+            val source = Fit3Container.parse(Files.readAllBytes(path))
+            val styles = dev.fitface.studio.core.format.FaceResources.selectableStyles(source)
+            val removed = setOf(styles.first().basename, styles[styles.size / 2].basename)
+            val after = StructuralEditor.deleteStyles(source, removed).container
+            val mapping = dev.fitface.studio.core.model.survivingStyleNames(styles.map { it.basename }, removed)
+            mapping.forEach { (old, next) ->
+                val beforeFrame = WidgetPreviewComposer.compose(source.entryByBasename(old), source.entries).composed
+                val afterFrame = WidgetPreviewComposer.compose(after.entryByBasename(next), after.entries).composed
+                org.junit.Assert.assertArrayEquals("${path.fileName}: $old -> $next", beforeFrame.argb, afterFrame.argb)
+            }
+        }
+    }
+
+    @Test fun reorderingOpaqueOverlappingWidgetsChangesCoverageWithoutChangingAnyArtwork() {
+        val path = containers.first { it.fileName.toString().contains("00112") }
+        val source = Fit3Container.parse(Files.readAllBytes(path))
+        val widgets = FaceRecordParser.widgetGuides(source.entryByBasename("style0.bin"))
+        val first = widgets.first { it.type == 3 }
+        val second = widgets.first { it.type == 3 && it.globalIndex > first.globalIndex }
+        val overlap = FaceEditor.moveWidget(source, "style0.bin", second.globalIndex, second.type,
+            second.sequenceId, first.x, first.y).container
+        val before = WidgetPreviewComposer.compose(overlap.entryByBasename("style0.bin"), overlap.entries, WidgetTextRasterizer::render)
+        val result = StructuralEditor.reorderWidget(overlap, "style0.bin", first.globalIndex, first.type,
+            first.sequenceId, first.x, first.y, second.globalIndex)
+        val after = WidgetPreviewComposer.compose(result.edit.container.entryByBasename("style0.bin"), result.edit.container.entries, WidgetTextRasterizer::render)
+        assertTrue("Changing opaque coverage must change the canvas", !before.composed.argb.contentEquals(after.composed.argb))
+        before.widgetImageLayers.forEach { layer ->
+            val moved = after.widgetImageLayers.single { it.globalIndex == result.indices.getValue(layer.globalIndex) }
+            org.junit.Assert.assertArrayEquals(layer.frame.argb, moved.frame.argb)
+            org.junit.Assert.assertEquals(layer.offsetX, moved.offsetX)
+            org.junit.Assert.assertEquals(layer.offsetY, moved.offsetY)
+        }
+    }
+
+    /**
+     * The firmware draws turned text onto an RGB565 + alpha canvas cleared to opacity 0, so
+     * a turn moves the glyphs and covers no more of the face than the straight text did. A
+     * filled box would cover the whole rotated rectangle.
+     */
+    @Test fun rotatingCompositeSharesItsVisualBoundsAndKeepsItsBackgroundClear() {
+        val path = containers.first { it.fileName.toString().contains("00105") }
+        val original = Fit3Container.parse(Files.readAllBytes(path))
+        val entry = original.entryByBasename("style0.bin")
+        val widget = FaceRecordParser.widgetGuides(entry).first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
+        val baseline = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
+        var straightCoverage = 0
+        for (angle in listOf(0, 900, 1800, 2700, 3181)) {
+            val edited = FaceEditor.rotateWidget(original, listOf(entry.basename), widget.globalIndex,
+                widget.sequenceId, widget.x, widget.y, angle).container
+            val guide = FaceRecordParser.widgetGuides(edited.entryByBasename(entry.basename))
+                .single { it.globalIndex == widget.globalIndex }
+            val preview = WidgetPreviewComposer.compose(edited.entryByBasename(entry.basename),
+                edited.entries, WidgetTextRasterizer::render)
+            val layer = preview.widgetImageLayers.single { it.globalIndex == widget.globalIndex }
+            baseline.widgetImageLayers.filter { it.globalIndex != widget.globalIndex }.forEach { untouched ->
+                val after = preview.widgetImageLayers.single { it.globalIndex == untouched.globalIndex }
+                org.junit.Assert.assertArrayEquals(untouched.frame.argb, after.frame.argb)
+                org.junit.Assert.assertEquals(untouched.offsetX, after.offsetX)
+                org.junit.Assert.assertEquals(untouched.offsetY, after.offsetY)
+            }
+            val bounds = dev.fitface.studio.core.model.rotationBounds(guide.width, guide.height,
+                guide.width / 2, guide.height / 2, angle / 10.0)
+            org.junit.Assert.assertEquals(bounds.left, layer.offsetX)
+            org.junit.Assert.assertEquals(bounds.top, layer.offsetY)
+            org.junit.Assert.assertEquals(bounds.width, layer.frame.width)
+            org.junit.Assert.assertEquals(bounds.height, layer.frame.height)
+            val coverage = layer.frame.argb.count { it ushr 24 != 0 }
+            if (angle == 0) straightCoverage = coverage
+            assertTrue(layer.frame.argb.any { it ushr 24 == 0 })
+            assertTrue(coverage > 0)
+            assertTrue("$angle: $coverage px covered, straight text covers $straightCoverage",
+                coverage <= straightCoverage * 5 / 4 + 32)
+            org.junit.Assert.assertEquals(widget.x, guide.x)
+            org.junit.Assert.assertEquals(widget.y, guide.y)
+        }
+    }
+
+    /**
+     * A turned Rule, vector arc or picture redraws itself and nothing else: every pixel of
+     * the face that changes lies inside a rectangle that changed — the widget's, or one
+     * positioned against it — and other widgets' layers are identical. `00105`'s diagonal
+     * rules and its colon, which shares no frames, and `00023`'s gauge arcs.
+     */
+    @Test fun turningALineAnArcOrAPictureChangesOnlyItsOwnPixels() {
+        for ((id, kind) in listOf("00105" to dev.fitface.studio.core.model.WidgetRotationKind.LINE,
+            "00023" to dev.fitface.studio.core.model.WidgetRotationKind.ARC,
+            "00105" to dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK)) {
+            val path = containers.firstOrNull { it.fileName.toString().contains(id) } ?: continue
+            val original = Fit3Container.parse(Files.readAllBytes(path))
+            val entry = original.entryByBasename("style0.bin")
+            val before = FaceRecordParser.widgetGuides(entry)
+                .first { it.rotationKind == kind && it.sharedArtworkWidgets == 0 }
+            val angle = (before.rotationTenths!! + 900) % 3600
+            val edited = if (kind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK) {
+                StructuralEditor.turnArtwork(original, listOf(entry.basename), before.globalIndex, before.type,
+                    before.sequenceId, before.x, before.y, angle, pristine = original).container
+            } else {
+                FaceEditor.rotateWidget(original, listOf(entry.basename), before.globalIndex,
+                    before.sequenceId, before.x, before.y, angle, pristine = original).container
+            }
+            val old = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
+            val new = WidgetPreviewComposer.compose(edited.entryByBasename(entry.basename), edited.entries,
+                WidgetTextRasterizer::render)
+            old.widgetImageLayers.filter { it.globalIndex != before.globalIndex }.forEach { untouched ->
+                val same = new.widgetImageLayers.single { it.globalIndex == untouched.globalIndex }
+                org.junit.Assert.assertArrayEquals("$id #${untouched.globalIndex}", untouched.frame.argb, same.frame.argb)
+            }
+            // A Rule's stroke reaches half its thickness past the rectangle's ends.
+            val pad = 32
+            fun inside(guide: WidgetGuide, x: Int, y: Int) =
+                x in guide.drawLeft - pad until guide.drawLeft + guide.width + pad &&
+                    y in guide.drawTop - pad until guide.drawTop + guide.height + pad
+            // The turned widget's rectangle, and any positioned against it, before and after.
+            val oldGuides = FaceRecordParser.widgetGuides(entry).associateBy { it.globalIndex }
+            val moved = FaceRecordParser.widgetGuides(edited.entryByBasename(entry.basename)).filter {
+                val was = oldGuides.getValue(it.globalIndex)
+                it.globalIndex == before.globalIndex ||
+                    listOf(was.drawLeft, was.drawTop, was.width, was.height) != listOf(it.drawLeft, it.drawTop, it.width, it.height)
+            }
+            val changed = old.composed.argb.indices.filter { old.composed.argb[it] != new.composed.argb[it] }
+            assertTrue("$id: the turned widget must redraw", changed.isNotEmpty())
+            val width = old.composed.width
+            changed.forEach { pixel ->
+                assertTrue("$id: pixel ${pixel % width},${pixel / width} changed outside the widget",
+                    (moved + moved.map { oldGuides.getValue(it.globalIndex) })
+                        .any { inside(it, pixel % width, pixel / width) })
+            }
+        }
+    }
+
+    /**
+     * A recolour redraws one widget in its new colour and nothing else: a value, a composite
+     * and a rule on `00106`, and a vector arc on `00023`. Every other layer is identical,
+     * every changed pixel of the face lies inside the widget's rectangle, and its solid
+     * pixels are the new colour.
+     */
+    @Test fun recolouringAWidgetChangesOnlyItsOwnPixelsToTheNewColour() {
+        val color = 0xFFFF_2000.toInt()
+        var checked = 0
+        for ((id, type) in listOf("00106" to 5, "00106" to 13, "00106" to 7, "00023" to 6)) {
+            val path = containers.firstOrNull { it.fileName.toString().contains(id) } ?: continue
+            val original = Fit3Container.parse(Files.readAllBytes(path))
+            val entry = original.entryByBasename("style0.bin")
+            val widget = FaceRecordParser.widgetGuides(entry).first { it.type == type && it.colorArgb != null }
+            val edited = FaceEditor.recolorWidgetAcrossStyles(original, listOf(entry.basename), widget.globalIndex,
+                widget.type, widget.sequenceId, widget.x, widget.y, color).container
+            val old = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
+            val new = WidgetPreviewComposer.compose(edited.entryByBasename(entry.basename), edited.entries,
+                WidgetTextRasterizer::render)
+            old.widgetImageLayers.filter { it.globalIndex != widget.globalIndex }.forEach { untouched ->
+                val same = new.widgetImageLayers.single { it.globalIndex == untouched.globalIndex }
+                org.junit.Assert.assertArrayEquals("$id #${untouched.globalIndex}", untouched.frame.argb, same.frame.argb)
+            }
+            val solid = new.widgetImageLayers.single { it.globalIndex == widget.globalIndex }.frame.argb
+                .filter { it ushr 24 == 0xFF }
+            assertTrue("$id type $type drew no solid pixel", solid.isNotEmpty())
+            assertTrue("$id type $type kept another colour", solid.all { it and 0xFFFFFF == color and 0xFFFFFF })
+            val width = old.composed.width
+            val changed = old.composed.argb.indices.filter { old.composed.argb[it] != new.composed.argb[it] }
+            assertTrue("$id type $type: the recolour must show", changed.isNotEmpty())
+            val pad = 16
+            changed.forEach { pixel ->
+                val x = pixel % width; val y = pixel / width
+                assertTrue("$id type $type: pixel $x,$y changed outside the widget",
+                    x in widget.drawLeft - pad until widget.drawLeft + widget.width + pad &&
+                        y in widget.drawTop - pad until widget.drawTop + widget.height + pad)
+            }
+            checked++
+        }
+        org.junit.Assume.assumeTrue("corpus faces 00106/00023 missing", checked > 0)
     }
 
     /** One face's canvas, assembled exactly the way `WatchFaceRepositoryImpl` does. */
@@ -300,6 +475,49 @@ class CanvasIntegrityTest {
         println("CanvasIntegrityTest: $steps chained edits")
         assumeTrue("no chained edit produced a canvas", steps > 0)
         assertTrue(failures.take(15).joinToString("\n"), failures.isEmpty())
+    }
+
+    @Test
+    fun donorBackgroundDoesNotBakeInDonorWidgetsOrChangeDestinationLayers() {
+        fun face(id: String): Fit3Container {
+            val path = containers.firstOrNull { it.fileName.toString().contains("_${id}_") }
+            assumeTrue("no corpus face $id", path != null)
+            return Fit3Container.parse(Files.readAllBytes(path!!))
+        }
+        val original = face("00112")
+        val donor = face("00076")
+        val donorEntry = donor.entryByBasename("style0.bin")
+        val donorBackground = BackgroundImporter.read(donorEntry).background!!
+        val donorScene = WidgetPreviewComposer.compose(donorEntry, donor.entries, WidgetTextRasterizer::render)
+        assertTrue("fixture must contain donor widgets above the background",
+            !donorScene.composed.argb.contentEquals(donorBackground.argb))
+        val edited = BackgroundImporter.prepare(original, "style0.bin", donorEntry).edit.container
+        val before = canvasOf(original, original, "style0.bin")!!
+        val after = canvasOf(original, edited, "style0.bin")!!
+        val failures = mutableListOf<String>()
+        checkLayerMatchesBox("background import", after, failures)
+        checkNoLayerLost("background import", before, after, failures)
+        checkOriginIdentity("background import", original.entryByBasename("style0.bin"),
+            edited.entryByBasename("style0.bin"), failures)
+        before.guides.filter { it.placement != WidgetPlacement.BACKGROUND }.forEach { widget ->
+            val old = before.layerFor(widget.globalIndex)
+            val new = after.layerFor(widget.globalIndex)
+            if (old != null) assertTrue("destination widget #${widget.globalIndex} changed",
+                old.frame.argb.contentEquals(new!!.frame.argb))
+        }
+        val entry = edited.entryByBasename("style0.bin")
+        val pixels = FaceRecordParser.decodeImage(entry, FaceRecordParser.backgroundImage(entry)!!).argb
+        donorBackground.argb.indices.forEach { index ->
+            val source = donorBackground.argb[index]
+            val alpha = source ushr 24
+            val red = ((source ushr 16 and 255) * alpha + 127) / 255
+            val green = ((source ushr 8 and 255) * alpha + 127) / 255
+            val blue = ((source and 255) * alpha + 127) / 255
+            val expected = (red shl 16 or (green shl 8) or blue) and 0xF8FCF8
+            assertTrue("background pixel $index contains something other than the donor raster",
+                expected == (pixels[index] and 0xF8FCF8))
+        }
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
     }
 
     @Test

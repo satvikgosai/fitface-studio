@@ -65,6 +65,7 @@ object StyleWidgetMatch {
     fun resolve(
         source: Fit3Container,
         entryBasenames: List<String>,
+        targetIndices: Map<String, Int>? = null,
         selected: (ContainerEntry, List<WidgetRecord>) -> WidgetRecord?,
     ): List<Pair<ContainerEntry, WidgetRecord>> {
         if (entryBasenames.isEmpty()) {
@@ -82,7 +83,13 @@ object StyleWidgetMatch {
             add(selectedEntry to selectedRecord)
             entryBasenames.drop(1).forEach { basename ->
                 val entry = requireVariantEntry(source.entryByBasename(basename))
-                match(entry, selectedRecord)?.let { add(entry to it) }
+                val matched = if (targetIndices == null) match(entry, selectedRecord) else {
+                    FaceRecordParser.scanWidgets(entry).singleOrNull {
+                        it.globalIndex == targetIndices[basename] && it.widgetType == selectedRecord.widgetType &&
+                            it.sequenceId == selectedRecord.sequenceId
+                    }
+                }
+                matched?.let { add(entry to it) }
             }
         }
     }

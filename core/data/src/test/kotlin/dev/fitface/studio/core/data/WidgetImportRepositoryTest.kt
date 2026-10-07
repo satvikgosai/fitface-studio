@@ -7,6 +7,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.fitface.studio.core.data.db.*
 import dev.fitface.studio.core.format.*
+import dev.fitface.studio.core.model.drawTop
+import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.*
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -82,6 +84,608 @@ class WidgetImportRepositoryTest {
     private fun exportFile() = File(context.cacheDir, "widget-import-tests/out.zip").also { it.parentFile!!.mkdirs() }
     private suspend fun export(id: Long): File = exportFile().also { repository.exportProject(id, Uri.fromFile(it).toString()) }
 
+    @Test fun deletingAndRenumberingStylesPreservesNativeArtworkRestoreArchiveAndReset() = runBlocking {
+        var s = repository.openPackage(face("00112"))
+        s = repository.currentSnapshot("style2.bin")
+        val originalStyle = s.originalVariants.getValue(s.selectedVariant.basename)
+        val native = s.widgets.first { it.type == 3 }
+        val expected = pixels(s, native.globalIndex)
+        s = repository.resizeWidget("style2.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, native.width - 2, native.height - 3, false)
+        val current = s.widgets.single { it.globalIndex == native.globalIndex }
+        s = repository.removeWidget("style2.bin", current.globalIndex, current.type, current.sequenceId,
+            current.x, current.y, false, false)
+        val review = repository.styleManagement()
+        val beforeBytes = s.containerBytes
+        s = repository.deleteStyles(setOf("style0.bin", "style1.bin"), review.revision)
+        assertEquals(beforeBytes - review.reclaimableBytes.getValue("style0.bin") - review.reclaimableBytes.getValue("style1.bin"), s.containerBytes)
+        assertEquals("style0.bin", s.activeStyleName)
+        assertEquals(originalStyle, s.originalVariants.getValue("style0.bin"))
+        assertArrayEquals(review.previews.getValue("style2.bin").argb, s.composedPreview.argb)
+        assertEquals(setOf("style0.bin"), s.removedWidgets.single().recordsByVariant.keys)
+        val copy = repository.duplicateProject(s.projectId)
+        s = repository.openProject(copy.id)
+        val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
+        repository = repository(); s = repository.openProject(imported.id)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        val restored = s.widgets.last()
+        assertEquals(native.width, restored.originalWidth)
+        s = repository.resizeWidget("style0.bin", restored.globalIndex, restored.type, restored.sequenceId,
+            restored.x, restored.y, native.width, native.height, false)
+        assertArrayEquals(expected, pixels(s, restored.globalIndex))
+        val reset = repository.resetEdits()
+        assertEquals("style2.bin", reset.activeStyleName)
+        assertArrayEquals(bin("00112"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun deletingTheOnlyImportedStyleRetainsSharedFontResourcesWithoutAFakeOrigin() = runBlocking {
+        var s = repository.openPackage(face("00008"))
+        s = add(s, "00028", 13)
+        val added = s.widgets.last()
+        assertNotNull(added.importedFromFaceId)
+        s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        assertFalse(s.widgets.any { it.importedFromFaceId != null })
+        repository = repository(); s = repository.openProject(s.projectId)
+        val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
+        s = repository.openProject(imported.id)
+        s = add(s, "00028", 13)
+        assertNotNull(s.widgets.last().importedFromFaceId)
+        assertTrue(repository.prepareDirectInstall().copyBytes().isNotEmpty())
+    }
+
+    @Test fun importedArtworkMovesToRenumberedStyleAndStillResizesFromDonor() = runBlocking {
+        var s = repository.openPackage(face("00008"))
+        s = repository.currentSnapshot("style2.bin")
+        s = add(s, "00023", 2)
+        val hand = s.widgets.last()
+        val expected = pixels(s, hand.globalIndex)
+        s = repository.deleteStyles(setOf("style0.bin", "style1.bin"), repository.styleManagement().revision)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals("00023", s.widgets.last().importedFromFaceId)
+        s = repository.resizeWidget("style0.bin", hand.globalIndex, hand.type, hand.sequenceId,
+            hand.x, hand.y, hand.width - 1, hand.height - 1, false)
+        val small = s.widgets.last()
+        s = repository.resizeWidget("style0.bin", small.globalIndex, small.type, small.sequenceId,
+            small.x, small.y, hand.width, hand.height, false)
+        assertArrayEquals(expected, pixels(s, hand.globalIndex))
+    }
+
+    @Test fun deletionReviewCannotDeleteADifferentProjectWithIdenticalBytes() = runBlocking {
+        repository.openPackage(face("00112"))
+        val review = repository.styleManagement()
+        val other = repository.openPackage(face("00112"))
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), review.revision) }.isFailure)
+        assertEquals(other.projectId, repository.currentSnapshot().projectId)
+        assertArrayEquals(bin("00112"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun deletionRefusalAndFailedCommitLeaveBytesSelectionAndCheckpointUnchanged() = runBlocking {
+        var s = repository.openPackage(face("00112"))
+        s = repository.currentSnapshot("aod.bin")
+        val review = repository.styleManagement()
+        val bytes = repository.prepareDirectInstall().copyBytes()
+        dao.fail = true
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), review.revision) }.isFailure)
+        dao.fail = false
+        assertEquals("aod.bin", repository.currentSnapshot().selectedVariant.basename)
+        assertArrayEquals(bytes, repository.prepareDirectInstall().copyBytes())
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertArrayEquals(bytes, repository.prepareDirectInstall().copyBytes())
+        repository.currentSnapshot("aod.bin")
+        s = repository.deleteStyles(setOf("style0.bin"), review.revision)
+        assertEquals("aod.bin", s.selectedVariant.basename)
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), review.revision) }.isFailure)
+        s = repository.deleteStyles(s.styleNames.drop(1).toSet(), repository.styleManagement().revision)
+        assertEquals(1, s.styleNames.size)
+        assertTrue(runCatching { repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision) }.isFailure)
+        assertTrue(runCatching { repository.deleteStyles(setOf("aod.bin"), repository.styleManagement().revision) }.isFailure)
+    }
+
+    @Test fun reorderedTwinsKeepTheirOriginalThroughResizeAllStylesRemoveRestoreAndArchive() = runBlocking {
+        val original = repository.openPackage(face("00003"))
+        val native = original.widgets.first { it.type == 1 && it.placement == WidgetPlacement.CANVAS }
+        val expected = pixels(original, native.globalIndex)
+        val destination = original.widgets.last().globalIndex
+        var s = repository.reorderWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, destination)
+        assertEquals(native.originalX, s.widgets.last().originalX)
+        assertEquals(native.originalY, s.widgets.last().originalY)
+        assertArrayEquals(expected, pixels(s, destination))
+        val moved = s.widgets.last()
+        s = move(s, moved, 9)
+        val sibling = repository.currentSnapshot("style1.bin")
+        val siblingOriginal = FaceRecordParser.widgetGuides(Fit3Container.parse(bin("00003")).entryByBasename("style1.bin"))
+        sibling.widgets.forEach { widget ->
+            val before = siblingOriginal.single { it.globalIndex == widget.globalIndex }
+            // This colourway puts the same colon at #8, while Style 1 has it at #6.
+            if (widget.globalIndex == 8) assertEquals(moved.x + 9, widget.x)
+            else assertEquals(before.x, widget.x)
+        }
+        s = repository.currentSnapshot("style0.bin")
+        val current = s.widgets.last()
+        val smallerWidth = (native.originalWidth * .95).toInt().coerceAtLeast(1)
+        val smallerHeight = (native.originalHeight * .95).toInt().coerceAtLeast(1)
+        s = repository.resizeWidget("style0.bin", destination, current.type, current.sequenceId,
+            current.x, current.y, smallerWidth, smallerHeight, false)
+        repository = repository(); s = repository.openProject(s.projectId)
+        val small = s.widgets.last()
+        s = repository.resizeWidget("style0.bin", destination, small.type, small.sequenceId,
+            small.x, small.y, native.originalWidth, native.originalHeight, false)
+        assertArrayEquals(expected, pixels(s, destination))
+        val restoredSize = s.widgets.last()
+        s = repository.removeWidget("style0.bin", destination, restoredSize.type, restoredSize.sequenceId,
+            restoredSize.x, restoredSize.y, false, true)
+        assertEquals(original.styleNames.size, s.removedWidgets.single().recordsByVariant.size)
+        val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
+        repository = repository(); s = repository.openProject(imported.id)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertArrayEquals(expected, pixels(s, s.widgets.last().globalIndex))
+        assertEquals(native.originalX, s.widgets.last().originalX)
+        repository.resetEdits(); assertArrayEquals(bin("00003"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun reorderedCompositeUsesOriginalCounterpartsForAllStyleRotationAndDuplication() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val original = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
+        s = repository.reorderWidget("style0.bin", original.globalIndex, original.type, original.sequenceId,
+            original.x, original.y, s.widgets.last().globalIndex)
+        val reordered = s.widgets.last()
+        s = repository.rotateWidget("style0.bin", reordered.globalIndex, reordered.sequenceId,
+            reordered.x, reordered.y, 0, true)
+        assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
+        val sibling = repository.currentSnapshot("style1.bin")
+        assertEquals(0, sibling.widgets.single { it.globalIndex == original.globalIndex }.rotationTenths)
+        assertEquals(3180, sibling.widgets.last().rotationTenths)
+        s = repository.currentSnapshot("style0.bin")
+        s = repository.duplicateWidget("style0.bin", reordered.globalIndex, reordered.type, reordered.sequenceId,
+            reordered.x, reordered.y, true)
+        assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
+        assertEquals(original.globalIndex, s.widgets.last().duplicateSourceGlobalIndex)
+        val duplicate = s.widgets.last()
+        val count = s.widgets.size
+        s = repository.removeWidget("style0.bin", duplicate.globalIndex, duplicate.type, duplicate.sequenceId,
+            duplicate.x, duplicate.y, false, true)
+        // A copy is deleted from every style it was made in, and kept nowhere.
+        assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
+        assertEquals(count - 1, s.widgets.size)
+        assertTrue(s.removedWidgets.isEmpty())
+    }
+
+    @Test fun failedReorderRestoresBothTheBytesAndNativeIdentitiesInMemoryAndOnDisk() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val original = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
+        s = repository.reorderWidget("style0.bin", original.globalIndex, original.type, original.sequenceId,
+            original.x, original.y, s.widgets.last().globalIndex)
+        val expected = repository.prepareDirectInstall().copyBytes()
+        val last = s.widgets.last()
+        dao.fail = true
+        assertTrue(runCatching { repository.reorderWidget("style0.bin", last.globalIndex, last.type, last.sequenceId,
+            last.x, last.y, original.globalIndex) }.isFailure)
+        dao.fail = false
+        assertArrayEquals(expected, repository.prepareDirectInstall().copyBytes())
+        assertEquals(original.originalX, repository.currentSnapshot(null).widgets.last().originalX)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertArrayEquals(expected, repository.prepareDirectInstall().copyBytes())
+        assertEquals(original.originalX, s.widgets.last().originalX)
+    }
+
+    @Test fun reorderedImportRemainsDonorBackedAndAodReorderDoesNotTouchStyles() = runBlocking {
+        var s = add(repository.openPackage(face("00106")), "00008", 1)
+        val imported = s.widgets.last(); val expected = pixels(s, imported.globalIndex)
+        val destination = s.widgets.first { it.placement == WidgetPlacement.CANVAS }.globalIndex
+        s = repository.reorderWidget("style0.bin", imported.globalIndex, imported.type, imported.sequenceId,
+            imported.x, imported.y, destination)
+        assertEquals("00008", s.widgets.single { it.globalIndex == destination }.importedFromFaceId)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertArrayEquals(expected, pixels(s, destination))
+        val before = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        s = repository.currentSnapshot("aod.bin")
+        val widget = s.widgets.first()
+        s = repository.reorderWidget("aod.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, s.widgets.last().globalIndex)
+        assertEquals(listOf("aod.bin"), s.audit!!.changedStyles)
+        val after = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        before.entries.filter { it.basename != "aod.bin" }.forEach { assertArrayEquals(it.data, after.entryByBasename(it.basename).data) }
+    }
+
+    @Test fun nativeCheckpointCarriesIdentitiesAndRemovalAtomicallyThroughCopyAndArchive() = runBlocking {
+        var s = repository.openPackage(face("00003"))
+        val anchors = s.widgets.mapNotNull { it.alignedToGlobalIndex }.toSet()
+        val native = s.widgets.first { it.type == 1 && it.globalIndex !in anchors && it.placement == WidgetPlacement.CANVAS }
+        val expected = pixels(s, native.globalIndex)
+        s = repository.duplicateWidget("style0.bin", native.globalIndex, native.type, native.sequenceId, native.x, native.y, false)
+        val duplicate = s.widgets.last()
+        s = move(s, duplicate, 15)
+        // The original goes under Removed while its copy stays live; a removed copy would be
+        // deleted and leave nothing to carry.
+        s = repository.removeWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, false, false)
+        val checkpoint = File(requireNotNull(dao.findById(s.projectId)?.editedBinPath))
+        val state = Json.parseToJsonElement(checkpoint.readText()).jsonObject
+        assertEquals(3, state.getValue("schema").jsonPrimitive.int)
+        assertTrue("native edits must have no fabricated donor", state["importOrigins"] == null)
+        assertTrue(state.getValue("lineage").jsonObject.getValue("widgets").jsonObject.isNotEmpty())
+        val archive = export(s.projectId)
+        val imported = repository.importProject(Uri.fromFile(archive).toString())
+        repository = repository()
+        s = repository.openProject(imported.id)
+        val restored = repository.restoreWidget(s.removedWidgets.single().id)
+        assertEquals(null, restored.widgets.last().duplicateSourceGlobalIndex)
+        assertEquals(1, restored.widgets.count { it.duplicateSourceGlobalIndex == native.globalIndex })
+        assertEquals(native.originalX, restored.widgets.last().originalX)
+        assertArrayEquals(expected, pixels(restored, restored.widgets.last().globalIndex))
+        repository.resetEdits()
+        assertArrayEquals(bin("00003"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun legacyRemovedWidgetGetsAnIdentityBeforeTheNextEditChangesIndices() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val native = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
+        s = repository.removeWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, false, false)
+        val source = export(s.projectId).readBytes()
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
+            while (true) {
+                val entry = input.nextEntry ?: break
+                var bytes = input.readBytes()
+                if (entry.name in setOf(ProjectArchive.ManifestEntry, ProjectArchive.SessionEntry)) {
+                    val obj = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.toMutableMap()
+                    obj["schema"] = JsonPrimitive(1); obj.remove("lineage")
+                    obj["removed"]?.let { list -> obj["removed"] = JsonArray(list.jsonArray.map { record ->
+                        JsonObject(record.jsonObject.filterKeys { it !in setOf("nativeIdentityRecorded", "nativeSourceIndices", "duplicateSourceVariants") })
+                    }) }
+                    bytes = JsonObject(obj).toString().encodeToByteArray()
+                }
+                zip.putNextEntry(ZipEntry(entry.name)); zip.write(bytes); zip.closeEntry()
+            }
+        } }
+        val file = exportFile().apply { writeBytes(out.toByteArray()) }
+        val imported = repository.importProject(Uri.fromFile(file).toString())
+        s = repository.openProject(imported.id)
+        assertFalse(s.removedWidgets.single().nativeIdentityRecorded)
+        s = move(s, s.widgets.last())
+        assertTrue(s.removedWidgets.single().nativeIdentityRecorded)
+        assertEquals(native.globalIndex, s.removedWidgets.single().nativeSourceIndices["style0.bin"])
+        repository = repository(); s = repository.openProject(s.projectId)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertEquals(null, s.widgets.last().duplicateSourceGlobalIndex)
+        assertEquals(native.originalRotationTenths, s.widgets.last().originalRotationTenths)
+    }
+
+    @Test fun missingNativeIdentityIsRejectedBeforeCreatingAnyProject() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        s = move(s, s.widgets.last())
+        val source = export(s.projectId).readBytes()
+        val inserts = dao.insertCalls
+        for (replacement in listOf<JsonElement?>(null, JsonObject(emptyMap()))) {
+            val out = ByteArrayOutputStream()
+            ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
+                while (true) {
+                    val entry = input.nextEntry ?: break
+                    var bytes = input.readBytes()
+                    if (entry.name == ProjectArchive.SessionEntry) {
+                        val obj = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.toMutableMap()
+                        if (replacement == null) obj.remove("lineage") else obj["lineage"] = replacement
+                        bytes = JsonObject(obj).toString().encodeToByteArray()
+                    }
+                    zip.putNextEntry(ZipEntry(entry.name)); zip.write(bytes); zip.closeEntry()
+                }
+            } }
+            val file = exportFile().apply { writeBytes(out.toByteArray()) }
+            assertTrue(runCatching { repository.importProject(Uri.fromFile(file).toString()) }.isFailure)
+            assertEquals(inserts, dao.insertCalls)
+        }
+    }
+
+    @Test fun legacyImportedArchiveUpgradesOnItsNextEdit() = runBlocking {
+        val s = add(repository.openPackage(face("00106")), "00008", 1)
+        val source = export(s.projectId).readBytes()
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
+            while (true) {
+                val entry = input.nextEntry ?: break
+                var bytes = input.readBytes()
+                if (entry.name in setOf(ProjectArchive.ManifestEntry, ProjectArchive.SessionEntry)) {
+                    val obj = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.toMutableMap()
+                    obj["schema"] = JsonPrimitive(2); obj.remove("lineage")
+                    bytes = JsonObject(obj).toString().encodeToByteArray()
+                }
+                zip.putNextEntry(ZipEntry(entry.name)); zip.write(bytes); zip.closeEntry()
+            }
+        } }
+        val file = exportFile().apply { writeBytes(out.toByteArray()) }
+        val imported = repository.importProject(Uri.fromFile(file).toString())
+        var loaded = repository.openProject(imported.id)
+        assertEquals("00008", loaded.widgets.last().importedFromFaceId)
+        loaded = move(loaded, loaded.widgets.last())
+        assertEquals(3, ProjectArchive.read(export(loaded.projectId).readBytes()).manifest.schema)
+        repository = repository()
+        assertEquals("00008", repository.openProject(loaded.projectId).widgets.last().importedFromFaceId)
+    }
+
+    /**
+     * `00106`'s four styles are one theme in four accents: its date composite is teal, lime,
+     * peach and lavender. Any colour lands in every style, survives reopening, and Reset
+     * returns each style to *its own* accent — then the container is the shipped one.
+     */
+    @Test fun aColourLandsInEveryStyleAndResetReturnsEachToItsOwn() = runBlocking {
+        val pristine = repository.openPackage(face("00106"))
+        val styles = pristine.styleNames
+        fun color(s: EditorSnapshot, index: Int) = s.widgets.single { it.globalIndex == index }.colorArgb
+        val comp = pristine.widgets.first { it.type == 13 && it.colorArgb != null }
+        val shipped = styles.associateWith { color(repository.currentSnapshot(it), comp.globalIndex) }
+        assertEquals("the styles must differ for this to mean anything", styles.size, shipped.values.toSet().size)
+        val red = 0xFFFF_2000.toInt()
+        var s = repository.currentSnapshot(styles.first())
+        s = repository.recolorWidget(styles.first(), comp.globalIndex, comp.type, comp.sequenceId,
+            comp.x, comp.y, red, true)
+        assertEquals(styles, s.audit?.changedStyles)
+        styles.forEach { assertEquals(it, red, color(repository.currentSnapshot(it), comp.globalIndex)) }
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(red, color(s, comp.globalIndex))
+        assertEquals(shipped[s.selectedVariant.basename], s.widgets.single { it.globalIndex == comp.globalIndex }.originalColorArgb)
+        s = repository.resetWidgetColor(s.selectedVariant.basename, comp.globalIndex, comp.type,
+            comp.sequenceId, comp.x, comp.y, true)
+        styles.forEach { assertEquals(it, shipped[it], color(repository.currentSnapshot(it), comp.globalIndex)) }
+        assertArrayEquals(bin("00106"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    /**
+     * A rule, a value and an arc take any colour in the selected style alone, and a copy
+     * resets to the colour of the widget it was copied from.
+     */
+    @Test fun rulesValuesAndArcsRecolourInTheirStyleAndACopyResetsToItsSource() = runBlocking {
+        for ((id, type) in listOf("00106" to 7, "00106" to 5, "00023" to 6)) {
+            val pristine = repository.openPackage(face(id))
+            val widget = pristine.widgets.first { it.type == type && it.colorArgb != null }
+            val blue = 0xFF20_40FF.toInt()
+            var s = repository.recolorWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+                widget.x, widget.y, blue, false)
+            assertEquals("$id type $type", listOf("style0.bin"), s.audit?.changedStyles)
+            assertEquals(blue, s.widgets.single { it.globalIndex == widget.globalIndex }.colorArgb)
+            assertTrue(pixels(s, widget.globalIndex).any { it ushr 24 == 0xFF && it and 0xFFFFFF == 0x2040FF })
+            s = repository.duplicateWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+                widget.x, widget.y, false)
+            val copy = s.widgets.last()
+            assertEquals(blue, copy.colorArgb)
+            assertEquals(widget.colorArgb, copy.originalColorArgb)
+            s = repository.resetWidgetColor("style0.bin", copy.globalIndex, copy.type, copy.sequenceId,
+                copy.x, copy.y, false)
+            assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
+            assertEquals(blue, s.widgets.single { it.globalIndex == widget.globalIndex }.colorArgb)
+        }
+    }
+
+    /**
+     * Removing a copy of a stock widget deletes it: nothing goes under Removed, and the face
+     * is byte-for-byte what it was before the Duplicate tap — in every style the copy was
+     * made in. The original itself still goes under Removed and comes back.
+     */
+    @Test fun aRemovedDuplicateIsDeletedAndOnlyTheOriginalIsRestorable() = runBlocking {
+        var s = repository.openPackage(face("00106"))
+        val widget = s.widgets.first { it.type == 5 }
+        val before = repository.prepareDirectInstall().copyBytes()
+        s = repository.duplicateWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, true)
+        val copy = s.widgets.last()
+        assertEquals(widget.globalIndex, copy.duplicateSourceGlobalIndex)
+        // Off its original, so there is something to see — in every style it was copied to.
+        assertEquals(dev.fitface.studio.core.model.duplicateOffset(widget, 256, 402),
+            (copy.x - widget.x) to (copy.y - widget.y))
+        assertTrue(copy.x != widget.x || copy.y != widget.y)
+        s.styleNames.forEach { style ->
+            val sibling = repository.currentSnapshot(style).widgets.last()
+            assertTrue(style, sibling.duplicateSourceGlobalIndex != null)
+        }
+        s = repository.currentSnapshot("style0.bin")
+        s = repository.removeWidget("style0.bin", copy.globalIndex, copy.type, copy.sequenceId,
+            copy.x, copy.y, false, true)
+        assertTrue(s.removedWidgets.isEmpty())
+        assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertTrue(s.removedWidgets.isEmpty())
+        s = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, false, false)
+        assertEquals(1, s.removedWidgets.size)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertTrue(s.removedWidgets.isEmpty())
+        assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
+    }
+
+    /**
+     * `00016`'s date names widget 20, which the face does not have, so it sits on the face.
+     * Duplicating each new copy grew the face past 20, and every later copy then aligned to
+     * copy #20 and appeared off the face. Now each copy lands one offset from the one before.
+     */
+    @Test fun aChainOfCopiesNeverJumpsOnceTheFaceGrowsPastAnAlignmentTarget() = runBlocking {
+        var s = repository.openPackage(face("00016"))
+        var previous = s.widgets.first { it.type == 13 }
+        val spots = mutableSetOf(previous.drawLeft to previous.drawTop)
+        repeat(25) {
+            s = repository.duplicateWidget("style0.bin", previous.globalIndex, previous.type,
+                previous.sequenceId, previous.x, previous.y, false)
+            val copy = s.widgets.last()
+            assertTrue("copy #${copy.globalIndex} jumped from ${previous.drawLeft},${previous.drawTop} " +
+                "to ${copy.drawLeft},${copy.drawTop}",
+                kotlin.math.abs(copy.drawLeft - previous.drawLeft) <= 8 &&
+                    kotlin.math.abs(copy.drawTop - previous.drawTop) <= 8)
+            // And never straight back onto an earlier copy while a free spot is visible.
+            assertTrue("copy #${copy.globalIndex} landed on an earlier one", spots.add(copy.drawLeft to copy.drawTop))
+            previous = copy
+        }
+        assertTrue(s.widgets.size > 21)
+    }
+
+    @Test fun compositeRotationPreservesOriginalThroughDuplicateReopenAndReset() = runBlocking {
+        val pristine = repository.openPackage(face("00105"))
+        val widget = pristine.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
+        assertEquals(3180, widget.rotationTenths)
+        var s = repository.rotateWidget("style0.bin", widget.globalIndex, widget.sequenceId,
+            widget.x, widget.y, 900, false)
+        assertEquals(900, s.widgets.single { it.globalIndex == widget.globalIndex }.rotationTenths)
+        assertEquals(3180, s.widgets.single { it.globalIndex == widget.globalIndex }.originalRotationTenths)
+        val sibling = repository.currentSnapshot("style1.bin")
+        assertEquals(3180, sibling.widgets.single { it.globalIndex == widget.globalIndex }.rotationTenths)
+        s = repository.currentSnapshot("style0.bin")
+        s = repository.duplicateWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, false)
+        val duplicate = s.widgets.last()
+        s = repository.rotateWidget("style0.bin", duplicate.globalIndex, duplicate.sequenceId,
+            duplicate.x, duplicate.y, 1234, false)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(1234, s.widgets.last().rotationTenths)
+        assertEquals(3180, s.widgets.last().originalRotationTenths)
+        s = repository.resetEdits()
+        assertEquals(pristine.widgets.size, s.widgets.size)
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun aTurnedRuleKeepsItsTurnAndLadderThroughResizeReopenAndReset() = runBlocking {
+        val pristine = repository.openPackage(face("00105"))
+        val line = pristine.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.LINE }
+        val shipped = line.rotationTenths!!
+        var s = repository.rotateWidget("style0.bin", line.globalIndex, line.sequenceId, line.x, line.y,
+            shipped + 150, false)
+        var turned = s.widgets.single { it.globalIndex == line.globalIndex }
+        assertEquals(dev.fitface.studio.core.model.normalizedRotation(shipped + 150), turned.rotationTenths)
+        assertEquals(shipped, turned.originalRotationTenths)
+        assertEquals(100, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        assertEquals(listOf("style0.bin"), s.audit?.changedStyles)
+        val smaller = requireNotNull(dev.fitface.studio.core.model.nextWidgetSize(turned, grow = false))
+        s = repository.resizeWidget("style0.bin", turned.globalIndex, turned.type, turned.sequenceId,
+            turned.x, turned.y, smaller.width, smaller.height, false)
+        turned = s.widgets.single { it.globalIndex == line.globalIndex }
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        assertEquals(dev.fitface.studio.core.model.normalizedRotation(shipped + 150), turned.rotationTenths)
+        repository = repository(); s = repository.openProject(s.projectId)
+        turned = s.widgets.single { it.globalIndex == line.globalIndex }
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        s = repository.rotateWidget("style0.bin", turned.globalIndex, turned.sequenceId, turned.x, turned.y,
+            shipped, false)
+        assertEquals(shipped, s.widgets.single { it.globalIndex == line.globalIndex }.rotationTenths)
+        s = repository.resetEdits()
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun turnedArtworkKeepsItsTurnThroughResizeRemovalReopenArchiveAndReset() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        val digit = s.widgets.first {
+            it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK && it.sharedArtworkWidgets > 0
+        }
+        assertEquals(0, digit.rotationTenths)
+        // A stale selection is refused, as every other edit refuses one.
+        assertTrue(runCatching {
+            repository.rotateWidget("style0.bin", digit.globalIndex, digit.sequenceId, digit.x + 1, digit.y, 150, false)
+        }.isFailure)
+        s = repository.rotateWidget("style0.bin", digit.globalIndex, digit.sequenceId, digit.x, digit.y, 150, false)
+        var turned = s.widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(150, turned.rotationTenths)
+        assertEquals(0, turned.originalRotationTenths)
+        assertEquals(dev.fitface.studio.core.model.artworkBounds(digit.width, digit.height, 150), turned.width to turned.height)
+        assertEquals(100, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        // The other digits share the frames, so they are turned too, and say so.
+        assertEquals(digit.sharedArtworkWidgets, s.widgets.count { it.globalIndex != digit.globalIndex &&
+            it.rotationTenths == 150 && it.width == turned.width })
+        val smaller = requireNotNull(dev.fitface.studio.core.model.nextWidgetSize(turned, grow = false))
+        s = repository.resizeWidget("style0.bin", turned.globalIndex, turned.type, turned.sequenceId,
+            turned.x, turned.y, smaller.width, smaller.height, false)
+        turned = s.widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        assertEquals(150, turned.rotationTenths)
+        // Removing and restoring a widget does not lose its artwork's turn: it is kept by artwork.
+        s = remove(s, turned)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertEquals(150, s.widgets.last().rotationTenths)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(150, s.widgets.last().rotationTenths)
+        val archive = export(s.projectId)
+        assertEquals(4, ProjectArchive.read(archive.readBytes()).manifest.schema)
+        val imported = repository.importProject(Uri.fromFile(archive).toString())
+        repository = repository(); s = repository.openProject(imported.id)
+        turned = s.widgets.last()
+        assertEquals(150, turned.rotationTenths)
+        assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
+        // Back to no turn, the project stops needing the newer schema.
+        s = repository.rotateWidget("style0.bin", turned.globalIndex, turned.sequenceId, turned.x, turned.y, 0, false)
+        assertEquals(0, s.widgets.last().rotationTenths)
+        assertEquals(3, ProjectArchive.read(export(s.projectId).readBytes()).manifest.schema)
+        repository.resetEdits()
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun aTurnSurvivesStyleDeletionAndRenumberingAndAodTurnsAlone() = runBlocking {
+        var s = repository.openPackage(face("00105"))
+        s = repository.currentSnapshot("style1.bin")
+        val digit = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK }
+        s = repository.rotateWidget("style1.bin", digit.globalIndex, digit.sequenceId, digit.x, digit.y, 900, false)
+        assertEquals(listOf("style1.bin"), s.audit?.changedStyles)
+        assertEquals(0, repository.currentSnapshot("style0.bin").widgets
+            .single { it.globalIndex == digit.globalIndex }.rotationTenths)
+        // Deleting style0 renumbers style1 to style0; the turn is kept by original artwork.
+        s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        s = repository.currentSnapshot("style0.bin")
+        var turned = s.widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(900, turned.rotationTenths)
+        assertEquals(digit.height to digit.width, turned.width to turned.height)
+        repository = repository(); s = repository.openProject(s.projectId)
+        turned = repository.currentSnapshot("style0.bin").widgets.single { it.globalIndex == digit.globalIndex }
+        assertEquals(900, turned.rotationTenths)
+        // The always-on display turns on its own even when every style is requested.
+        val aod = repository.currentSnapshot("aod.bin").widgets
+            .firstOrNull { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK }
+        if (aod != null) {
+            s = repository.rotateWidget("aod.bin", aod.globalIndex, aod.sequenceId, aod.x, aod.y, 1800, true)
+            assertEquals(listOf("aod.bin"), s.audit?.changedStyles)
+            assertEquals(1800, s.widgets.single { it.globalIndex == aod.globalIndex }.rotationTenths)
+            assertEquals(900, repository.currentSnapshot("style0.bin").widgets
+                .single { it.globalIndex == digit.globalIndex }.rotationTenths)
+        }
+        repository.resetEdits()
+        assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun anImportedPictureTurnsInItsOwnStyleUnderItsOwnKey() = runBlocking {
+        val donor = Fit3Container.parse(bin("00105")).entryByBasename("style0.bin")
+        val index = FaceRecordParser.widgetGuides(donor)
+            .first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK }.globalIndex
+        var s = add(repository.openPackage(face("00106")), "00105", index)
+        val widget = s.widgets.last()
+        assertEquals(dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK, widget.rotationKind)
+        s = repository.rotateWidget(s.selectedVariant.basename, widget.globalIndex, widget.sequenceId,
+            widget.x, widget.y, 900, true)
+        assertEquals(listOf(s.selectedVariant.basename), s.audit?.changedStyles)
+        assertEquals(900, s.widgets.last().rotationTenths)
+        assertEquals(widget.height to widget.width, s.widgets.last().let { it.width to it.height })
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(900, s.widgets.last().rotationTenths)
+        // Deleting the import drops its turn with its artwork; the project saves cleanly.
+        s = remove(s, s.widgets.last())
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertTrue(s.widgets.none { it.importedFromFaceId != null })
+    }
+
+    @Test fun importedCompositeAndAodRotationStayIsolatedEvenWithAllStylesRequested() = runBlocking {
+        val donorIndex = FaceRecordParser.scanWidgets(Fit3Container.parse(bin("00105")).entryByBasename("style0.bin"))
+            .first { it.widgetType == 13 }.globalIndex
+        var s = add(repository.openPackage(face("00106")), "00105", donorIndex)
+        val widget = s.widgets.last()
+        assertEquals(13, widget.type)
+        s = repository.rotateWidget(s.selectedVariant.basename, widget.globalIndex, widget.sequenceId,
+            widget.x, widget.y, -900, true)
+        assertEquals(listOf("style0.bin"), s.audit?.changedStyles)
+        assertEquals(widget.rotationTenths, s.widgets.last().originalRotationTenths)
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertEquals(2700, s.widgets.last().rotationTenths)
+        assertEquals(widget.rotationTenths, s.widgets.last().originalRotationTenths)
+        s = add(repository.currentSnapshot("aod.bin"), "00105", donorIndex)
+        val aod = s.widgets.last()
+        s = repository.rotateWidget("aod.bin", aod.globalIndex, aod.sequenceId, aod.x, aod.y, 1800, true)
+        assertEquals(listOf("aod.bin"), s.audit?.changedStyles)
+        assertEquals("style0.bin", s.activeStyleName)
+        assertEquals(2700, repository.currentSnapshot("style0.bin").widgets.last().rotationTenths)
+    }
+
     @Test fun allNineTypesImportRenderEditAndReopenWithoutADonorProject() = runBlocking {
         val native = repository.openPackage(face("00106"))
         var s = native
@@ -91,10 +695,16 @@ class WidgetImportRepositoryTest {
             assertEquals(id, widget.importedFromFaceId)
             assertTrue(pixels(s, widget.globalIndex).any { it ushr 24 != 0 })
             if (widget.type == 5) {
-                s = repository.recolorPairWidget(s.selectedVariant.basename, widget.globalIndex,
+                s = repository.recolorWidget(s.selectedVariant.basename, widget.globalIndex, widget.type,
                     widget.sequenceId, widget.x, widget.y, 0xFF00FF00.toInt(), true)
                 assertEquals(0xFF00FF00.toInt(), s.widgets.last().colorArgb)
                 assertEquals(widget.originalColorArgb, s.widgets.last().originalColorArgb)
+                // An import resets to the colour its donor shipped it with.
+                if (widget.colorArgb != 0xFF00FF00.toInt()) {
+                    s = repository.resetWidgetColor(s.selectedVariant.basename, widget.globalIndex, widget.type,
+                        widget.sequenceId, widget.x, widget.y, true)
+                    assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
+                }
             }
             s = move(s, widget)
             val moved = s.widgets.last()
@@ -171,7 +781,7 @@ class WidgetImportRepositoryTest {
         val added = add(native, "00003", 3) // Dictionary and new font resources.
         val file = export(added.projectId)
         val archived = ProjectArchive.read(file.readBytes())
-        assertEquals(2, archived.manifest.schema)
+        assertEquals(3, archived.manifest.schema)
         assertArrayEquals(bin("00106"), Fit3Apk.parse(file.readBytes()).binary)
         val imported = repository.importProject(Uri.fromFile(file).toString())
         val copy = repository.duplicateProject(added.projectId)
@@ -353,11 +963,90 @@ class WidgetImportRepositoryTest {
                 }
             } }
             val file = exportFile().apply { writeBytes(output.toByteArray()) }
-            if (caseIndex == 2) assertEquals(2, ProjectArchive.read(file.readBytes()).manifest.schema)
+            if (caseIndex == 2) assertEquals(3, ProjectArchive.read(file.readBytes()).manifest.schema)
             assertTrue(runCatching { repository.importProject(Uri.fromFile(file).toString()) }.isFailure)
             assertEquals(originalCount, dao.findByFaceId("00106").size)
             assertEquals(originalInserts, dao.insertCalls)
         }
+    }
+
+    @Test fun backgroundReviewDoesNotCommitAndItsTicketCannotOutliveTheDonorOrTarget() = runBlocking {
+        val initial = repository.openPackage(face("00112"))
+        val originalBytes = repository.prepareDirectInstall().copyBytes()
+        val donor = repository.inspectWidgetDonor(face("00076"))
+        val preview = repository.previewBackgroundImport(donor.handle, "style0.bin", initial.projectId, "style0.bin")
+        assertArrayEquals(originalBytes, repository.prepareDirectInstall().copyBytes())
+        assertFalse(repository.currentSnapshot().isDirty)
+        repository.currentSnapshot("aod.bin")
+        assertTrue(runCatching { repository.importBackground(preview.ticket) }.isFailure)
+        repository.currentSnapshot("style0.bin")
+        repository.releaseWidgetDonor(donor.handle)
+        assertTrue(runCatching { repository.importBackground(preview.ticket) }.isFailure)
+        assertArrayEquals(originalBytes, repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun backgroundImportSurvivesDonorReleaseAndReopenWithoutChangingWidgetArtwork() = runBlocking {
+        val initial = repository.openPackage(face("00112"))
+        val original = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        val donor = repository.inspectWidgetDonor(face("00076"))
+        val source = repository.backgroundDonorVariant(donor.handle, "style0.bin")
+        assertNotNull(source.background)
+        assertEquals(2, source.fullPanelImageCount)
+        val preview = repository.previewBackgroundImport(donor.handle, "style0.bin", initial.projectId, "style0.bin")
+        val result = repository.importBackground(preview.ticket)
+        assertEquals(initial.containerBytes, result.containerBytes)
+        assertTrue(result.isDirty)
+        assertEquals(initial.widgets, result.widgets)
+        assertArrayEquals(preview.preview.argb, result.composedPreview.argb)
+        initial.widgetImageLayers.filter { layer -> initial.widgets.single { it.globalIndex == layer.globalIndex }
+            .placement != WidgetPlacement.BACKGROUND }.forEach { layer ->
+            assertArrayEquals(layer.frame.argb, pixels(result, layer.globalIndex))
+        }
+        val binary = repository.prepareDirectInstall().copyBytes()
+        assertArrayEquals(original.entryByBasename("aod.bin").data,
+            Fit3Container.parse(binary).entryByBasename("aod.bin").data)
+        repository.releaseWidgetDonor(donor.handle)
+        repository = repository()
+        val reopened = repository.openProject(result.projectId)
+        assertArrayEquals(result.composedPreview.argb, reopened.composedPreview.argb)
+        assertArrayEquals(binary, repository.prepareDirectInstall().copyBytes())
+        assertTrue(dao.findByFaceId("00076").isEmpty())
+    }
+
+    @Test fun backgroundTicketRejectsLaterEditsAndDatabaseFailureRollsBack() = runBlocking {
+        var current = repository.openPackage(face("00112"))
+        val donor = repository.inspectWidgetDonor(face("00076"))
+        suspend fun preview() = repository.previewBackgroundImport(donor.handle, "style0.bin", current.projectId, "style0.bin")
+        val stale = preview()
+        current = move(current, current.canvasWidgets.first())
+        assertTrue(runCatching { repository.importBackground(stale.ticket) }.isFailure)
+        val before = repository.prepareDirectInstall().copyBytes()
+        val prepared = preview()
+        dao.fail = true
+        assertTrue(runCatching { repository.importBackground(prepared.ticket) }.isFailure)
+        assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
+        repository = repository()
+        val reopened = repository.openProject(current.projectId)
+        assertArrayEquals(current.composedPreview.argb, reopened.composedPreview.argb)
+        assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
+    }
+
+    @Test fun donorBackgroundAdditionPreservesImportedWidgetOrigins() = runBlocking {
+        val initial = add(repository.openPackage(face("00008")), "00008", 1)
+        val imported = initial.widgets.last()
+        val art = pixels(initial, imported.globalIndex)
+        val donor = repository.inspectWidgetDonor(face("00112"))
+        val review = repository.previewBackgroundImport(donor.handle, "style0.bin", initial.projectId, "style0.bin")
+        assertTrue(review.addedBackground)
+        var result = repository.importBackground(review.ticket)
+        assertEquals(imported.globalIndex + 1, result.widgets.last().globalIndex)
+        assertEquals(imported.importedFromFaceId, result.widgets.last().importedFromFaceId)
+        assertArrayEquals(art, pixels(result, result.widgets.last().globalIndex))
+        repository = repository()
+        result = repository.openProject(result.projectId)
+        assertEquals(imported.importedFromFaceId, result.widgets.last().importedFromFaceId)
+        assertArrayEquals(art, pixels(result, result.widgets.last().globalIndex))
+        assertTrue(repository.prepareDirectInstall().copyBytes().isNotEmpty())
     }
 
     private class FailableDao(private val delegate: ProjectDao) : ProjectDao by delegate {

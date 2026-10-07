@@ -195,9 +195,14 @@ class AodIsolationTest {
 
     /** The payload of [basename] in the container this project last committed to disk. */
     private fun committedEntry(projectId: Long, basename: String): ByteArray {
-        val edited = File(context.filesDir, "projects/$projectId/edited.bin")
+        val edited = File(context.filesDir, "projects/$projectId").listFiles()!!.single { it.extension == "checkpoint" }
         assertTrue("no committed container at $edited", edited.isFile)
-        return Fit3Container.parse(edited.readBytes()).entryByBasename(basename).data
+        return Fit3Container.parse(java.util.Base64.getDecoder().decode(
+            kotlinx.serialization.json.Json.parseToJsonElement(edited.readText()).let {
+                (it as kotlinx.serialization.json.JsonObject).getValue("editedContainer").let { value ->
+                    (value as kotlinx.serialization.json.JsonPrimitive).content
+                }
+            })).entryByBasename(basename).data
     }
 
     private fun facePackage() = FacePackage(

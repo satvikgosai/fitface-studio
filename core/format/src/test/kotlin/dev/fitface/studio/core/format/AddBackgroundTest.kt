@@ -368,7 +368,7 @@ class AddBackgroundTest {
         val all = styles(source).map { it.basename }
         val panel = FaceRecordParser.panelSize(source.entryByBasename(all.first()))
 
-        val refusal = assertThrows(Fit3FormatException::class.java) {
+        val refusal = assertThrows(Fit3CapacityException::class.java) {
             StructuralEditor.addBackgrounds(
                 source = source,
                 entryBasenames = all,
@@ -377,7 +377,10 @@ class AddBackgroundTest {
                 argb = fill(panel.width, panel.height),
             )
         }
-        assertTrue(refusal.message!!.contains("over the"))
+        assertEquals(source.fileSize, refusal.capacity.currentBytes)
+        assertEquals(source.fileSize + all.size * StructuralEditor.addedBackgroundBytes(panel.width, panel.height),
+            refusal.capacity.proposedBytes)
+        assertTrue(refusal.capacity.deficit > 0)
 
         val fitting = StructuralEditor.backgroundStylesThatFit(source, all)
         assertEquals(2, fitting.size)

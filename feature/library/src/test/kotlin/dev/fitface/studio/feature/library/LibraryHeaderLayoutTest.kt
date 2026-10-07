@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -21,15 +22,15 @@ import dev.fitface.studio.core.ui.R as UiR
  * The tabs must not move when you switch tabs.
  *
  * Both halves of the header are sized by the page it is showing, and the two pages do not
- * carry the same content: Watch faces has a REFRESH button the Projects page has none of, and
- * a longer explanation under the headline that wraps to a second line on a narrow phone. So
- * the row of tabs sat lower on Watch faces than on Projects — 26px lower on a 411dp phone from
- * the button alone, a whole line more than that on a 360dp one — and the tab you had just
- * tapped slid out from under your finger as the page changed.
+ * carry the same content: Watch faces has REFRESH where Projects has IMPORT, and a longer
+ * explanation under the headline that wraps to a second line on a narrow phone. Before
+ * Projects had a button, the row of tabs sat lower on Watch faces — 26px lower on a 411dp
+ * phone from the button alone, a whole line more than that on a 360dp one — and the tab you
+ * had just tapped slid out from under your finger as the page changed.
  *
- * The fix reserves both: the actions row keeps the touch-target height whether or not REFRESH
- * is in it, and the subtitle lays out **both** pages' strings so the box is as tall as the
- * longer one wraps to. The assertions are on positions rather than on line counts, because
+ * The fix reserves both: the actions row keeps the touch-target height whatever button is in
+ * it, and the subtitle lays out **both** pages' strings so the box is as tall as the longer
+ * one wraps to. The assertions are on positions rather than on line counts, because
  * whether a given string wraps at a given width is exactly the thing Robolectric's font
  * metrics get wrong — see the note in `FitTopBarLayoutTest`. Equality of positions holds
  * either way, and it is the property the bug was about.
@@ -47,23 +48,23 @@ class LibraryHeaderLayoutTest {
 
     private var page by mutableStateOf(LibraryPage.WatchFaces)
     private var crashed by mutableStateOf(false)
-    private var developerTools by mutableStateOf(false)
 
     /** Captured from the composition so the test cannot drift from the string resources. */
     private var projectsTab: String = ""
     private var menuLabel: String = ""
+    private var importLabel: String = ""
 
     private fun setHeader() {
         compose.setContent {
             projectsTab = stringResource(R.string.library_tab_projects, PROJECT_COUNT)
             menuLabel = stringResource(UiR.string.ui_app_menu_a11y)
+            importLabel = stringResource(R.string.library_action_import)
             FitFaceTheme(darkTheme = true) {
                 LibraryHeader(
                     page = page,
                     state = LibraryUiState(
                         isLoadingCatalog = false,
                         previousCrash = crashed,
-                        developerTools = developerTools,
                     ),
                     projectCount = PROJECT_COUNT,
                     loading = false,
@@ -81,8 +82,6 @@ class LibraryHeaderLayoutTest {
     /** Where a node sits down the header, in whole pixels. */
     private fun topOfTab(): Int =
         compose.onNodeWithText(projectsTab).fetchSemanticsNode().positionInRoot.y.toInt()
-
-    private fun topOfMenuAction(): Int = menuNode(menuLabel).positionInRoot.y.toInt()
 
     private fun menuNode(label: String) =
         compose.onNodeWithContentDescription(label).fetchSemanticsNode()
@@ -106,20 +105,35 @@ class LibraryHeaderLayoutTest {
     }
 
     /**
-     * The other half of the same shift. REFRESH is a `TextButton` and carries the 48dp
-     * minimum touch target with it; on the page without one the row used to shrink to its
-     * headline, taking the report action up with it.
+     * The other half of the same shift, and the reason IMPORT takes REFRESH's slot rather
+     * than a place of its own. The menu action is last so its right edge is pinned; a page
+     * whose button sat elsewhere, or measured differently, would move it sideways or down.
      */
     @Test
-    fun theMenuActionStaysPutWhenRefreshGoesAway() {
+    fun theMenuActionStaysPutWhenImportTakesRefreshsSlot() {
         setHeader()
-        val withRefresh = topOfMenuAction()
+        val withRefresh = menuNode(menuLabel)
         onPage(LibraryPage.Projects)
+        val withImport = menuNode(menuLabel)
         assertEquals(
-            "the menu action moved when REFRESH went away",
-            withRefresh,
-            topOfMenuAction(),
+            "the menu action moved when the page changed",
+            withRefresh.positionInRoot,
+            withImport.positionInRoot,
         )
+        assertEquals(
+            "the menu action resized when the page changed",
+            withRefresh.size,
+            withImport.size,
+        )
+    }
+
+    /** IMPORT is an ordinary action of the Projects page, with nothing to turn on first. */
+    @Test
+    fun importIsOnTheProjectsPage() {
+        setHeader()
+        compose.onNodeWithText(importLabel).assertDoesNotExist()
+        onPage(LibraryPage.Projects)
+        compose.onNodeWithText(importLabel).assertIsDisplayed()
     }
 
     /**
@@ -144,54 +158,6 @@ class LibraryHeaderLayoutTest {
             "the crash case moved the menu action",
             plainPosition,
             crashedNode.positionInRoot,
-        )
-    }
-
-    /**
-     * The hidden IMPORT button takes REFRESH's slot on the page REFRESH is not on, so it
-     * costs the header nothing — and the touch-target floor above already made the two pages
-     * the same height whether or not either was there.
-     *
-     * Worth pinning rather than reasoning about, because this is exactly the shape of the bug
-     * the rest of this class exists for: a control that appears on one page and not the other
-     * is what put the tab row 26px higher on Projects and moved the tab out from under the
-     * finger that tapped it. A gate that only some installs have turned on would make that
-     * two different layouts of the same screen, and only one of them ever looked at.
-     */
-    @Test
-    fun theHiddenImportActionMovesNothing() {
-        setHeader()
-        onPage(LibraryPage.Projects)
-        val locked = topOfTab()
-        val lockedMenu = menuNode(menuLabel)
-
-        developerTools = true
-        compose.waitForIdle()
-
-        assertEquals("unlocking the tools moved the tab row", locked, topOfTab())
-        assertEquals(
-            "unlocking the tools moved the menu action",
-            lockedMenu.positionInRoot,
-            menuNode(menuLabel).positionInRoot,
-        )
-        assertEquals(
-            "unlocking the tools resized the menu action",
-            lockedMenu.size,
-            menuNode(menuLabel).size,
-        )
-    }
-
-    /** And it still leaves the tabs where the catalogue page has them. */
-    @Test
-    fun theTabsStayPutWithTheToolsUnlockedToo() {
-        developerTools = true
-        setHeader()
-        val onWatchFaces = topOfTab()
-        onPage(LibraryPage.Projects)
-        assertEquals(
-            "with the tools unlocked, switching tabs moves the tabs",
-            onWatchFaces,
-            topOfTab(),
         )
     }
 

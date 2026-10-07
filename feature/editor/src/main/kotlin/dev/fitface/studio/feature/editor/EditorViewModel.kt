@@ -1,5 +1,10 @@
 package dev.fitface.studio.feature.editor
 
+import dev.fitface.studio.core.model.visualBounds
+import dev.fitface.studio.core.model.containerCapacity
+import dev.fitface.studio.core.model.visualOffsetX
+import dev.fitface.studio.core.model.visualOffsetY
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -97,12 +102,9 @@ data class EditorUiState(
     val placement: ImagePlacement = ImagePlacement(),
     val selectedWidgetIndex: Int? = null,
     /**
-     * Widgets picked together, in pick order: two or more, or empty.
-     *
-     * Never exactly one. A set that falls to one widget becomes the ordinary selection,
-     * because the single tray does everything a set can and more — the same rule the
-     * import picker follows, where one pick is the single flow unchanged. So "is a set
-     * selected" is `isNotEmpty()`, and [selectedWidgetIndex] is null whenever it is.
+     * Selection mode, in pick order: one or more items, or empty when inactive.
+     * A singleton stays in this mode until Clear, so the next tap can add an item.
+     * [selectedWidgetIndex] is null whenever selection mode is active.
      */
     val multiSelection: List<Int> = emptyList(),
     /** A set edit stopped partway; see [SelectionStop]. */
@@ -156,6 +158,7 @@ data class EditorUiState(
     val pendingSetMove: List<WidgetMovePreview> = emptyList(),
     val directInstall: DirectInstallState = DirectInstallState(),
     val error: UserMessage? = null,
+    val capacity: dev.fitface.studio.core.model.ContainerCapacity? = null,
     /** The pasteable report, non-null while the dialog is open. */
     val diagnosticsReport: String? = null,
 )
@@ -313,6 +316,7 @@ class EditorViewModel @Inject constructor(
      */
     fun selectVariant(variant: EditorVariant) {
         mutableState.value = mutableState.value.copy(
+            capacity = null,
             selectedWidgetIndex = null,
             // A global index means something different in every entry.
             multiSelection = emptyList(),
@@ -344,27 +348,29 @@ class EditorViewModel @Inject constructor(
             applyWidgetEditsToAllStyles = !imported && mutableState.value.applyWidgetEditsToAllStyles)
     }
 
-    /**
-     * Adds a widget to the set, or takes it out — what holding a widget on the canvas does.
-     *
-     * Starting from a single selection carries it in, so holding a second widget makes a
-     * set of two rather than throwing the first one away. A set that falls to one becomes
-     * that one's ordinary selection; see [EditorUiState.multiSelection].
-     */
+    /** Hold or the labelled selection action enters the mode without toggling the item off. */
+    fun beginSelection(globalIndex: Int) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        if (current.isWorking || snapshot.widgets.none { it.globalIndex == globalIndex }) return
+        val base = current.multiSelection.ifEmpty { listOfNotNull(current.selectedWidgetIndex) }
+        mutableState.value = current.copy(
+            multiSelection = (base + globalIndex).distinct(), selectedWidgetIndex = null,
+        )
+    }
+
+    /** A tap toggles membership; a remaining singleton still accepts the next tap. */
     fun toggleInSelection(globalIndex: Int) {
         val current = mutableState.value
         val snapshot = current.snapshot ?: return
         if (current.isWorking || snapshot.widgets.none { it.globalIndex == globalIndex }) return
         val base = current.multiSelection.ifEmpty { listOfNotNull(current.selectedWidgetIndex) }
         val next = if (globalIndex in base) base - globalIndex else base + globalIndex
-        mutableState.value = when (next.size) {
-            0 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = null)
-            1 -> current.copy(multiSelection = emptyList(), selectedWidgetIndex = next.single())
-            else -> current.copy(multiSelection = next, selectedWidgetIndex = null)
-        }
+        mutableState.value = current.copy(multiSelection = next, selectedWidgetIndex = null)
     }
 
     fun clearSelection() {
+        if (mutableState.value.isWorking) return
         mutableState.value = mutableState.value.copy(
             multiSelection = emptyList(),
             selectedWidgetIndex = null,
@@ -441,7 +447,7 @@ class EditorViewModel @Inject constructor(
     private fun runOnSelection(action: SelectionAction) {
         val start = mutableState.value
         val snapshot = start.snapshot ?: return
-        if (start.isWorking || start.multiSelection.size < 2) return
+        if (start.isWorking || start.multiSelection.isEmpty()) return
         val order = when (action) {
             SelectionAction.REMOVE -> start.multiSelection.sortedDescending()
             SelectionAction.DUPLICATE -> start.multiSelection
@@ -457,6 +463,7 @@ class EditorViewModel @Inject constructor(
                 pendingWidgetMove = null,
                 pendingSetMove = emptyList(),
                 previewReviewed = false,
+                capacity = null,
                 error = null,
             )
             var latest = snapshot
@@ -510,8 +517,8 @@ class EditorViewModel @Inject constructor(
                 isWorking = false,
                 pendingWidgetMove = null,
                 pendingSetMove = emptyList(),
-                multiSelection = selection.takeIf { it.size >= 2 }.orEmpty(),
-                selectedWidgetIndex = selection.singleOrNull(),
+                multiSelection = selection,
+                selectedWidgetIndex = null,
                 widgetRemovals = mutableState.value.widgetRemovals +
                     if (action == SelectionAction.REMOVE) done else 0,
                 selectionStopped = failure?.let { error ->
@@ -530,11 +537,31 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun acceptWidgetImport(snapshot: EditorSnapshot) {
+    fun acceptWidgetImport(snapshot: EditorSnapshot) = acceptImport(snapshot, selectLastWidget = true)
+
+    fun acceptBackgroundImport(snapshot: EditorSnapshot) = acceptImport(snapshot, selectLastWidget = false)
+
+    /** Deletion is already committed. Keep any pending image and placement for a fresh review. */
+    fun acceptStyleDeletion(snapshot: EditorSnapshot) {
+        if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
+        val previous = mutableState.value.snapshot
+        val sameVariant = previous?.originalVariants?.get(previous.selectedVariant.basename) ==
+            snapshot.originalVariants[snapshot.selectedVariant.basename]
+        clearPendingMoves()
+        directInstaller.payloadChanged()
+        mutableState.value = mutableState.value.copy(snapshot = snapshot,
+            selectedWidgetIndex = mutableState.value.selectedWidgetIndex.takeIf { sameVariant },
+            multiSelection = mutableState.value.multiSelection.takeIf { sameVariant }.orEmpty(),
+            pendingWidgetMove = null, pendingSetMove = emptyList(),
+            previewReviewed = false, capacity = null, error = null)
+    }
+
+    private fun acceptImport(snapshot: EditorSnapshot, selectLastWidget: Boolean) {
         if (snapshot.projectId != mutableState.value.snapshot?.projectId) return
         mutableState.value = mutableState.value.copy(snapshot = snapshot,
             multiSelection = emptyList(),
-            selectedWidgetIndex = snapshot.widgets.lastOrNull()?.globalIndex,
+            selectedWidgetIndex = snapshot.widgets.lastOrNull()?.globalIndex?.takeIf { selectLastWidget },
+            pendingImage = mutableState.value.pendingImage.takeIf { selectLastWidget },
             applyWidgetEditsToAllStyles = false, previewReviewed = false, pendingWidgetMove = null,
             pendingSetMove = emptyList())
     }
@@ -710,9 +737,9 @@ class EditorViewModel @Inject constructor(
                 display = constrainDragCoordinate(
                     proposed = storedToDisplay(x, widget.originX).toFloat(),
                     starting = storedToDisplay(widget.x, widget.originX).toFloat(),
-                    extent = widget.width,
+                    extent = widget.visualBounds.width,
                     canvasExtent = snapshot.preview.width,
-                    drawOffset = widget.drawOffsetX,
+                    drawOffset = widget.visualOffsetX,
                 ).roundToInt(),
                 origin = widget.originX,
             ),
@@ -720,9 +747,9 @@ class EditorViewModel @Inject constructor(
                 display = constrainDragCoordinate(
                     proposed = storedToDisplay(y, widget.originY).toFloat(),
                     starting = storedToDisplay(widget.y, widget.originY).toFloat(),
-                    extent = widget.height,
+                    extent = widget.visualBounds.height,
                     canvasExtent = snapshot.preview.height,
-                    drawOffset = widget.drawOffsetY,
+                    drawOffset = widget.visualOffsetY,
                 ).roundToInt(),
                 origin = widget.originY,
             ),
@@ -891,22 +918,54 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun setSelectedWidgetColor(colorArgb: Int) {
-        val snapshot = mutableState.value.snapshot ?: return
+    fun arrangeSelectedWidget(action: dev.fitface.studio.core.model.WidgetArrangement) {
+        val current = mutableState.value
+        if (current.isWorking || current.multiSelection.isNotEmpty()) return
+        val snapshot = current.snapshot ?: return
+        val widget = snapshot.widgets.singleOrNull { it.globalIndex == current.selectedWidgetIndex } ?: return
+        val destination = dev.fitface.studio.core.model.arrangementTarget(snapshot.widgets, widget.globalIndex, action) ?: return
+        operate(onSuccess = { it.copy(selectedWidgetIndex = destination, multiSelection = emptyList()) }) {
+            repository.reorderWidget(snapshot.selectedVariant.basename, widget.globalIndex, widget.type,
+                widget.sequenceId, widget.x, widget.y, destination)
+        }
+    }
+
+    fun rotateSelectedWidget(angleTenths: Int) {
+        val current = mutableState.value
+        if (current.isWorking) return
+        val snapshot = current.snapshot ?: return
+        val widget = snapshot.widgets.singleOrNull { it.globalIndex == current.selectedWidgetIndex } ?: return
+        val angle = dev.fitface.studio.core.model.normalizedRotation(angleTenths)
+        if (widget.rotationTenths == angle || !dev.fitface.studio.core.model.canRotateTo(widget, angle)) return
+        operate {
+            repository.rotateWidget(snapshot.selectedVariant.basename, widget.globalIndex,
+                widget.sequenceId, widget.x, widget.y, angle, current.applyWidgetEditsToAllStyles)
+        }
+    }
+
+    /**
+     * Sets the selected widget's colour, or — given null — returns it to the colour each
+     * style in scope shipped with.
+     */
+    fun setSelectedWidgetColor(colorArgb: Int?) {
+        val current = mutableState.value
+        if (current.isWorking) return
+        val snapshot = current.snapshot ?: return
         val selected = snapshot.widgets.singleOrNull {
-            it.globalIndex == mutableState.value.selectedWidgetIndex
+            it.globalIndex == current.selectedWidgetIndex
         } ?: return
         if (selected.colorArgb == null || selected.colorArgb == colorArgb) return
+        if (colorArgb != null && colorArgb ushr 24 != 0xFF) return
+        val style = snapshot.selectedVariant.basename
+        val allStyles = current.applyWidgetEditsToAllStyles
         operate {
-            repository.recolorPairWidget(
-                styleName = snapshot.selectedVariant.basename,
-                globalIndex = selected.globalIndex,
-                sequenceId = selected.sequenceId,
-                x = selected.x,
-                y = selected.y,
-                colorArgb = colorArgb,
-                applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
-            )
+            if (colorArgb == null) {
+                repository.resetWidgetColor(style, selected.globalIndex, selected.type,
+                    selected.sequenceId, selected.x, selected.y, allStyles)
+            } else {
+                repository.recolorWidget(style, selected.globalIndex, selected.type,
+                    selected.sequenceId, selected.x, selected.y, colorArgb, allStyles)
+            }
         }
     }
 
@@ -988,10 +1047,6 @@ class EditorViewModel @Inject constructor(
         if (!snapshot.canRefreshThumbnail) return
         operate { repository.refreshThumbnail() }
     }
-
-    fun tintCyan() = operate { repository.tintBackground(0, 255, 255) }
-
-    fun tintMagenta() = operate { repository.tintBackground(255, 0, 255) }
 
     fun reset() = operate(
         onSuccess = {
@@ -1076,6 +1131,7 @@ class EditorViewModel @Inject constructor(
                 pendingWidgetMove = null,
                 pendingSetMove = emptyList(),
                 previewReviewed = false,
+                capacity = null,
                 error = null,
             )
             runCatching { block() }
@@ -1093,7 +1149,7 @@ class EditorViewModel @Inject constructor(
                     mutableState.value = onSuccess(
                         mutableState.value.copy(
                             snapshot = snapshot,
-                            multiSelection = stillSelected.takeIf { it.size >= 2 }.orEmpty(),
+                            multiSelection = stillSelected,
                             selectedWidgetIndex = mutableState.value.selectedWidgetIndex
                                 .takeIf { selectedStillExists },
                             isWorking = false,
@@ -1131,6 +1187,7 @@ class EditorViewModel @Inject constructor(
             isWorking = false,
             pendingWidgetMove = null,
             pendingSetMove = emptyList(),
+            capacity = error.containerCapacity(),
             error = UserMessage(messageIds.incrementAndGet(), text),
         )
     }

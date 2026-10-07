@@ -5,6 +5,8 @@ import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.EditorVariant
+import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.PreviewFrame
@@ -56,6 +58,30 @@ class EditorSelectionSetTest {
 
     private fun settle() = scope.advanceUntilIdle()
 
+    @Test fun styleDeletionKeepsPendingPhotoPlacementAndSelectionOnTheSamePristineVariant() {
+        val variants = (0..2).map { EditorVariant("style$it.bin", VariantKind.STYLE, it) }
+        val original = snapshot(listOf(widget(1, x = 20, y = 20))).copy(
+            styleNames = variants.map { it.basename }, variants = variants, selectedVariant = variants.last(),
+            activeStyleName = "style2.bin", originalVariants = variants.associate { it.basename to it.basename })
+        val repository = FakeRepository(original)
+        val vm = EditorViewModel(repository, installer, DiagnosticsLog(), mockk(relaxed = true))
+        vm.loadProject(1); settle(); vm.selectWidget(1)
+        vm.prepareBackground("content://test/photo"); settle(); vm.transformImage(1.2f, .1f, .2f)
+        vm.markPreviewReviewed()
+        val pending = vm.state.value.pendingImage
+        val placement = vm.state.value.placement
+        val after = original.copy(styleNames = listOf("style0.bin"), variants = listOf(variants.first()),
+            selectedVariant = variants.first(), activeStyleName = "style0.bin",
+            originalVariants = mapOf("style0.bin" to "style2.bin"), isDirty = true)
+        vm.acceptStyleDeletion(after)
+        assertEquals(pending, vm.state.value.pendingImage)
+        assertEquals(placement, vm.state.value.placement)
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        assertFalse(vm.state.value.previewReviewed)
+        vm.acceptStyleDeletion(after.copy(originalVariants = mapOf("style0.bin" to "style1.bin")))
+        assertNull(vm.state.value.selectedWidgetIndex)
+    }
+
     private fun opened(widgets: List<WidgetGuide> = listOf(
         widget(1, x = 20, y = 20), widget(2, x = 60, y = 120), widget(3, x = 100, y = 220),
     )): Pair<EditorViewModel, FakeRepository> {
@@ -66,24 +92,133 @@ class EditorSelectionSetTest {
         return viewModel to repository
     }
 
+    @Test fun arrangingKeepsTheMovedWidgetSelectedClearsReviewAndStopsAtBoundaries() {
+        val (vm, repo) = opened(listOf(widget(0,0,0).copy(placement = dev.fitface.studio.core.model.WidgetPlacement.BACKGROUND),
+            widget(1,20,20), widget(2,60,120), widget(3,100,220)))
+        vm.selectWidget(1); vm.setApplyWidgetEditsToAllStyles(true); vm.markPreviewReviewed()
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(3, vm.state.value.selectedWidgetIndex)
+        assertEquals(20, vm.state.value.snapshot!!.widgets.last().x)
+        assertFalse(vm.state.value.previewReviewed)
+        assertEquals(listOf(1 to 3), repo.reorders)
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(1, repo.reorders.size)
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.BACK); settle()
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        vm.beginSelection(1); vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FORWARD); settle()
+        assertEquals(2, repo.reorders.size)
+        vm.clearSelection(); vm.selectWidget(0)
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(2, repo.reorders.size)
+    }
+
+    @Test fun refusedArrangementKeepsSelectionAndTheCanvasAndReportsTheReason() {
+        val (vm, repo) = opened()
+        vm.selectWidget(1); repo.failReorder = true
+        val before = vm.state.value.snapshot
+        vm.arrangeSelectedWidget(dev.fitface.studio.core.model.WidgetArrangement.FRONT); settle()
+        assertEquals(before, vm.state.value.snapshot)
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        assertNotNull(vm.state.value.error)
+        assertFalse(vm.state.value.isWorking)
+    }
+
+    @Test fun rotationKeepsSelectionClearsReviewAndHonoursScopeAndNoOp() {
+        val (vm, repo) = opened(listOf(widget(1, 20, 20).copy(type = 13, rotationTenths = 0,
+            rotationKind = dev.fitface.studio.core.model.WidgetRotationKind.TEXT)))
+        vm.selectWidget(1)
+        vm.rotateSelectedWidget(3600); settle()
+        assertTrue(repo.rotations.isEmpty())
+        vm.markPreviewReviewed()
+        assertTrue(vm.state.value.previewReviewed)
+        vm.rotateSelectedWidget(-421); settle()
+        assertEquals(listOf(3179), repo.rotations)
+        assertEquals(1, vm.state.value.selectedWidgetIndex)
+        assertFalse(vm.state.value.previewReviewed)
+        assertFalse(vm.state.value.isWorking)
+        vm.beginSelection(1); vm.rotateSelectedWidget(900); settle()
+        assertEquals(listOf(3179), repo.rotations)
+    }
+
+    @Test fun aLineIsTurnedInWholeDegreesAndAFractionIsNotSent() {
+        val (vm, repo) = opened(listOf(widget(1, 20, 20).copy(type = 7, rotationTenths = 350,
+            rotationKind = dev.fitface.studio.core.model.WidgetRotationKind.LINE)))
+        vm.selectWidget(1)
+        vm.rotateSelectedWidget(355); settle()
+        assertTrue(repo.rotations.isEmpty())
+        vm.rotateSelectedWidget(500); settle()
+        assertEquals(listOf(500), repo.rotations)
+    }
+
+    @Test fun unsupportedWidgetsDoNotSendRotationEdits() {
+        val (vm, repo) = opened()
+        vm.selectWidget(1); vm.rotateSelectedWidget(900); settle()
+        assertTrue(repo.rotations.isEmpty())
+    }
+
     // -- choosing a set -------------------------------------------------------
 
-    /** Holding a second widget keeps the first; a set that falls to one is a selection again. */
-    @Test fun holdingASecondWidgetMakesASetAndFallingToOneIsASelectionAgain() {
+    @Test fun firstHoldStartsSelectionAndAnotherTapAddsAWidget() {
+        val (vm, _) = opened()
+        vm.beginSelection(1)
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        assertNull(vm.state.value.selectedWidgetIndex)
+        vm.selectWidget(2)
+        assertEquals(listOf(1, 2), vm.state.value.multiSelection)
+        vm.selectWidget(1)
+        assertEquals(listOf(2), vm.state.value.multiSelection)
+        vm.selectWidget(3)
+        assertEquals(listOf(2, 3), vm.state.value.multiSelection)
+    }
+
+    @Test fun holdingTheCurrentWidgetStartsModeAndRepeatedHoldsKeepItSelected() {
         val (vm, _) = opened()
         vm.selectWidget(1)
-        vm.toggleInSelection(2)
+        vm.beginSelection(1)
+        vm.beginSelection(1)
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        assertNull(vm.state.value.selectedWidgetIndex)
+        vm.beginSelection(2)
         assertEquals(listOf(1, 2), vm.state.value.multiSelection)
-        assertNull(vm.state.value.selectedWidgetIndex)
         vm.toggleInSelection(1)
-        assertTrue(vm.state.value.multiSelection.isEmpty())
-        assertEquals(2, vm.state.value.selectedWidgetIndex)
+        assertEquals(listOf(2), vm.state.value.multiSelection)
         vm.toggleInSelection(2)
-        assertNull(vm.state.value.selectedWidgetIndex)
-        // Holding with nothing selected is an ordinary selection of that one.
-        vm.toggleInSelection(3)
-        assertEquals(3, vm.state.value.selectedWidgetIndex)
         assertTrue(vm.state.value.multiSelection.isEmpty())
+        assertNull(vm.state.value.selectedWidgetIndex)
+    }
+
+    @Test fun clearLeavesSelectionModeAndTheNextTapEditsNormally() {
+        val (vm, _) = opened()
+        vm.beginSelection(3)
+        vm.clearSelection()
+        assertNull(vm.state.value.selectedWidgetIndex)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        vm.selectWidget(3)
+        assertEquals(3, vm.state.value.selectedWidgetIndex)
+        vm.beginSelection(3)
+        vm.clearSelection()
+        assertNull(vm.state.value.selectedWidgetIndex)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        vm.beginSelection(999)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+    }
+
+    @Test fun singletonSetCanNudgeDuplicateAndRemove() {
+        val (vm, repository) = opened()
+        vm.beginSelection(1)
+        vm.nudgeSelection(1, 0)
+        settle()
+        assertEquals(listOf(21 to 20), repository.moves[1])
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        vm.duplicateSelection()
+        settle()
+        assertEquals(listOf(1), repository.duplicated)
+        assertEquals(listOf(4), vm.state.value.multiSelection)
+        vm.removeSelection()
+        settle()
+        assertEquals(listOf(4), repository.removed)
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        assertNull(vm.state.value.selectedWidgetIndex)
     }
 
     /** With a set picked, a tap toggles and bare canvas lets go — the import picker's gestures. */
@@ -98,6 +233,37 @@ class EditorSelectionSetTest {
         vm.selectWidget(null)
         assertTrue(vm.state.value.multiSelection.isEmpty())
         assertNull(vm.state.value.selectedWidgetIndex)
+    }
+
+    @Test fun singletonSelectionClearsOnVariantChangeAndReset() {
+        val (vm, _) = opened()
+        vm.beginSelection(1)
+        vm.selectVariant(EditorVariant("aod.bin", VariantKind.AOD))
+        settle()
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        assertNull(vm.state.value.selectedWidgetIndex)
+        vm.beginSelection(2)
+        vm.reset()
+        settle()
+        assertTrue(vm.state.value.multiSelection.isEmpty())
+        assertNull(vm.state.value.selectedWidgetIndex)
+    }
+
+    @Test fun selectionDoesNotChangeWhileASingletonDuplicateIsSaving() {
+        val (vm, repository) = opened()
+        repository.parkedDuplicate = CompletableDeferred()
+        vm.beginSelection(1)
+        vm.duplicateSelection()
+        settle()
+        assertTrue(vm.state.value.isWorking)
+        vm.beginSelection(2)
+        vm.toggleInSelection(2)
+        vm.clearSelection()
+        assertEquals(listOf(1), vm.state.value.multiSelection)
+        repository.parkedDuplicate!!.complete(Unit)
+        settle()
+        assertEquals(listOf(4), vm.state.value.multiSelection)
+        assertFalse(vm.state.value.isWorking)
     }
 
     // -- removing -----------------------------------------------------------------
@@ -310,6 +476,30 @@ class EditorSelectionSetTest {
      */
     private class FakeRepository(private var current: EditorSnapshot) :
         WatchFaceRepository by mockk(relaxed = true) {
+        override suspend fun prepareReplacementImage(imageUri: String) =
+            dev.fitface.studio.core.model.ReplacementImage(imageUri, current.preview)
+        val reorders = mutableListOf<Pair<Int, Int>>()
+        var failReorder = false
+        override suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
+            x: Int, y: Int, destination: Int): EditorSnapshot {
+            if (failReorder) throw WatchFaceException("Alignment would change")
+            identify(globalIndex, sequenceId)
+            reorders += globalIndex to destination
+            val widgets = current.widgets.toMutableList()
+            val widget = widgets.single { it.globalIndex == globalIndex }
+            widgets.remove(widget); widgets.add(destination, widget)
+            current = current.copy(widgets = widgets.mapIndexed { index, it -> it.copy(globalIndex = index, ordinal = index) }, isDirty = true)
+            return current
+        }
+        val rotations = mutableListOf<Int>()
+        override suspend fun rotateWidget(styleName: String, globalIndex: Int, sequenceId: Int,
+            x: Int, y: Int, angleTenths: Int, applyToAllStyles: Boolean): EditorSnapshot {
+            rotations += angleTenths
+            current = current.copy(widgets = current.widgets.map {
+                if (it.globalIndex == globalIndex) it.copy(rotationTenths = angleTenths) else it
+            }, isDirty = true)
+            return current
+        }
         val removed = mutableListOf<Int>()
         val duplicated = mutableListOf<Int>()
         val moves = mutableMapOf<Int, MutableList<Pair<Int, Int>>>()
@@ -317,10 +507,15 @@ class EditorSelectionSetTest {
         var failOnCall: Int? = null
         /** When set, every move commit waits for it — the window a held arrow repeats in. */
         var parked: CompletableDeferred<Unit>? = null
+        var parkedDuplicate: CompletableDeferred<Unit>? = null
         private var calls = 0
 
         override fun observeImageFit() = flowOf(ImageFit.COVER)
         override suspend fun openProject(projectId: Long): EditorSnapshot = current
+        override suspend fun currentSnapshot(styleName: String?): EditorSnapshot = current.copy(
+            selectedVariant = EditorVariant(styleName ?: "style0.bin", VariantKind.AOD),
+        ).also { current = it }
+        override suspend fun resetEdits(): EditorSnapshot = current
 
         private fun identify(globalIndex: Int, sequenceId: Int): WidgetGuide {
             if (++calls == failOnCall) throw WatchFaceException("refused")
@@ -346,6 +541,7 @@ class EditorSelectionSetTest {
             x: Int, y: Int, applyToAllStyles: Boolean,
         ): EditorSnapshot {
             val source = identify(globalIndex, sequenceId)
+            parkedDuplicate?.await()
             duplicated += globalIndex
             val next = current.widgets.maxOf { it.globalIndex } + 1
             current = current.copy(widgets = current.widgets + source.copy(globalIndex = next, ordinal = next))

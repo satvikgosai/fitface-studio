@@ -4,7 +4,7 @@
 
 | Application ID | `dev.fitface.studio` |
 | --- | --- |
-| Version | `0.2.0` (code `20`) |
+| Version | `0.2.1` (code `21`) |
 | Android | 9.0 (SDK 28) or newer |
 
 An Android app for browsing, editing and installing Fit3 (SM-R390) watch faces.
@@ -47,11 +47,18 @@ the app. The watch photo shows a real Bluetooth install.
 ## What you can do
 
 - Search and sort the catalogue, or reopen saved projects without downloading again.
-- Replace, tint or add a background where the face has room for it.
-- Move, resize, recolour, duplicate and remove supported widgets; restore removed
-  stock widgets and add widgets from other faces.
+  Export a project to a ZIP file and import it later, on this phone or another.
+- Replace or add a background where the face has room for it, including
+  copying the background from another face.
+- Move, resize, duplicate and remove supported widgets, and set text, lines and arc
+  gauges to any colour. Restore removed stock widgets and add widgets from other faces.
+  Arrange widgets in front of or behind each other. Rotate text, lines, arc gauges and
+  pictures in 15° steps or to an exact angle, with an original-angle reset; pictures are
+  redrawn from their original artwork.
 - Edit the selected style, opt into matching widgets across styles, or edit the
   always-on display separately.
+- Delete unused styles with an exact space-saving review, including when an edit
+  needs more room under the watch's 4 MiB limit.
 - Start a custom face with a clock on an empty panel. It uses the downloaded Info_4
   face as its base and replaces that face's slot on the watch.
 - Review the preview and checks on **Install**, then send to a paired watch.

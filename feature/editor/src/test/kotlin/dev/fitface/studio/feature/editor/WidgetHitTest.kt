@@ -2,12 +2,15 @@ package dev.fitface.studio.feature.editor
 
 import androidx.compose.ui.geometry.Offset
 import dev.fitface.studio.core.model.ImageFit
+import dev.fitface.studio.core.model.RotationBounds
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetResizeKind
 import dev.fitface.studio.core.model.WidgetResizeStepPercent
+import dev.fitface.studio.core.model.WidgetRotationKind
 import dev.fitface.studio.core.model.WidgetSize
 import dev.fitface.studio.core.model.nextWidgetSize
 import dev.fitface.studio.core.model.widgetResizeLadder
+import dev.fitface.studio.core.model.visualBounds
 import dev.fitface.studio.core.model.widgetSizePercent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -15,6 +18,64 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WidgetHitTest {
+    @Test fun rotatedCornersAreSelectableAndMovementClampsTheirVisualBounds() {
+        val rotated = guide(3, 50, 60, 80, 30).copy(type = 13, rotationTenths = 900,
+            rotationKind = WidgetRotationKind.TEXT)
+        // 90 degrees extends above and below the unrotated 80x30 box.
+        assertEquals(3, hitWidget(listOf(rotated), Offset(90f, 40f), 256, 402, 256, 402)?.globalIndex)
+        assertNull(hitWidget(listOf(rotated), Offset(55f, 70f), 256, 402, 256, 402))
+        val bounds = dev.fitface.studio.core.model.rotationBounds(80, 30, 40, 15, 90.0)
+        assertEquals((-bounds.top).toFloat(), constrainDragCoordinate(-100f, 60f,
+            bounds.height, 402, bounds.top), 0f)
+        assertEquals((256 - bounds.width - bounds.left).toFloat(), constrainDragCoordinate(999f, 50f,
+            bounds.width, 256, bounds.left), 0f)
+    }
+
+    @Test fun aTurnedLineOrArcIsItsOwnBoundAndStepsInWholeDegreesWithoutTheTextBudget() {
+        // A Rule's box is already the turned line's: rotating it again would double-count.
+        val line = guide(4, 10, 10, 300, 300).copy(type = 7, rotationTenths = 450,
+            rotationKind = WidgetRotationKind.LINE)
+        assertEquals(RotationBounds(0, 0, 300, 300), line.visualBounds)
+        // 300×300 is under the text canvas budget, but a line has no canvas at all; a far larger
+        // line still steps, where text of that size would be refused.
+        val long = line.copy(width = 1500, height = 1500)
+        assertEquals(600, nextWidgetRotation(long, clockwise = true))
+        assertEquals(300, nextWidgetRotation(long, clockwise = false))
+        val text = long.copy(type = 13, rotationKind = WidgetRotationKind.TEXT)
+        assertNull(nextWidgetRotation(text, clockwise = true))
+        // Endpoints and arc angles are integers: a tenth is refused, not rounded.
+        assertEquals(R.string.editor_rotation_whole_degrees, rotationInputError(line, 455))
+        assertNull(rotationInputError(line, 460))
+        val arc = line.copy(type = 6, rotationKind = WidgetRotationKind.ARC, rotationTenths = 2700)
+        assertEquals(2850, nextWidgetRotation(arc, clockwise = true))
+        assertEquals(R.string.editor_rotation_whole_degrees, rotationInputError(arc, 2701))
+        assertEquals(R.string.editor_rotation_invalid, rotationInputError(arc, null))
+        // No kind, no rotation: the tray's buttons stay disabled.
+        assertNull(nextWidgetRotation(line.copy(rotationTenths = null, rotationKind = null), clockwise = true))
+    }
+
+    @Test fun turnedArtworkGrowsToItsBoundsAndStepsInWholeDegrees() {
+        assertEquals(80 to 80, dev.fitface.studio.core.model.artworkBounds(80, 80, 0))
+        assertEquals(40 to 80, dev.fitface.studio.core.model.artworkBounds(80, 40, 900))
+        assertEquals(80 to 40, dev.fitface.studio.core.model.artworkBounds(80, 40, 1800))
+        assertEquals(114 to 114, dev.fitface.studio.core.model.artworkBounds(80, 80, 450))
+        assertEquals(98 to 98, dev.fitface.studio.core.model.artworkBounds(80, 80, 150))
+        val picture = guide(5, 10, 10, 80, 80).copy(rotationTenths = 0, rotationKind = WidgetRotationKind.ARTWORK)
+        assertEquals(150, nextWidgetRotation(picture, clockwise = true))
+        assertEquals(3450, nextWidgetRotation(picture, clockwise = false))
+        assertEquals(R.string.editor_rotation_whole_degrees, rotationInputError(picture, 125))
+        // Its box already is the turned artwork, so nothing is added around it.
+        assertEquals(RotationBounds(0, 0, 80, 80), picture.copy(rotationTenths = 450).visualBounds)
+    }
+
+    @Test fun decimalRotationInputNormalizesWithoutDroppingPrecision() {
+        assertEquals(3180, parseRotationInput("-42"))
+        assertEquals(1, parseRotationInput("360.1"))
+        assertEquals(3181, parseRotationInput("318,1"))
+        assertEquals("318.1", rotationInput(3181))
+        for (value in listOf("", "NaN", "1.11", "214748365", "--5")) assertNull(parseRotationInput(value))
+    }
+
     @Test
     fun choosingEveryFitModeCreatesAFreshCenteredPlacement() {
         ImageFit.entries.forEach { fit ->

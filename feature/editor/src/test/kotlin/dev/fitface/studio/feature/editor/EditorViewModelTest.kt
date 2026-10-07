@@ -299,6 +299,34 @@ class EditorViewModelTest {
         assertNull(viewModel.state.value.pendingWidgetMove)
     }
 
+    /**
+     * Any opaque colour reaches the repository with the widget's own type — text, rule or
+     * arc, not only a value — and null asks for the original back. A translucent colour and
+     * the colour already in force commit nothing.
+     */
+    @Test
+    fun aColourIsCommittedForTheSelectedWidgetsTypeAndNullResetsIt() {
+        val teal = 0xFF75D8D6.toInt()
+        val text = widget(globalIndex = 1, x = 20, y = 20).copy(type = 13, colorArgb = teal, originalColorArgb = teal)
+        val repository = FakeRepository(snapshot(listOf(text)), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.selectWidget(1)
+
+        viewModel.setSelectedWidgetColor(0xFF123456.toInt())
+        settle()
+        viewModel.setSelectedWidgetColor(0x80123456.toInt())
+        settle()
+        viewModel.setSelectedWidgetColor(0xFF123456.toInt())
+        settle()
+        viewModel.setSelectedWidgetColor(null)
+        settle()
+
+        assertEquals(listOf(13 to 0xFF123456.toInt(), 13 to null), repository.colors)
+        assertEquals(teal, viewModel.state.value.snapshot?.widgets?.single()?.colorArgb)
+    }
+
     // ---------------------------------------------------------------------------
     // Harness
     // ---------------------------------------------------------------------------
@@ -379,6 +407,42 @@ class EditorViewModelTest {
 
         fun releaseAll() {
             gate.complete(Unit)
+        }
+
+        /** Every colour edit, as the widget type and the colour, or null for a reset. */
+        val colors = mutableListOf<Pair<Int, Int?>>()
+
+        override suspend fun recolorWidget(
+            styleName: String,
+            globalIndex: Int,
+            widgetType: Int,
+            sequenceId: Int,
+            x: Int,
+            y: Int,
+            colorArgb: Int,
+            applyToAllStyles: Boolean,
+        ): EditorSnapshot {
+            colors += widgetType to colorArgb
+            current = current.copy(widgets = current.widgets.map {
+                if (it.globalIndex == globalIndex) it.copy(colorArgb = colorArgb) else it
+            })
+            return current
+        }
+
+        override suspend fun resetWidgetColor(
+            styleName: String,
+            globalIndex: Int,
+            widgetType: Int,
+            sequenceId: Int,
+            x: Int,
+            y: Int,
+            applyToAllStyles: Boolean,
+        ): EditorSnapshot {
+            colors += widgetType to null
+            current = current.copy(widgets = current.widgets.map {
+                if (it.globalIndex == globalIndex) it.copy(colorArgb = it.originalColorArgb) else it
+            })
+            return current
         }
 
         override fun observeImageFit() = flowOf(ImageFit.COVER)

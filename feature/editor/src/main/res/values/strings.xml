@@ -71,7 +71,7 @@
     <string name="editor_subtitle_background_can_add">background can be added</string>
     <string name="editor_subtitle_background_no_room">%1$s · no room for one</string>
     <string name="editor_subtitle_background_none">no background</string>
-    <string name="editor_subtitle_background_idle">choose an image or tint</string>
+    <string name="editor_subtitle_background_idle">choose an image</string>
     <plurals name="editor_subtitle_styles">
         <item quantity="one">%1$d style</item>
         <item quantity="other">%1$d styles</item>
@@ -110,21 +110,16 @@
 
     <!-- Selection panel -->
     <string name="editor_selection_widget">@string/ui_widget_number</string>
-    <!-- The selection action bar under the face. Every widget edit lives here now; the
-         inspector keeps the record's facts and is reached from the "more" menu. -->
+    <!-- The selection action bar under the face: stepped edits are one tap each here, and
+         values that are set rather than stepped live in Edit widget, behind its last button. -->
     <string name="editor_selection_facts">#%1$d · %2$d×%3$d · x %4$d y %5$d</string>
     <string name="editor_action_smaller_a11y">Make this widget smaller</string>
     <string name="editor_action_larger_a11y">Make this widget larger</string>
-    <string name="editor_action_color_a11y">Colour</string>
-    <!-- The scope toggle, as a tray button. Its glyph is the rail's own Styles mark and
-         its tint is the state, so the label has to say which state that is. -->
-    <string name="editor_action_scope_on_a11y">Editing all %1$d styles. Tap to edit only this one.</string>
-    <string name="editor_action_scope_off_a11y">Editing this style only. Tap to edit all %1$d.</string>
-    <string name="editor_action_scope_fixed_a11y">This edit reaches one variant and cannot be widened</string>
-    <!-- Shown in the colour menu when the record carries no colour field at all, so the
-         control says why it can do nothing rather than being silently absent. -->
-    <string name="editor_action_no_color">Colour comes from this widget’s artwork.</string>
-    <string name="editor_action_record_details">Record details</string>
+    <string name="editor_action_record_details">Edit widget</string>
+    <!-- The set tray's scope label, beside the picked numbers. A status, not a button:
+         the switch is in Edit widget. Upper-cased by MicroLabel. -->
+    <string name="editor_tray_scope_all">All styles</string>
+    <string name="editor_tray_scope_one">%1$s only</string>
     <!-- One line at 320dp, which is what the selection tray can spare: it sits under the
          face and every line it takes is a line the face loses. -->
     <string name="editor_nudge_hint">tap 1 px · hold to run · drag on the face</string>
@@ -193,11 +188,15 @@
     <string name="editor_delete_title">Delete widget #%1$d?</string>
     <string name="editor_delete_body_imported">It came from face %1$s, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Add it from that face again to have it back.</string>
     <string name="editor_delete_confirm">@string/ui_delete</string>
+    <string name="editor_delete_body_duplicate">It is a copy of another widget, so it is deleted instead of going to the Removed list. Duplicate that widget again to have it back.</string>
     <!-- Several widgets at once. Each is still its own edit, one after another. -->
     <string name="editor_widgets_hint">Tap to edit on the canvas; hold to select several.</string>
     <string name="editor_widgets_hint_set">Tap to add or remove widgets from the selection.</string>
     <string name="editor_widgets_set_edit">Edit on canvas</string>
-    <string name="editor_selection_set_title">%1$d widgets selected</string>
+    <string name="editor_selection_set_title">%1$d selected</string>
+    <string name="editor_select_multiple">Select multiple widgets</string>
+    <string name="editor_add_to_selection">Add widget #%1$d to selection</string>
+    <string name="editor_remove_from_selection">Remove widget #%1$d from selection</string>
     <string name="editor_selection_clear">@string/ui_clear_selection</string>
     <string name="editor_selection_duplicate_a11y">Duplicate all %1$d</string>
     <string name="editor_selection_remove_a11y">Remove all %1$d</string>
@@ -210,6 +209,10 @@
     <plurals name="editor_remove_set_stock_one">
         <item quantity="one">%1$d goes to the Removed list, from %2$s only, so you can put it back.</item>
         <item quantity="other">%1$d go to the Removed list, from %2$s only, so you can put them back.</item>
+    </plurals>
+    <plurals name="editor_remove_set_duplicate">
+        <item quantity="one">%1$d is a copy of another widget, so it is deleted instead of going to the Removed list.</item>
+        <item quantity="other">%1$d are copies of other widgets, so they are deleted instead of going to the Removed list.</item>
     </plurals>
     <plurals name="editor_remove_set_imported">
         <item quantity="one">%1$d came from another face, so it is deleted with its artwork. Add it from that face again to have it back.</item>
@@ -235,11 +238,21 @@
     <string name="editor_record_detail">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d</string>
     <string name="editor_record_detail_frames">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d   frames %6$d</string>
     <string name="editor_duplicate_of">Copy of #%1$d</string>
-    <string name="editor_pair_color">Value color · #%1$s</string>
+    <string name="editor_color">Widget colour</string>
+    <string name="editor_color_current">Current: %1$s · Original: %2$s</string>
     <string name="editor_color_white">White</string>
-    <string name="editor_color_cyan">Cyan</string>
-    <string name="editor_color_pink">Pink</string>
+    <string name="editor_color_red">Red</string>
     <string name="editor_color_green">Green</string>
+    <string name="editor_color_blue">Blue</string>
+    <string name="editor_color_black">Black</string>
+    <string name="editor_color_hex">Hex colour</string>
+    <string name="editor_color_hex_invalid">Use six hex digits, like #FF8800.</string>
+    <string name="editor_color_hue">Hue</string>
+    <string name="editor_color_saturation">Saturation</string>
+    <string name="editor_color_brightness">Brightness</string>
+    <string name="editor_color_apply">Apply colour</string>
+    <string name="editor_color_reset">Reset colour</string>
+    <string name="editor_color_watch_depth">The watch shows 16-bit colour, so very close colours can look the same.</string>
     <string name="editor_apply_all_title">Edit matching widgets in all styles</string>
     <plurals name="editor_apply_all_on">
         <item quantity="one">Edits the matching widget in this style. Always-on display is separate.</item>
@@ -284,8 +297,6 @@
     <string name="editor_bg_no_image_title">No image chosen</string>
     <string name="editor_bg_no_image_detail">Resized to %1$d×%2$d when applied.</string>
     <string name="editor_bg_choose">Choose image</string>
-    <string name="editor_bg_tint_cyan">Tint cyan</string>
-    <string name="editor_bg_tint_magenta">Tint magenta</string>
     <string name="editor_bg_fit_heading">Fit</string>
     <string name="editor_bg_discard">Discard</string>
     <string name="editor_bg_use">Use positioned image</string>
@@ -445,7 +456,7 @@
       style would have it disagree with every "Style N" the rest of the app shows.
     -->
     <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
-    <string name="editor_destructive_note">A duplicate is added at the end of the drawing order and selected for editing. Removal and duplication rebuild the widget table and its checksums.</string>
+    <string name="editor_destructive_note">A duplicate is added at the end of the drawing order, 8 px right and down from its original (the other way near an edge), and selected for editing. Removing a duplicate deletes it instead of listing it under Removed. Removal and duplication rebuild the widget table and its checksums.</string>
     <string name="editor_transfer_progress">%1$d/%2$d windows · %3$d/%4$d bytes</string>
     <string name="editor_preview_details">Preview details</string>
     <string name="editor_preview_explanation">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</string>
@@ -459,4 +470,77 @@
     <string name="editor_setup_details">Why this order?</string>
     <string name="editor_title_edited_a11y">%1$s, edited</string>
     <string name="editor_transfer_percent">%1$d%% sent</string>
+    <string name="editor_bg_import_open">From another watch face</string>
+    <string name="editor_bg_import_faces">Choose a background</string>
+    <string name="editor_bg_import_review">Review background</string>
+    <string name="editor_bg_import_experimental">Review the result before applying.</string>
+    <string name="editor_bg_import_saving">Applying background…</string>
+    <string name="editor_bg_import_asset">Source background image</string>
+    <string name="editor_bg_import_result">Background replacement preview</string>
+    <string name="editor_bg_import_missing">This style has no background image. Choose another style or face.</string>
+    <string name="editor_bg_import_primary">Copy this background image. Your widgets stay in place.</string>
+    <string name="editor_bg_import_multiple">This style has additional full-face artwork. Only its primary background is copied.</string>
+    <string name="editor_bg_import_before">Before</string>
+    <string name="editor_bg_import_after">After</string>
+    <string name="editor_bg_import_scope">Applies to: %1$s</string>
+    <string name="editor_bg_import_skipped">Unchanged: %1$s</string>
+    <string name="editor_bg_import_result_detail">Colours and transparency follow your face’s background. This sample preview may differ from the watch.</string>
+    <string name="editor_bg_import_scope_aod">Always-on display only</string>
+    <string name="editor_bg_import_scope_styles">Numbered styles</string>
+    <string name="editor_bg_import_replace">Replace background</string>
+    <string name="editor_bg_import_add">Add background</string>
+    <string name="editor_rotation">Rotate widget</string>
+    <string name="editor_rotation_unsupported">This widget has no angle to change.</string>
+    <string name="editor_rotation_unsupported_artwork">This picture can’t be redrawn safely.</string>
+    <string name="editor_rotation_unsupported_background">Backgrounds are replaced, not rotated.</string>
+    <string name="editor_rotation_unsupported_gauge">Gauges have no angle to change.</string>
+    <string name="editor_rotation_unsupported_hand">A hand’s angle is its live reading.</string>
+    <string name="editor_rotation_left">Rotate left 15°</string>
+    <string name="editor_rotation_right">Rotate right 15°</string>
+    <string name="editor_rotation_current">Current: %1$s° · Original: %2$s°</string>
+    <string name="editor_rotation_degrees">Angle in degrees</string>
+    <string name="editor_rotation_reset">Reset rotation</string>
+    <string name="editor_rotation_apply">Apply rotation</string>
+    <string name="editor_rotation_scope_all">Applies to: all styles</string>
+    <string name="editor_rotation_scope">Applies to: %1$s</string>
+    <string name="editor_rotation_invalid">Use at most one decimal place.</string>
+    <string name="editor_rotation_too_large">Too large to rotate. It can still be set to 0°.</string>
+    <string name="editor_rotation_whole_degrees">Use whole degrees.</string>
+    <string name="editor_rotation_line">Turns about its middle.</string>
+    <string name="editor_rotation_arc">Turns about its centre.</string>
+    <string name="editor_rotation_artwork">Redrawn from the original; it grows to fit.</string>
+    <string name="editor_rotation_artwork_opaque">Not transparent, so its whole box turns with it.</string>
+    <plurals name="editor_rotation_shared">
+        <item quantity="one">Also turns %1$d other widget using this artwork.</item>
+        <item quantity="other">Also turns %1$d other widgets using this artwork.</item>
+    </plurals>
+    <string name="editor_rotation_text">Fonts in the preview are approximate.</string>
+    <string name="editor_arrange">Arrange layers</string>
+    <string name="editor_arrange_scope">Applies to: %1$s only</string>
+    <string name="editor_arrange_description">Front widgets cover those behind.</string>
+    <string name="editor_arrange_front">Bring to front</string>
+    <string name="editor_arrange_forward">Bring forward</string>
+    <string name="editor_arrange_backward">Send backward</string>
+    <string name="editor_arrange_back">Send to back</string>
+    <string name="editor_arrange_boundaries">Backgrounds stay at the back. Moves that break alignment are refused.</string>
+    <string name="editor_manage_styles">Manage styles</string>
+    <string name="editor_style_delete_action">Delete %1$s</string>
+    <string name="editor_style_delete_title">Delete %1$s?</string>
+    <string name="editor_style_delete_confirm">Delete style</string>
+    <string name="editor_style_delete_one_warning">This permanently removes %1$s and its edits from this project. Reset project restores the original styles but discards all other edits too.</string>
+    <string name="editor_styles_delete_title">Delete selected styles?</string>
+    <string name="editor_styles_review_deletion">Review deletion</string>
+    <string name="editor_styles_delete_confirm">Delete styles</string>
+    <string name="editor_style_capacity_usage">Watch-face storage: %1$s of 4 MiB</string>
+    <string name="editor_style_capacity_deficit">This edit needs %1$,d more bytes of free space.</string>
+    <string name="editor_style_delete_explanation">Choose styles you do not use. These previews show their current edits. Keep at least one style.</string>
+    <string name="editor_style_reclaims">Frees %1$,d bytes</string>
+    <string name="editor_style_keep_one">The last style must be kept.</string>
+    <string name="editor_style_protected">Kept for your pending edit.</string>
+    <string name="editor_style_delete_savings">Frees %1$,d bytes · Styles remaining: %2$d</string>
+    <string name="editor_style_renumbering">Remaining styles will be numbered in this order:</string>
+    <string name="editor_style_active_after">Active after deletion: %1$s</string>
+    <string name="editor_style_delete_warning">This permanently removes the selected styles and their edits from this project. Reset project restores the original styles but discards all other edits too.</string>
+    <string name="editor_style_delete_saved">Style deletion is saved separately. Cancelling the pending edit will not restore deleted styles.</string>
+    <string name="editor_style_aod_kept">AOD is kept separately and cannot be deleted here.</string>
 </resources>

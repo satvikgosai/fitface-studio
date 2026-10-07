@@ -25,16 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/**
- * That an edit is one commit across the row, the container and the session file.
- *
- * The three used to be written in the order container, session file, row — and the row is
- * the only one of the three behind a cancellable suspension. A commit that threw or was
- * cancelled at the database left the new `edited.bin` on disk while the editor rolled only
- * its in-memory container back, and an already-edited project's row names that same
- * pathname: reopening it therefore loaded the edit the app had just reported as failed.
- * The row goes first now, so every failure leaves the two agreeing.
- */
+/** An edit's bytes and identity/restore metadata commit with one database pointer swap. */
 @RunWith(RobolectricTestRunner::class)
 class EditPersistenceTest {
     private val root: Path = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot")))
@@ -74,7 +65,7 @@ class EditPersistenceTest {
         val first = nudge(opened, by = 4)
         val committed = position(first)
         // The project has to be edited *already* for this to bite: the row has to be
-        // naming `edited.bin` before the failing commit replaces it.
+        // naming an existing checkpoint before the failing commit tries to replace it.
         assertNotEquals(position(opened), committed)
 
         dao.failNextInsert = true
@@ -99,20 +90,16 @@ class EditPersistenceTest {
         assertEquals(moved, position(repository.openProject(opened.projectId)))
     }
 
-    /**
-     * A first edit writes the row before the container exists. If it never appears, the
-     * row names a path that is not a file, and that has to read as "no edit" rather than
-     * as a project that cannot be opened.
-     */
+    /** An essential checkpoint cannot silently degrade to the original face. */
     @Test
-    fun aRowPointingAtAContainerThatIsNotThereOpensAsUnedited() = runBlocking {
+    fun aMissingCheckpointIsRefusedInsteadOfSilentlyLosingEdits() = runBlocking {
         val opened = repository.openPackage(facePackage())
         val edited = position(nudge(opened, by = 4))
         assertNotEquals(position(opened), edited)
 
-        assertTrue(File(projectDirectory(opened.projectId), "edited.bin").delete())
+        assertTrue(File(requireNotNull(dao.findById(opened.projectId)?.editedBinPath)).delete())
 
-        assertEquals(position(opened), position(repository.openProject(opened.projectId)))
+        assertTrue(runCatching { repository.openProject(opened.projectId) }.isFailure)
     }
 
     /**

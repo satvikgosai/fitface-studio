@@ -634,6 +634,15 @@ The consequence for editing is in
 renumber these references with them, and a widget that others are positioned
 against cannot simply be removed.
 
+A reference resolves only against an earlier record, so "names nothing" depends on where
+the record sits. An appended record — a duplicate, or a restored widget — goes after every
+index, and a value that named nothing where its source sat can name a real widget there:
+`00016`'s date names 20, and once duplicating it grew the face past 20, each further copy
+aligned to copy #20 and was drawn off the face, as the watch would draw it. So an appended
+record whose target was at or after its former index, and would now resolve, takes
+`WidgetImporter.ROOT_TARGET` (`0xFFFF`), as an import does; one that still names nothing
+keeps its bytes. `AppendedAlignmentTest` covers copies and restores.
+
 ### Badge: geometry is a line segment — **proven for the one record**
 
 The single Badge stores `x=14, y=256, w=242, h=256`. As width/height that is
@@ -668,8 +677,8 @@ Record `+0x54..+0x57` is not read,
 `+0x58` is stored AARRGGBB text colour (RGB consumed, alpha ignored), `+0x5C` is rotation in tenths of a degree,
 `+0x5E` selects `font_N.bin`, `+0x60` is signed letter spacing, and `+0x62`
 is a dictionary index containing a digit permutation such as `"1234"` or
-`"3214"`. `+0x5F/+0x61` have no effect. A nonzero rotation uses an RGB888
-canvas; zero uses an ordinary label. Comp is therefore authorable, but every
+`"3214"`. `+0x5F/+0x61` have no effect. A nonzero rotation draws into a
+transparent RGB565+A canvas; zero uses an ordinary label. Comp is therefore authorable, but every
 dictionary index and source must be designed with the locale files rather than
 copied independently.
 
@@ -843,7 +852,7 @@ Imports and raster growth can also cross the ceiling.
 | Exact type schemas, not a generic minimum size | All 4,034 producer records have their type's exact size; a 40-byte Composite is not a valid 100-byte record |
 | Four alignment-reference fields only | Static/Hand `+0x1E`, Value/Composite `+0x22`, enabled by the adjacent code; see §7 |
 | Renumber real targets, preserve unresolved producer values | `remapAlignmentTarget`; refuse removal of a widget others reference; survivor checks compare referents, not integer values |
-| Original identity survives index changes | `originalWidgetSources` resolves through `payloadKey`/record indices, not raw byte offsets or `originalRecords[globalIndex]` |
+| Original identity survives index changes | Schema-3 checkpoints persist `SessionLineage` native sources and duplicate status; operations remap current indices explicitly. Legacy migration uses `originalWidgetSources` once. Unknown originals cannot be resized. Never use raw offsets or `originalRecords[globalIndex]` as identity. |
 | Source IDs are not identities | Static source is zero in 678/681 records; Sprite `(type, source)` happens to be unique in 1,486/1,518, not universally |
 | Every declared raster pointer is relocated | Static `+0x20`, Sprite's exact frame-count words, Hand `words[1]`, Arc `words[4]` (30/30), LineBar `words[2]` (16/16) |
 | Empty widget tables are valid | Removing the last widget retains the image section; snapshot, restore, preview and installer accept zero widgets |
@@ -879,6 +888,69 @@ A file cannot supply a new live data source or arbitrary font program, recover l
 RGB565 precision, or safely change the panel identity/geometry. The two reference
 files contain no unreferenced raster or compression stage; shrinking artwork and
 bounded imported-resource deletion are separate editing mechanisms.
+
+### Deleting numbered styles
+
+`StructuralEditor.deleteStyles` removes any chosen numbered styles, retaining at
+least one in the same relative order. It refuses unknown names and AOD. Survivors
+are renamed consecutively from `style0.bin` in their original directory; their
+payloads, including widgets and image pointers, remain byte-identical. Shared
+fonts, dictionaries and AOD remain unchanged. Update `setting.bin +0x34` to the
+survivor count and map `+0x35` to the surviving default, or zero if it was removed.
+Select the corresponding complete `PreviewStream.RECORD_STRIDE` frames from
+`preview.bin`; refuse noncanonical picker streams. Each deletion reclaims exactly
+the style payload, one 74-byte directory record and one 99,696-byte picker frame.
+
+Session metadata composes current-to-pristine variant identities through repeated
+deletions. Remap native/donor origins and saved removed records; discard records
+owned only by deleted styles. Pristine resizing, original-angle resets, shipped
+image counts and packaged PNG lookup all resolve through that mapping. The active
+style follows its survivor; deleting it selects the next survivor, otherwise the
+previous one. AOD selection stays AOD. Reset restores the project's full pristine
+package, including the stripped original of a custom template.
+
+Capacity failures carry current/proposed/limit byte counts. Only the BIN ceiling
+offers capacity recovery; font-slot and provenance limits do not. Confirm deletion
+as an independent edit, keep the pending edit's target style, then rebuild its
+review against the new container. Never reuse a previous import ticket or retry
+widgets already committed in a partial batch. Partial background additions also
+offer style management. Persistence and archive contracts are in
+[Architecture](architecture.md#the-project-archive).
+
+`StyleDeletionTest` sweeps corpus deletion candidates and survivor shapes, alongside
+synthetic default, path and invalid-selection cases. `CanvasIntegrityTest` compares
+survivor renders; repository tests cover resize/restore, shared imported resources,
+rollback, reopening, archives, copies, previews and Reset. These software checks do
+not establish arbitrary style deletion on hardware. Verify middle/active removal,
+remaining picker frames, AOD, wake/reboot and subsequent installs on a watch; the
+existing custom-template hardware result has narrower scope.
+
+### Arranging widget layers
+
+Later records draw above earlier records; there is no independent z-index field.
+`StructuralEditor.reorderWidget` permutes one variant's variable-length records,
+renumbers globals and only the schema-named alignment references, and leaves the
+image section and all other entries byte-identical. Full-panel raster widgets are
+pinned: other widgets may move within the interval between them, never across them.
+
+Before accepting, compare every resolved placement's origin, basis and mapped
+referent. Refuse loss of an existing anchor or activation of a forward reference,
+even if its current coordinates happen to agree with panel placement. Self references
+remain self references; nonexistent producer targets remain unchanged. Unsupported
+alignment codes refuse arrangement. Saved removed records carry their named targets
+through the same permutation before later Restore.
+
+The repository commits the permutation with native and donor identities atomically.
+Selection follows the moved widget, pending moves are cancelled, and review/thumbnail
+state becomes stale. Subsequent all-style edits match pristine counterparts and map
+those identities into each current table; current indices must never select siblings
+after reorder. Ambiguous duplicate counterparts are skipped. Arrangement itself is
+selected-variant-only, including isolated AOD.
+
+`WidgetReorderTest` checks synthetic dependencies, mixed record sizes, saved removals
+and corpus round trips. `CanvasIntegrityTest` checks actual opaque overlap and unchanged
+per-widget artwork. Emulator checks do not establish watch-side acceptance of changed
+record order; deliberate hardware verification remains outstanding.
 
 ### Resizing a widget
 
@@ -949,11 +1021,172 @@ one widget per style, 58 serve 2–5, and 32 are shared between numbered styles 
 AOD. Changing one needs a separate shared-resource model and supported-family sizes.
 The preview approximates ROM fonts with Android fonts; it does not justify box-only scaling.
 
+### Rotating widgets
+
+`WidgetSchema.RotationModel` declares which records store a turnable angle; Static and
+Sprite artwork is turned by redrawing it (below). Text, line and arc rotations are
+same-size field patches: no raster, pointer, resource or image count changes, both CRC
+layers are rebuilt and the result validates. Requests are absolute angles;
+selected-style matching is strict and requested siblings are best effort, each keeping
+its own length, range, text or artwork. AOD and imports remain variant-local.
+
+| Type | Mechanism | What turns | Census (99 faces) |
+| --- | --- | --- | ---: |
+| Composite | `NativeAngle(+0x5C)` | Native tenths-degree angle; text, layout and resources unchanged | 427 records |
+| Rule | `Endpoints` | Endpoint vector about its midpoint, whole degrees | 84 (52 diagonal: `00004`, `00066`, `00089`, `00105`) |
+| Vector arc | `AngleRange(+0x28, +0x2A)` | Start and end together, whole degrees | 71 of 75 |
+| Static, Sprite | Redrawn artwork | Pool resampled from its originals into the turned bounds, whole degrees | 293 Statics and 1,518 Sprites off the background, RGB565 or RGB565+A |
+
+**Only Composite stores an angle.** Face `00105` looks fully rotated, but its tilted digits
+and colon are Sprite and Static frames whose *artwork* is drawn tilted, laid out on a
+staggered diagonal; its icons and dim track lines are painted into the background raster;
+its bright progress lines are Rules; its text is Composite. `00023`'s italic digits are
+likewise drawn italic. A Hand's `+0x24/+0x26` angles map the live reading onto the dial,
+so changing them makes the hand show the wrong value. An image arc stores an orientation
+beside a texture raster; whether that texture turns with it is unproven, so neither is
+offered.
+
+#### Composite text
+
+Reads retain raw vendor values; requests normalize to `[0, 3600)`. The original
+native/donor angle survives reopening and is offered as Reset rotation. Payload identity
+excludes this mutable angle while retaining the neighbouring fields.
+
+Nonzero angles draw the text into a **transparent canvas** the size of the stored
+box, rotated about its integer centre. The constructor sets GUI image format 5
+(RGB565+A, `w × h × 3` bytes) at `0x2C107F5C`, and every update clears it to opacity 0
+(`0x2C107CF6`, colour 0 and opacity 0) before drawing the text, so only the glyphs cover
+the face. Three bytes per pixel is RGB565 plus alpha, not an opaque RGB888 box. This is
+instruction-level evidence; turned text has not been checked on a watch. The preview
+mirrors it with an approximate Android font. Shared rotation geometry supplies rendered
+bounds, selection outlines, hit tests and drag/nudge clamps without changing the
+stored layout box or alignment origin. Off-panel starting positions can still be
+moved gradually inward.
+
+The editor limits each newly rotated box to 102,912 pixels (308,736 canvas bytes)
+and at most 1,024 pixels per side. This is an editor allocation policy, **not a
+measured total watch RAM budget**. Oversized boxes can still be set to zero.
+
+#### Rules
+
+A Rule has no angle field: its direction is that of `x,y → +0x1C/+0x1E`, reported in whole
+degrees because integer endpoints cannot hold a finer angle on a panel-sized line. A turn
+rewrites both endpoints about their midpoint (kept to half a pixel) and keeps the colour
+and the `+0x31` flag byte.
+
+Rotation and resize share `RuleGeometry` and one reference: **the pristine line turned to
+the current direction**. Resize scales that span rather than the raw pristine one, so a
+resize no longer undoes a turn; a turn lands on the resize rung the line is on now, so a
+line at 85% stays at 85% of its shipped length. The guide reports that reference's extent
+as `originalWidth/Height`, so `widgetResizeLadder` and the format layer agree on every rung.
+A shrunk diagonal's integer direction wanders by degrees with nobody turning it, so a
+direction within rounding of the pristine one counts as unturned. A resize keeps the start
+point and a turn keeps the midpoint, so a turn–resize–turn sequence can shift a line by up
+to half its change in length while its shape returns exactly.
+
+#### Vector arcs
+
+The new start is the requested angle in `[0, 360)` and the end keeps the stored distance,
+so Reset writes back the vendor's exact pair — `(270, 630)` turned to 285° is `(285, 645)`.
+45 catalogue arcs store that full ring; the largest end the editor writes is 719. The four
+decreasing pairs, `(350, 110)`, are not offered: the preview reads them as a wrapped 120°,
+which the firmware has not been shown to share.
+
+#### Static and Sprite artwork
+
+No image record holds an angle, so a turn redraws the pixels and the app records the
+angle itself (`SessionLineage.artworkTurns`; persistence in
+[Architecture](architecture.md#the-project-archive)). The redraw follows resize's contract:
+
+- **Always from the originals.** Each frame is resampled with `RasterResampler` from its
+  pristine origin to the turned content's size, then turned by `RasterResampler.turn` into
+  the box `artworkBounds` gives. Quarter turns are exact permutations; other angles use
+  premultiplied bilinear sampling, so edges fade into transparent corners. Turning the last
+  result instead would compound blur and grow transparent margins on every tap.
+- **Opaque artwork turns too.** A turn uncovers corners outside the artwork. Quarter
+  turns of plain RGB565 (74 Statics, 640 Sprites) are exact permutations and stay RGB565 at
+  the same size. Any other angle stores the pool as RGB565+A: the picture's own rectangle
+  keeps alpha 255, so it turns exactly as it drew — black box and all — and only the
+  uncovered corners are clear. The watch takes each image's format from its own header
+  (GUI image-format enums 4/5/10), and `00046` ships one Static as RGB565 in three styles
+  and RGB565+A in the fourth, so a widget does not depend on its raster's format. The
+  frames grow by half again; `rebuild` still holds 4 MiB. Turning back to zero restores the
+  original format and bytes. Indexed8 cannot blend; backgrounds, Hands and frames without
+  originals are refused.
+- **The whole pool, in place.** Every widget sharing the frames turns with them (`00105`'s
+  four time digits share ten frames), image count and pointer mapping are asserted, and
+  `rebuild` holds the 4 MiB ceiling. Each widget keeps its visual centre: stored positions
+  are re-solved through `WidgetLayout`, because alignment codes 2 and 3 measure from the
+  widget's own width and pool members can be aligned to one another. The half of the growth
+  truncates toward zero, so turn-and-back returns the exact position.
+- **Turn and resize compose.** The resize ladder of turned artwork is of the turned
+  original's bounds; the guide reports them as `originalWidth/Height`. A resize redraws at
+  the saved turn, and a turn lands on the rung the pool is on now. Turning back to zero at
+  full size reproduces the shipped bytes.
+- **Keyed by artwork.** The turn is saved under the original variant and lowest original
+  image index, or the import origin, so widget removal, restore, duplication and reordering
+  keep it. Saving one moves the project to checkpoint/archive schema 4.
+
+A turned digit turns in place: the time does not swing as a group about a common centre.
+A resize keeps the top-left and a turn keeps the centre, so mixing them moves a widget —
+an 80 px picture turned 45°, halved, then turned back sits about 9 px from where it began —
+while the artwork itself stays exact. A widget removed before its artwork was turned keeps
+its saved position when restored over the larger image.
+
+A turn keeps the resize rung: the same percentage of the original, now turned. A widget
+enlarged near its limit may not fit that rung at the new angle, and then takes the largest
+rung that does instead of being refused. With every style requested, each sibling is
+resized to the selected rung's percentage of *its own* turned original, because turns are
+style-local and the selected style's pixel size would squash a sibling turned differently.
+
+`WidgetRotationTest` turns every catalogue Rule and arc and back, and walks each Rule a
+rung down while turned. `ArtworkTurnTest` covers quarter and arbitrary turns, aligned and
+shared widgets, opaque pictures, refusals and resize while turned, and turns 168 distinct
+artwork pools in the first style of the 99 faces and back to their shipped bytes. `CanvasIntegrityTest`
+checks a turned line, arc or picture changes only pixels inside rectangles that changed.
+Rotation editing has software/corpus/emulator coverage; physical-watch checks of changed
+live text, clipping, turned lines, arcs and artwork, and wake behaviour remain unperformed.
+Resized artwork with new dimensions is accepted on hardware; turned artwork, including an
+opaque pool stored with alpha, has not been sent.
+
+### Recolouring widgets
+
+`WidgetSchema.ColorModel` declares where a type's colour is. Every colour is one whole
+AARRGGBB word; the firmware converts its RGB to RGB565 (`0x2C106428`) and never reads the
+alpha byte, so any opaque RGB is a valid colour and the watch shows it at 16-bit depth.
+Vendor styles use arbitrary values (`00106`: teal, lime, peach and lavender accents).
+
+| Type | Colour read | Copies kept equal | Unread, left alone |
+| --- | --- | --- | --- |
+| Pair (live text) | `+0x24` | — | — |
+| Composite text | `+0x58` | — | — |
+| Rule | `+0x28` | `+0x2C` (all 84) | `+0x20`, `+0x24` |
+| Vector arc | `+0x34` | `+0x38` (all 75) | track `+0x2C`, `+0x30` |
+
+All 1,320 of these colour words in the 99-face catalogue are opaque. A recolour is a
+same-size patch: the colour word, plus each copy that still equals it before the edit, so a
+record that broke the convention keeps its own bytes. The requested colour must be opaque;
+the selected record must carry an opaque colour word, and a sibling style that does not is
+skipped. Picture widgets have no colour field; tinting their pixels is not offered.
+
+Colour is not identity: `payloadKey` masks colour words as it masks angles. Reset returns
+**each style in scope to its own original** — the import baseline, or the original (or
+duplicate source) saved in `SessionLineage` — because styles often differ only in colour.
+An older rule refused colour to any Pair sharing a sequence with another in its style (74
+of 734); edits match by index, type, sequence and position, so those are colourable now.
+
+`WidgetColorTest` patches each type on synthetic records, checks copies, refusals and
+identity, and recolours every colourable widget in the first style of the 99 faces and back
+to its shipped bytes. `CanvasIntegrityTest` checks a recolour changes only that widget's
+pixels. Pair colour is hardware-proven; Composite, Rule and arc colour have not been sent.
+
 ### Adding or replacing backgrounds
 
 Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.
 Replacement/tint edits styles that have a background, skipping others and failing
-only if none does. `backgroundStyles` describes actual targets before image selection.
+only if none does. `FaceEditor.tintBackgrounds` maps each current sample to the tint colour
+scaled by its luminance, so tints compound and darken with every application; the app does
+not offer it. A tint control must tint from the untinted background and save its colour. `backgroundStyles` describes actual targets before image selection.
 RGB565+A replacement changes colour only: preserve the rounded-corner mask (656 of
 102,912 pixels on `00003`). Indexed replacement requantizes colour and opacity;
 `00002` style0 is the sole indexed raster in the 99-container catalogue.
@@ -979,6 +1212,19 @@ pointers. `AddBackgroundTest` pins every original offset's referent.
 `backgroundStylesThatFit` selects as many missing backgrounds as fit, selected style
 first. Of 16 eligible faces, ten fit all styles; five fit some (`00007`, `00019`,
 `00021`, `00024`, `00104`); `00022` fits none. See the hardware table above.
+
+`BackgroundImporter` copies the donor variant's primary `backgroundImage` resource,
+never its composed preview, widgets or extra full-panel artwork. A missing background
+is unavailable; a differing panel size is refused. Source transparency is flattened
+against black before the existing encoder runs, preserving the target RGB565+A mask;
+Indexed8 keeps the existing opaque requantization policy. Replacement keeps container
+size and image counts. On a completely bare scope, addition uses the same bounded,
+selected-first targets above. AOD is its own scope. Review renders the encoded candidate
+and lists changed/skipped variants; applying requires the same session, container,
+selected variant and donor handle. Donor pixels are self-contained after commit.
+Repository tests cover stale reviews, cancellation, rollback, reopen and imported
+origins; `CanvasIntegrityTest` checks isolated source pixels and unchanged widget
+layers. Emulator verification is separate from physical-watch acceptance of this flow.
 
 ### Adding a widget from another face
 
@@ -1030,6 +1276,15 @@ unused rasters (1,370,656 bytes) after nine imported digits were removed by the 
 `ImportedWidgetDeletionTest` checks import/delete byte restoration and retained
 references. Hardware acceptance of a decreased image count is still unverified.
 
+A copy of a stock widget (`SessionLineage` marks it `duplicate`) is also deleted rather
+than saved under Removed: its record is cut exactly as a native removal cuts it, but no
+`RemovedWidget` is kept. Its rasters stay, because a stock duplicate owns none — it draws
+the pool of the widget it copied, which is live or itself saved under Removed. Originals
+remain restorable; repeated duplicate-and-remove no longer accumulates restorable copies.
+A new copy is also moved `DuplicateOffset` (8 px) right and down in the same commit — the
+other way near the panel edge, not at all for hands and other outline-less widgets — so it
+does not sit invisibly on its original (`duplicateOffset`).
+
 ### Applying an edit to every style
 
 Default: selected style only. Opt-in sibling edits use `StyleWidgetMatch`, strict
@@ -1066,7 +1321,8 @@ widget import, and original/modified standalone-BIN installation.
 
 These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
 need particular attention; imported type/source combinations remain incompletely
-verified. No AOD edit (including added background), imported-image deletion, or the
+verified. Composite, Rule and vector arc recolours are software/corpus/emulator checked
+only. No AOD edit (including added background), imported-image deletion, or the
 single-style custom-template recipe has been verified on a watch. Resource preview
 tests prove joins and edit invariants, not exact ROM fonts, antialiasing or live data.
 `AodCanvasSweepTest` covers all 99 AOD entries in software. Other firmware may

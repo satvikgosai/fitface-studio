@@ -1,6 +1,9 @@
 package dev.fitface.studio.core.format
 
 import java.nio.charset.StandardCharsets
+import dev.fitface.studio.core.model.ContainerCapacity
+import dev.fitface.studio.core.model.ContainerCapacityFailure
+import dev.fitface.studio.core.model.mebibytes
 
 const val CONTAINER_HEADER_SIZE = 32
 const val DIRECTORY_ENTRY_SIZE = 74
@@ -8,6 +11,12 @@ const val DIRECTORY_PATH_SIZE = 64
 
 open class Fit3FormatException(message: String, cause: Throwable? = null) :
     IllegalArgumentException(message, cause)
+
+class Fit3CapacityException(currentBytes: Int, proposedBytes: Int) : Fit3FormatException(
+    "This edit needs ${mebibytes(proposedBytes)}; the watch accepts 4 MiB. Delete unused styles to make room."
+), ContainerCapacityFailure {
+    override val capacity = ContainerCapacity(currentBytes, proposedBytes)
+}
 
 /**
  * The package parses as a ZIP and may even carry watch-face metadata, but it holds
