@@ -2223,6 +2223,28 @@ object StructuralEditor {
      * value that looked like an index and blocked 68% of removals. Only these two fields
      * on these four types are references; nothing else is touched.
      */
+    /**
+     * Keeps an appended record positioned against the face when that is where it was drawn
+     * at [formerIndex] — a duplicate's source, or a restored record's index when removed.
+     *
+     * A reference resolves only against an *earlier* record, so a target at or after the
+     * widget's own index — a self-reference, a forward one, or a producer value such as 20
+     * that named no record — put it on the face. Appended at [newIndex], after everything,
+     * the same value can name a real widget: copies of `00016`'s date, which names 20,
+     * jumped to wherever copy #20 sat once the face grew past it, and the watch draws them
+     * there too. [WidgetImporter.ROOT_TARGET] names nothing at any size, as it does for an
+     * import. A value that still names nothing is left as it was, byte for byte.
+     */
+    private fun keepFaceRelative(record: ByteArray, formerIndex: Int, newIndex: Int) {
+        val field = WidgetSchema.specOrNull(record.u32(0).toInt())?.alignment ?: return
+        val code = record.u16(field.codeOffset)
+        val target = record.u16(field.targetOffset)
+        if (code == WidgetSchema.ALIGNMENT_DISABLED || code !in 0..3) return
+        if (target >= formerIndex && target < newIndex) {
+            record.putU16(field.targetOffset, WidgetImporter.ROOT_TARGET)
+        }
+    }
+
     private fun remapAlignmentTarget(
         record: ByteArray,
         widget: WidgetRecord,
@@ -2354,6 +2376,7 @@ object StructuralEditor {
         }
         val newIndex = widgets.size.toLong()
         val restored = record.copyOf()
+        keepFaceRelative(restored, ((record.u32(0x0C) ushr 16) and 0xFFFF).toInt(), newIndex.toInt())
         restored.putU32(0x0C, (newIndex shl 16) or (record.u32(0x0C) and 0xFFFF))
         val oldImageOffset = entry.data.u32(0x14).checkedInt("image offset")
         val replacement = ByteArrayOutputStream()
@@ -2386,6 +2409,7 @@ object StructuralEditor {
         )
         val indexSize = clone.u32(0x0C)
         clone.putU32(0x0C, (newIndex shl 16) or (indexSize and 0xFFFF))
+        keepFaceRelative(clone, source.globalIndex, newIndex.toInt())
         val replacement = ByteArrayOutputStream()
         replacement.write(entry.data, 0, oldImageOffset)
         replacement.write(clone)

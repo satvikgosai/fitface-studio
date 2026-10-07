@@ -634,6 +634,15 @@ The consequence for editing is in
 renumber these references with them, and a widget that others are positioned
 against cannot simply be removed.
 
+A reference resolves only against an earlier record, so "names nothing" depends on where
+the record sits. An appended record — a duplicate, or a restored widget — goes after every
+index, and a value that named nothing where its source sat can name a real widget there:
+`00016`'s date names 20, and once duplicating it grew the face past 20, each further copy
+aligned to copy #20 and was drawn off the face, as the watch would draw it. So an appended
+record whose target was at or after its former index, and would now resolve, takes
+`WidgetImporter.ROOT_TARGET` (`0xFFFF`), as an import does; one that still names nothing
+keeps its bytes. `AppendedAlignmentTest` covers copies and restores.
+
 ### Badge: geometry is a line segment — **proven for the one record**
 
 The single Badge stores `x=14, y=256, w=242, h=256`. As width/height that is
@@ -1264,6 +1273,15 @@ unused rasters (1,370,656 bytes) after nine imported digits were removed by the 
 
 `ImportedWidgetDeletionTest` checks import/delete byte restoration and retained
 references. Hardware acceptance of a decreased image count is still unverified.
+
+A copy of a stock widget (`SessionLineage` marks it `duplicate`) is also deleted rather
+than saved under Removed: its record is cut exactly as a native removal cuts it, but no
+`RemovedWidget` is kept. Its rasters stay, because a stock duplicate owns none — it draws
+the pool of the widget it copied, which is live or itself saved under Removed. Originals
+remain restorable; repeated duplicate-and-remove no longer accumulates restorable copies.
+A new copy is also moved `DuplicateOffset` (8 px) right and down in the same commit — the
+other way near the panel edge, not at all for hands and other outline-less widgets — so it
+does not sit invisibly on its original (`duplicateOffset`).
 
 ### Applying an edit to every style
 

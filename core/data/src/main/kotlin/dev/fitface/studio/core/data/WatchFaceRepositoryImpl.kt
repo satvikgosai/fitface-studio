@@ -12,6 +12,9 @@ import dev.fitface.studio.core.data.db.ProjectDao
 import dev.fitface.studio.core.data.db.ProjectEntity
 import dev.fitface.studio.core.format.BackgroundImporter
 import dev.fitface.studio.core.format.BackgroundImportEdit
+import dev.fitface.studio.core.model.drawLeft
+import dev.fitface.studio.core.model.drawTop
+import dev.fitface.studio.core.model.duplicateOffset
 import dev.fitface.studio.core.model.BackgroundDonorVariant
 import dev.fitface.studio.core.model.BackgroundImportPreview
 import dev.fitface.studio.core.format.CONTAINER_HEADER_SIZE
@@ -1562,6 +1565,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // Removed with every byte it brought in still in the container, drawn by
             // nothing. Stock widgets are unchanged: they stay restorable.
             val imported = current.importOrigins?.find(styleName, globalIndex)
+            // A copy of a stock widget is deleted too, not parked under Removed: its original
+            // is still there (or under Removed itself) to duplicate again, and a list of
+            // restorable copies is what a few accidental Duplicate taps used to leave behind.
+            // Its record goes; its artwork stays, because the widget it copied draws it.
+            val duplicate = imported == null &&
+                current.identities().widgets[styleName]?.get(globalIndex)?.duplicate == true
             val edit = try {
                 if (imported != null) {
                     StructuralEditor.deleteWidget(
@@ -1627,6 +1636,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         current.removedWidgets.mapNotNull { it.importOriginId }.toSet(),
                     ),
                     droppedImages = edit.droppedImages,
+                    lineage = survivingIdentities,
+                )
+            }
+            if (duplicate) {
+                return@withLock commit(
+                    current,
+                    edit.container,
+                    edit.audit("Duplicate widget deleted " + editScope(styleName, applyToAllStyles)),
+                    styleName,
+                    importOrigins = renumbered,
                     lineage = survivingIdentities,
                 )
             }
@@ -1777,7 +1796,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val current = requireSession()
             val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
             val styleNames = targetIndices.keys.toList()
-            val edit = StructuralEditor.duplicateWidget(
+            val copied = StructuralEditor.duplicateWidget(
                 current.currentContainer,
                 styleNames,
                 globalIndex,
@@ -1787,6 +1806,28 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 y,
                 targetIndices = targetIndices,
             )
+            // The copy is appended last in each style; it moves off its original in the same
+            // commit, so one Duplicate is still one edit — see `duplicateOffset`.
+            var moved = copied.container
+            var movedBytes = 0
+            copied.changedStyles.forEach { variant ->
+                val entry = moved.entryByBasename(variant)
+                val copy = FaceRecordParser.scanWidgets(entry).last()
+                val guides = FaceRecordParser.widgetGuides(entry)
+                val guide = guides.single { it.globalIndex == copy.globalIndex }
+                val panel = FaceRecordParser.panelSize(entry)
+                val occupied = guides.filter {
+                    it.globalIndex != copy.globalIndex && it.width == guide.width && it.height == guide.height
+                }.map { it.drawLeft to it.drawTop }.toSet()
+                val (dx, dy) = duplicateOffset(guide, panel.width, panel.height, occupied)
+                if (dx != 0 || dy != 0) {
+                    val step = FaceEditor.moveWidget(moved, variant, copy.globalIndex, copy.widgetType,
+                        copy.sequenceId, copy.x + dx, copy.y + dy)
+                    moved = step.container
+                    movedBytes += step.changedPayloadBytes
+                }
+            }
+            val edit = copied.copy(container = moved, changedPayloadBytes = copied.changedPayloadBytes + movedBytes)
             commit(
                 current,
                 edit.container,

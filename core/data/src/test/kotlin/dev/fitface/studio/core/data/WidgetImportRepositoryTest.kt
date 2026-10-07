@@ -7,6 +7,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.fitface.studio.core.data.db.*
 import dev.fitface.studio.core.format.*
+import dev.fitface.studio.core.model.drawTop
+import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.*
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -91,10 +93,8 @@ class WidgetImportRepositoryTest {
         s = repository.resizeWidget("style2.bin", native.globalIndex, native.type, native.sequenceId,
             native.x, native.y, native.width - 2, native.height - 3, false)
         val current = s.widgets.single { it.globalIndex == native.globalIndex }
-        s = repository.duplicateWidget("style2.bin", current.globalIndex, current.type, current.sequenceId, current.x, current.y, false)
-        val duplicate = s.widgets.last()
-        s = repository.removeWidget("style2.bin", duplicate.globalIndex, duplicate.type, duplicate.sequenceId,
-            duplicate.x, duplicate.y, true, false)
+        s = repository.removeWidget("style2.bin", current.globalIndex, current.type, current.sequenceId,
+            current.x, current.y, false, false)
         val review = repository.styleManagement()
         val beforeBytes = s.containerBytes
         s = repository.deleteStyles(setOf("style0.bin", "style1.bin"), review.revision)
@@ -242,9 +242,13 @@ class WidgetImportRepositoryTest {
         assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
         assertEquals(original.globalIndex, s.widgets.last().duplicateSourceGlobalIndex)
         val duplicate = s.widgets.last()
+        val count = s.widgets.size
         s = repository.removeWidget("style0.bin", duplicate.globalIndex, duplicate.type, duplicate.sequenceId,
             duplicate.x, duplicate.y, false, true)
-        assertEquals(s.styleNames.size, s.removedWidgets.single().recordsByVariant.size)
+        // A copy is deleted from every style it was made in, and kept nowhere.
+        assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
+        assertEquals(count - 1, s.widgets.size)
+        assertTrue(s.removedWidgets.isEmpty())
     }
 
     @Test fun failedReorderRestoresBothTheBytesAndNativeIdentitiesInMemoryAndOnDisk() = runBlocking {
@@ -292,8 +296,10 @@ class WidgetImportRepositoryTest {
         s = repository.duplicateWidget("style0.bin", native.globalIndex, native.type, native.sequenceId, native.x, native.y, false)
         val duplicate = s.widgets.last()
         s = move(s, duplicate, 15)
-        s = repository.removeWidget("style0.bin", duplicate.globalIndex, duplicate.type, duplicate.sequenceId,
-            s.widgets.last().x, s.widgets.last().y, false, false)
+        // The original goes under Removed while its copy stays live; a removed copy would be
+        // deleted and leave nothing to carry.
+        s = repository.removeWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, false, false)
         val checkpoint = File(requireNotNull(dao.findById(s.projectId)?.editedBinPath))
         val state = Json.parseToJsonElement(checkpoint.readText()).jsonObject
         assertEquals(3, state.getValue("schema").jsonPrimitive.int)
@@ -304,7 +310,8 @@ class WidgetImportRepositoryTest {
         repository = repository()
         s = repository.openProject(imported.id)
         val restored = repository.restoreWidget(s.removedWidgets.single().id)
-        assertEquals(native.globalIndex, restored.widgets.last().duplicateSourceGlobalIndex)
+        assertEquals(null, restored.widgets.last().duplicateSourceGlobalIndex)
+        assertEquals(1, restored.widgets.count { it.duplicateSourceGlobalIndex == native.globalIndex })
         assertEquals(native.originalX, restored.widgets.last().originalX)
         assertArrayEquals(expected, pixels(restored, restored.widgets.last().globalIndex))
         repository.resetEdits()
@@ -314,9 +321,8 @@ class WidgetImportRepositoryTest {
     @Test fun legacyRemovedWidgetGetsAnIdentityBeforeTheNextEditChangesIndices() = runBlocking {
         var s = repository.openPackage(face("00105"))
         val native = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
-        s = repository.duplicateWidget("style0.bin", native.globalIndex, native.type, native.sequenceId, native.x, native.y, false)
-        val copy = s.widgets.last()
-        s = repository.removeWidget("style0.bin", copy.globalIndex, copy.type, copy.sequenceId, copy.x, copy.y, false, false)
+        s = repository.removeWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
+            native.x, native.y, false, false)
         val source = export(s.projectId).readBytes()
         val out = ByteArrayOutputStream()
         ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
@@ -343,7 +349,7 @@ class WidgetImportRepositoryTest {
         assertEquals(native.globalIndex, s.removedWidgets.single().nativeSourceIndices["style0.bin"])
         repository = repository(); s = repository.openProject(s.projectId)
         s = repository.restoreWidget(s.removedWidgets.single().id)
-        assertEquals(native.globalIndex, s.widgets.last().duplicateSourceGlobalIndex)
+        assertEquals(null, s.widgets.last().duplicateSourceGlobalIndex)
         assertEquals(native.originalRotationTenths, s.widgets.last().originalRotationTenths)
     }
 
@@ -449,6 +455,66 @@ class WidgetImportRepositoryTest {
             assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
             assertEquals(blue, s.widgets.single { it.globalIndex == widget.globalIndex }.colorArgb)
         }
+    }
+
+    /**
+     * Removing a copy of a stock widget deletes it: nothing goes under Removed, and the face
+     * is byte-for-byte what it was before the Duplicate tap — in every style the copy was
+     * made in. The original itself still goes under Removed and comes back.
+     */
+    @Test fun aRemovedDuplicateIsDeletedAndOnlyTheOriginalIsRestorable() = runBlocking {
+        var s = repository.openPackage(face("00106"))
+        val widget = s.widgets.first { it.type == 5 }
+        val before = repository.prepareDirectInstall().copyBytes()
+        s = repository.duplicateWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, true)
+        val copy = s.widgets.last()
+        assertEquals(widget.globalIndex, copy.duplicateSourceGlobalIndex)
+        // Off its original, so there is something to see — in every style it was copied to.
+        assertEquals(dev.fitface.studio.core.model.duplicateOffset(widget, 256, 402),
+            (copy.x - widget.x) to (copy.y - widget.y))
+        assertTrue(copy.x != widget.x || copy.y != widget.y)
+        s.styleNames.forEach { style ->
+            val sibling = repository.currentSnapshot(style).widgets.last()
+            assertTrue(style, sibling.duplicateSourceGlobalIndex != null)
+        }
+        s = repository.currentSnapshot("style0.bin")
+        s = repository.removeWidget("style0.bin", copy.globalIndex, copy.type, copy.sequenceId,
+            copy.x, copy.y, false, true)
+        assertTrue(s.removedWidgets.isEmpty())
+        assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
+        repository = repository(); s = repository.openProject(s.projectId)
+        assertTrue(s.removedWidgets.isEmpty())
+        s = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, false, false)
+        assertEquals(1, s.removedWidgets.size)
+        s = repository.restoreWidget(s.removedWidgets.single().id)
+        assertTrue(s.removedWidgets.isEmpty())
+        assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
+    }
+
+    /**
+     * `00016`'s date names widget 20, which the face does not have, so it sits on the face.
+     * Duplicating each new copy grew the face past 20, and every later copy then aligned to
+     * copy #20 and appeared off the face. Now each copy lands one offset from the one before.
+     */
+    @Test fun aChainOfCopiesNeverJumpsOnceTheFaceGrowsPastAnAlignmentTarget() = runBlocking {
+        var s = repository.openPackage(face("00016"))
+        var previous = s.widgets.first { it.type == 13 }
+        val spots = mutableSetOf(previous.drawLeft to previous.drawTop)
+        repeat(25) {
+            s = repository.duplicateWidget("style0.bin", previous.globalIndex, previous.type,
+                previous.sequenceId, previous.x, previous.y, false)
+            val copy = s.widgets.last()
+            assertTrue("copy #${copy.globalIndex} jumped from ${previous.drawLeft},${previous.drawTop} " +
+                "to ${copy.drawLeft},${copy.drawTop}",
+                kotlin.math.abs(copy.drawLeft - previous.drawLeft) <= 8 &&
+                    kotlin.math.abs(copy.drawTop - previous.drawTop) <= 8)
+            // And never straight back onto an earlier copy while a free spot is visible.
+            assertTrue("copy #${copy.globalIndex} landed on an earlier one", spots.add(copy.drawLeft to copy.drawTop))
+            previous = copy
+        }
+        assertTrue(s.widgets.size > 21)
     }
 
     @Test fun compositeRotationPreservesOriginalThroughDuplicateReopenAndReset() = runBlocking {

@@ -1567,12 +1567,15 @@ private fun RemoveWidgetDialog(
     onDismiss: () -> Unit,
 ) {
     val importedFrom = widget.importedFromFaceId
+    // A copy of a stock widget is deleted outright as well; its original stays to copy again.
+    val copy = importedFrom == null && widget.duplicateSourceGlobalIndex != null
+    val deletes = importedFrom != null || copy
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
                 stringResource(
-                    if (importedFrom != null) R.string.editor_delete_title else R.string.editor_remove_title,
+                    if (deletes) R.string.editor_delete_title else R.string.editor_remove_title,
                     widget.globalIndex,
                 ),
             )
@@ -1583,6 +1586,8 @@ private fun RemoveWidgetDialog(
                     // It is not coming back from a list, so the dialog says so, and says
                     // where it can be had again.
                     stringResource(R.string.editor_delete_body_imported, importedFrom)
+                } else if (copy) {
+                    stringResource(R.string.editor_delete_body_duplicate)
                 } else if (state.editsReachOtherStyles) {
                     stringResource(R.string.editor_remove_body_all_styles)
                 } else {
@@ -1597,7 +1602,7 @@ private fun RemoveWidgetDialog(
             TextButton(onClick = onConfirm) {
                 Text(
                     stringResource(
-                        if (importedFrom != null) R.string.editor_delete_confirm else R.string.editor_remove_confirm,
+                        if (deletes) R.string.editor_delete_confirm else R.string.editor_remove_confirm,
                     ),
                 )
             }
@@ -1786,7 +1791,8 @@ private fun RemoveSetDialog(
     onDismiss: () -> Unit,
 ) {
     val imported = picks.count { it.importedFromFaceId != null }
-    val stock = picks.size - imported
+    val copies = picks.count { it.importedFromFaceId == null && it.duplicateSourceGlobalIndex != null }
+    val stock = picks.size - imported - copies
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (picks.size == 1) stringResource(R.string.editor_remove_title, picks.single().globalIndex)
@@ -1802,6 +1808,9 @@ private fun RemoveSetDialog(
                                 snapshot.selectedVariantLabel())
                         },
                     )
+                }
+                if (copies > 0) {
+                    Text(pluralStringResource(R.plurals.editor_remove_set_duplicate, copies, copies))
                 }
                 if (imported > 0) {
                     Text(pluralStringResource(R.plurals.editor_remove_set_imported, imported, imported))

@@ -188,6 +188,7 @@
     <string name="editor_delete_title">Delete widget #%1$d?</string>
     <string name="editor_delete_body_imported">It came from face %1$s, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Add it from that face again to have it back.</string>
     <string name="editor_delete_confirm">@string/ui_delete</string>
+    <string name="editor_delete_body_duplicate">It is a copy of another widget, so it is deleted instead of going to the Removed list. Duplicate that widget again to have it back.</string>
     <!-- Several widgets at once. Each is still its own edit, one after another. -->
     <string name="editor_widgets_hint">Tap to edit on the canvas; hold to select several.</string>
     <string name="editor_widgets_hint_set">Tap to add or remove widgets from the selection.</string>
@@ -208,6 +209,10 @@
     <plurals name="editor_remove_set_stock_one">
         <item quantity="one">%1$d goes to the Removed list, from %2$s only, so you can put it back.</item>
         <item quantity="other">%1$d go to the Removed list, from %2$s only, so you can put them back.</item>
+    </plurals>
+    <plurals name="editor_remove_set_duplicate">
+        <item quantity="one">%1$d is a copy of another widget, so it is deleted instead of going to the Removed list.</item>
+        <item quantity="other">%1$d are copies of other widgets, so they are deleted instead of going to the Removed list.</item>
     </plurals>
     <plurals name="editor_remove_set_imported">
         <item quantity="one">%1$d came from another face, so it is deleted with its artwork. Add it from that face again to have it back.</item>
@@ -453,7 +458,7 @@
       style would have it disagree with every "Style N" the rest of the app shows.
     -->
     <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
-    <string name="editor_destructive_note">A duplicate is added at the end of the drawing order and selected for editing. Removal and duplication rebuild the widget table and its checksums.</string>
+    <string name="editor_destructive_note">A duplicate is added at the end of the drawing order, 8 px right and down from its original (the other way near an edge), and selected for editing. Removing a duplicate deletes it instead of listing it under Removed. Removal and duplication rebuild the widget table and its checksums.</string>
     <string name="editor_transfer_progress">%1$d/%2$d windows · %3$d/%4$d bytes</string>
     <string name="editor_preview_details">Preview details</string>
     <string name="editor_preview_explanation">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</string>
