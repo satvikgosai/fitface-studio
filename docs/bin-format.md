@@ -1184,7 +1184,9 @@ pixels. Pair colour is hardware-proven; Composite, Rule and arc colour have not 
 
 Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.
 Replacement/tint edits styles that have a background, skipping others and failing
-only if none does. `backgroundStyles` describes actual targets before image selection.
+only if none does. `FaceEditor.tintBackgrounds` maps each current sample to the tint colour
+scaled by its luminance, so tints compound and darken with every application; the app does
+not offer it. A tint control must tint from the untinted background and save its colour. `backgroundStyles` describes actual targets before image selection.
 RGB565+A replacement changes colour only: preserve the rounded-corner mask (656 of
 102,912 pixels on `00003`). Indexed replacement requantizes colour and opacity;
 `00002` style0 is the sole indexed raster in the 99-container catalogue.

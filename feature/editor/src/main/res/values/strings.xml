@@ -71,7 +71,7 @@
     <string name="editor_subtitle_background_can_add">background can be added</string>
     <string name="editor_subtitle_background_no_room">%1$s · no room for one</string>
     <string name="editor_subtitle_background_none">no background</string>
-    <string name="editor_subtitle_background_idle">choose an image or tint</string>
+    <string name="editor_subtitle_background_idle">choose an image</string>
     <plurals name="editor_subtitle_styles">
         <item quantity="one">%1$d style</item>
         <item quantity="other">%1$d styles</item>
@@ -297,8 +297,6 @@
     <string name="editor_bg_no_image_title">No image chosen</string>
     <string name="editor_bg_no_image_detail">Resized to %1$d×%2$d when applied.</string>
     <string name="editor_bg_choose">Choose image</string>
-    <string name="editor_bg_tint_cyan">Tint cyan</string>
-    <string name="editor_bg_tint_magenta">Tint magenta</string>
     <string name="editor_bg_fit_heading">Fit</string>
     <string name="editor_bg_discard">Discard</string>
     <string name="editor_bg_use">Use positioned image</string>

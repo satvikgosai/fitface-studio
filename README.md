@@ -48,7 +48,7 @@ the app. The watch photo shows a real Bluetooth install.
 
 - Search and sort the catalogue, or reopen saved projects without downloading again.
   Export a project to a ZIP file and import it later, on this phone or another.
-- Replace, tint or add a background where the face has room for it, including
+- Replace or add a background where the face has room for it, including
   copying the background from another face.
 - Move, resize, duplicate and remove supported widgets, and set text, lines and arc
   gauges to any colour. Restore removed stock widgets and add widgets from other faces.

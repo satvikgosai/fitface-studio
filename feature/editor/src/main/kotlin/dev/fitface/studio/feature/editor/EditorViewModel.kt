@@ -1048,10 +1048,6 @@ class EditorViewModel @Inject constructor(
         operate { repository.refreshThumbnail() }
     }
 
-    fun tintCyan() = operate { repository.tintBackground(0, 255, 255) }
-
-    fun tintMagenta() = operate { repository.tintBackground(255, 0, 255) }
-
     fun reset() = operate(
         onSuccess = {
             it.copy(selectedWidgetIndex = null, multiSelection = emptyList(), pendingImage = null)

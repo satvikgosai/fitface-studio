@@ -289,8 +289,6 @@ fun EditorRoute(
         onRotateWidget = viewModel::rotateSelectedWidget,
         onArrangeWidget = viewModel::arrangeSelectedWidget,
         onSyncThumbnail = viewModel::refreshThumbnail,
-        onTintCyan = viewModel::tintCyan,
-        onTintMagenta = viewModel::tintMagenta,
         onApplyWidgetEditsToAllStyles = viewModel::setApplyWidgetEditsToAllStyles,
         onPreviewReviewed = viewModel::markPreviewReviewed,
         onFit = viewModel::selectFit,
@@ -394,8 +392,6 @@ private fun EditorScreen(
     onRotateWidget: (Int) -> Unit,
     onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
-    onTintCyan: () -> Unit,
-    onTintMagenta: () -> Unit,
     onApplyWidgetEditsToAllStyles: (Boolean) -> Unit,
     onPreviewReviewed: () -> Unit,
     onFit: (ImageFit) -> Unit,
@@ -558,8 +554,6 @@ private fun EditorScreen(
                         onRotateWidget = onRotateWidget,
                         onArrangeWidget = onArrangeWidget,
                         onSyncThumbnail = onSyncThumbnail,
-                        onTintCyan = onTintCyan,
-                        onTintMagenta = onTintMagenta,
                         onApplyAll = onApplyWidgetEditsToAllStyles,
                         onPreviewReviewed = onPreviewReviewed,
                         onFit = onFit,
@@ -1039,8 +1033,6 @@ private fun EditorPageContent(
     onRotateWidget: (Int) -> Unit,
     onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
-    onTintCyan: () -> Unit,
-    onTintMagenta: () -> Unit,
     onApplyAll: (Boolean) -> Unit,
     onPreviewReviewed: () -> Unit,
     onFit: (ImageFit) -> Unit,
@@ -1100,8 +1092,8 @@ private fun EditorPageContent(
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
-            onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage, onTintCyan,
-            onTintMagenta, onManageStyles, modifier,
+            onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage,
+            onManageStyles, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(
             snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, onDeleteStyle, modifier,
@@ -2978,8 +2970,6 @@ private fun BackgroundWorkspace(
     onResetPlacement: () -> Unit,
     onDiscard: () -> Unit,
     onApply: () -> Unit,
-    onTintCyan: () -> Unit,
-    onTintMagenta: () -> Unit,
     onManageStyles: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -3052,22 +3042,6 @@ private fun BackgroundWorkspace(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            // A tint rewrites a background's palette or samples, so a face without one
-            // has nothing for it to touch either.
-            if (!adding) {
-                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    FitButton(
-                        stringResource(R.string.editor_bg_tint_cyan),
-                        onTintCyan, Modifier.weight(1f), !state.isWorking,
-                        style = FitButtonStyle.Secondary,
-                    )
-                    FitButton(
-                        stringResource(R.string.editor_bg_tint_magenta),
-                        onTintMagenta, Modifier.weight(1f), !state.isWorking,
-                        style = FitButtonStyle.Secondary,
-                    )
-                }
             }
         } else {
             Column(Modifier.fillMaxWidth()) {
