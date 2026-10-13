@@ -1049,6 +1049,61 @@ class WidgetImportRepositoryTest {
         assertTrue(repository.prepareDirectInstall().copyBytes().isNotEmpty())
     }
 
+    /**
+     * Issue #11 end to end: text widgets from eight faces, each needing a binding unlike the
+     * others, added and removed one after another. That filled the ten-slot table and refused
+     * the next import. Now a removed import's binding is reused, and the result still reopens,
+     * exports and imports with its provenance intact.
+     */
+    @Test fun repeatedTextImportsAndRemovalsKeepFindingAFontSlot() = runBlocking {
+        val target = "00106"
+        val pristine = FaceResources.fontBindings(Fit3Container.parse(bin(target))).size
+        val seen = FaceResources.fontBindings(Fit3Container.parse(bin(target)))
+            .map { FontBinding.parse(it) }.toMutableList()
+        val donors = mutableListOf<Pair<String, Int>>()
+        val ids = Files.list(root.resolve("SM_R390")).use { stream ->
+            stream.map { it.fileName.toString() }.filter { it.matches(Regex("SM-R390_\\d{5}_256x402")) }
+                .map { it.substring(8, 13) }.sorted().toList()
+        }
+        for (id in ids) {
+            if (donors.size == 8) break
+            if (id == target) continue
+            val donor = runCatching { Fit3Container.parse(bin(id)) }.getOrNull() ?: continue
+            val entry = donor.entries.singleOrNull { it.basename == "style0.bin" } ?: continue
+            for (record in FaceRecordParser.scanWidgets(entry)) {
+                val index = record.fontBindingIndex ?: continue
+                if (WidgetImporter.unavailableReason(entry, record.globalIndex) != null) continue
+                val binding = FontBinding.parse(donor.entryByBasename("font_$index.bin"))
+                if (seen.any { it.familyByLanguage.contentEquals(binding.familyByLanguage) && it.pixelSize == binding.pixelSize }) continue
+                if (runCatching { WidgetImporter.importWidget(Fit3Container.parse(bin(target)), "style0.bin",
+                        donor, "style0.bin", record.globalIndex) }.isFailure) continue
+                seen += binding; donors += id to record.globalIndex
+                break
+            }
+        }
+        assumeTrue("needs eight distinct text donors, found ${donors.size}", donors.size == 8)
+
+        var s = repository.openPackage(face(target))
+        donors.forEach { (id, index) ->
+            s = add(s, id, index)
+            s = remove(s, s.widgets.last())
+            assertTrue(s.removedWidgets.isEmpty())
+        }
+        // One kept import record may still hold its slot; never the table's worth.
+        val bindings = FaceResources.fontBindings(Fit3Container.parse(repository.prepareDirectInstall().copyBytes())).size
+        assertTrue("$bindings bindings", bindings <= pristine + 2)
+
+        repository = repository(); s = repository.openProject(s.projectId)
+        val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
+        repository = repository(); s = repository.openProject(imported.id)
+        // And there is still room for the next one.
+        val (id, index) = donors.first()
+        val before = s.widgets.size
+        s = add(s, id, index)
+        assertEquals(before + 1, s.widgets.size)
+        assertTrue(s.widgets.last().type in setOf(5, 13))
+    }
+
     private class FailableDao(private val delegate: ProjectDao) : ProjectDao by delegate {
         var fail = false
         var insertCalls = 0

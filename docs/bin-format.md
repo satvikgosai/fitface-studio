@@ -1275,7 +1275,7 @@ use the background path. Other constructors have no producer samples.
 | --- | --- |
 | Rasters | Follow `WidgetSchema` pointers, including every frame. Preserve sharing within one import; separate imports get independent pools; duplicates share |
 | Alignment | Resolve donor geometry, rebase against panel with target `0xFFFF`, retain code for justification. Widget-count bound keeps that target unreachable |
-| Fonts | Reuse identical binding or append, at most ten; synchronize all variant font counts without changing their widgets/rasters |
+| Fonts | Reuse a binding that draws alike: the same 72 selectors and pixel size; the unread role name is ignored. Otherwise overwrite an appended binding nothing names any more (`FontSlots`), otherwise append; at most ten. Synchronize all variant font counts without changing their widgets/rasters |
 | Dictionaries | Preserve target prefix, append donor tables; missing locale uses corresponding English table or refuses. Rebase actual references, never Composite numeric presence flags |
 
 Refuse unknown alignment, unsupported dynamic indexing, incomplete resources,
@@ -1310,6 +1310,15 @@ unused rasters (1,370,656 bytes) after nine imported digits were removed by the 
 - Keep font resources (removing them renumbers others) and an import-origin table
   entry while added resources remain, even when no imported widget is live. An empty
   provenance table would make reopen reject the foreign resources.
+- A kept binding is not lost to later imports (issue #11). An import may overwrite an
+  appended binding in place, a same-size patch that renumbers nothing, when nothing still
+  names it:
+  - no live Value or Composite record in any style or the always-on display;
+  - no saved removal;
+  - no kept import baseline.
+
+  Vendor bindings, the pristine count, are never rewritten. `FontSlotsTest` replays the
+  add-and-remove cycle that used to fill all ten slots.
 
 `ImportedWidgetDeletionTest` checks import/delete byte restoration and retained
 references. Hardware acceptance of a decreased image count is still unverified.

@@ -27,6 +27,7 @@ import dev.fitface.studio.core.format.DeliveryChecks
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.FaceResources
+import dev.fitface.studio.core.format.FontSlots
 import dev.fitface.studio.core.format.Fit3Apk
 import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.format.Fit3FormatException
@@ -176,7 +177,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val source = donor?.takeIf { it.handle == handle }
                 ?: throw WatchFaceException("Choose the source watch face again.")
             val result = WidgetImporter.importWidget(current.currentContainer, targetVariant,
-                source.container, donorVariant, index)
+                source.container, donorVariant, index, current.fontSlots())
             val origins = current.originsWith(source.faceId, targetVariant, result)
             current.identities().withResources(current.originalContainer, result.edit.container)
                 .validate(current.originalContainer, result.edit.container, origins)
@@ -2551,6 +2552,14 @@ class WatchFaceRepositoryImpl @Inject constructor(
          * has a background or no panel geometry and stops at the watch's ceiling, and a
          * second copy of that arithmetic here is a second copy to keep in step.
          */
+        /**
+         * Which font bindings an import may reuse: never the vendor's, and never one a saved
+         * removal or a kept import baseline still names, since restoring either would then
+         * draw with the wrong font.
+         */
+        fun fontSlots(): FontSlots = FontSlots.of(originalContainer,
+            removedWidgets.flatMap { it.recordsByVariant.values }, importOrigins)
+
         fun backgroundAddTargets(): List<String> = StructuralEditor.backgroundStylesThatFit(
             source = currentContainer,
             entryBasenames = backgroundTargetEntries().map { it.basename },

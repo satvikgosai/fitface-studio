@@ -4,6 +4,7 @@ import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.drawTop
 import java.io.ByteArrayOutputStream
+import java.util.Base64
 
 /** One additive edit and the compact, immutable source for its future resizes. */
 data class WidgetImportEdit(
@@ -12,6 +13,42 @@ data class WidgetImportEdit(
     val baseline: ContainerEntry,
     val addedResources: Map<String, ByteArray>,
 )
+
+/**
+ * Which numbered font bindings an import may rewrite to make room for its own.
+ *
+ * A face holds at most ten. Deleting an imported text widget keeps its binding, because
+ * removing a binding would renumber every later one, so repeated imports used to fill all
+ * ten and refuse the next text widget (issue #11). An appended binding nothing names any
+ * more can be overwritten in place instead: same size, no renumbering. The first
+ * [pristineCount] belong to the vendor and are never rewritten; [reserved] names those the
+ * container cannot show are still wanted, by saved removals and kept import baselines.
+ */
+data class FontSlots(val pristineCount: Int, val reserved: Set<Int> = emptySet()) {
+    companion object {
+        /** Slots for a session: its pristine container, its saved removals and its imports. */
+        fun of(original: Fit3Container, savedRecords: Collection<ByteArray>,
+            origins: WidgetImportOrigins?): FontSlots {
+            val reserved = buildSet {
+                savedRecords.forEach { raw -> bindingNamedBy(raw)?.let(::add) }
+                origins?.widgets?.forEach { origin ->
+                    val baseline = Base64.getDecoder().decode(origin.baseline)
+                    if (baseline.size > STYLE_HEADER_SIZE) {
+                        bindingNamedBy(baseline.copyOfRange(STYLE_HEADER_SIZE, baseline.size))?.let(::add)
+                    }
+                }
+            }
+            return FontSlots(FaceResources.fontBindings(original).size, reserved)
+        }
+
+        /** The binding a raw Value or Composite record names, as [WidgetRecord.fontBindingIndex] reads it. */
+        internal fun bindingNamedBy(raw: ByteArray): Int? {
+            if (raw.size < 4) return null
+            val field = when (raw.u32(0).toInt()) { 5 -> 0x28; 13 -> 0x5E; else -> return null }
+            return raw.getOrNull(field)?.toInt()?.and(0xFF)
+        }
+    }
+}
 
 /** Firmware-informed, experimental import. Never substitutes or deletes target artwork. */
 object WidgetImporter {
@@ -72,6 +109,8 @@ object WidgetImporter {
         donor: Fit3Container,
         donorVariant: String,
         donorIndex: Int,
+        /** Null keeps every existing binding: a new one is only ever appended. */
+        fontSlots: FontSlots? = null,
     ): WidgetImportEdit {
         StructuralEditor.requireValidAndTight(target)
         StructuralEditor.requireValidAndTight(donor)
@@ -98,7 +137,7 @@ object WidgetImporter {
             signed(raw, 0x1A, guide.drawTop - guide.drawOffsetY)
             raw.putU16(WidgetSchema.spec(record.widgetType).alignment!!.targetOffset, ROOT_TARGET)
         }
-        val fonts = mergeFonts(target, donor, raw, record.widgetType)
+        val fonts = mergeFonts(target, donor, raw, record.widgetType, fontSlots)
         val pointers = FaceRecordParser.imagePointerFields(record, FaceRecordParser.imagesByRelativeOffset(source))
         val copied = linkedMapOf<Int, Pair<Int, ByteArray>>()
         var rasterBytes = 0
@@ -167,7 +206,8 @@ object WidgetImporter {
 
     private data class Fonts(val resources: Map<String, ByteArray>, val bindingCount: Int)
 
-    private fun mergeFonts(target: Fit3Container, donor: Fit3Container, raw: ByteArray, type: Int): Fonts {
+    private fun mergeFonts(target: Fit3Container, donor: Fit3Container, raw: ByteArray, type: Int,
+        slots: FontSlots?): Fonts {
         val bindings = FaceResources.fontBindings(target)
         if (bindings.map { FaceResources.bindingNumber(it.basename) } != bindings.indices.toList() ||
             bindings.size !in 0..StyleHeader.MAX_FONT_BINDINGS)
@@ -176,11 +216,16 @@ object WidgetImporter {
         val selected = donor.entryByBasename("font_${raw[field].toInt() and 255}.bin")
         FontBinding.parse(selected)
         val resources = linkedMapOf<String, ByteArray>()
-        val existing = bindings.indexOfFirst { it.data.contentEquals(selected.data) }
-        val index = if (existing >= 0) existing else bindings.size.also {
-            if (it >= StyleHeader.MAX_FONT_BINDINGS)
-                throw Fit3FormatException("This import needs another font binding, but the face already uses all 10.")
-            resources["font_$it.bin"] = selected.data.copyOf()
+        val existing = bindings.indexOfFirst { rendersAlike(it.data, selected.data) }
+        val index = when {
+            existing >= 0 -> existing
+            else -> (slots?.let { orphanedSlot(target, bindings.size, it) }
+                ?: bindings.size.takeIf { it < StyleHeader.MAX_FONT_BINDINGS })
+                ?.also { resources["font_$it.bin"] = selected.data.copyOf() }
+                ?: throw Fit3FormatException(
+                    "This import needs another text font, but all 10 of this face's font slots " +
+                        "are in use by its text widgets. Remove an imported text widget, then try again.",
+                )
         }
         raw[field] = index.toByte()
         val fields = dictionaryFields(raw, type)
@@ -214,6 +259,28 @@ object WidgetImporter {
             }
         }
         return Fonts(resources, maxOf(bindings.size, index + 1))
+    }
+
+    /**
+     * Whether two bindings draw identically: the 72 language selectors and the requested pixel
+     * size. The 16-byte role name between them (`WF_DATE`, `WF_TEM`, …) is never read by the
+     * resolver (`docs/bin-format.md` §5), so two faces' bindings for the same family and size
+     * differ only there — and comparing all 92 bytes gave every such import its own slot.
+     */
+    internal fun rendersAlike(a: ByteArray, b: ByteArray): Boolean =
+        a.size == FontBinding.SIZE && b.size == FontBinding.SIZE &&
+            a.copyOfRange(0, FontBinding.LANGUAGE_SLOTS).contentEquals(b.copyOfRange(0, FontBinding.LANGUAGE_SLOTS)) &&
+            a.copyOfRange(0x58, FontBinding.SIZE).contentEquals(b.copyOfRange(0x58, FontBinding.SIZE))
+
+    /**
+     * The lowest appended binding that no text record in any style or the always-on display
+     * names, and that no saved removal or kept import still needs, or null.
+     */
+    private fun orphanedSlot(target: Fit3Container, count: Int, slots: FontSlots): Int? {
+        val named = FaceResources.variantEntries(target).flatMap { entry ->
+            FaceRecordParser.scanWidgets(entry).mapNotNull { it.fontBindingIndex }
+        }.toSet() + slots.reserved
+        return (slots.pristineCount until count).firstOrNull { it !in named }
     }
 
     private fun dictionaries(container: Fit3Container) = FaceResources.dictionaries(container)
