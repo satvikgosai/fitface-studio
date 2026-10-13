@@ -346,6 +346,12 @@
     <string name="editor_check_crc">Per-entry CRC</string>
     <string name="editor_check_payload_length">Payload length</string>
     <string name="editor_check_face_id">Face ID byte range</string>
+    <string name="editor_check_identity">Face ID and style count agree</string>
+    <!-- Shown on Install for each style that has had every widget removed. Sending is still
+         allowed; what the watch does with an empty style has not been tested. -->
+    <string name="editor_install_empty_style">%1$s has no widgets, so it may not appear on the watch. Add a widget or delete the style.</string>
+    <string name="editor_install_empty_only_style">%1$s has no widgets, so it may not appear on the watch. Add a widget to it.</string>
+    <string name="editor_install_empty_aod">The always-on display has no widgets, so it may show nothing on the watch. Add a widget to it.</string>
     <string name="editor_audit_heading">Audit</string>
     <!-- The audit section is always on the page, so it needs something to say before the
          first commit of a session. -->
@@ -440,6 +446,14 @@
     <string name="editor_transfer_done_label">DONE</string>
     <string name="editor_transfer_done">Request sent. Check the face on your watch. Restore the plugin’s Nearby devices access if you turned it off, then reconnect in the companion app.</string>
     <string name="editor_transfer_done_legacy">Request sent. Check the face on your watch, re-enable the plugin, then reconnect in the companion app.</string>
+    <!-- Shown under "Request sent". The watch's answer goes to the stock plugin, so these are
+         the refusals it is known to make, offered as possible causes rather than facts about
+         this attempt. -->
+    <string name="editor_transfer_not_showing_label">If the face does not change</string>
+    <string name="editor_transfer_not_showing">The watch can refuse a face without telling this app. Possible reasons:
+• Its battery is low. Charge it, then send again.
+• Its face list is full. It keeps about 10 faces, and each style you install takes one place. Remove a face on the watch, then send again.
+• You edited the always-on display. It shows only while always-on display is turned on in the watch’s settings.</string>
     <string name="editor_transfer_send_again">Send again</string>
     <string name="editor_transfer_back_to_canvas">Back to canvas</string>
     <string name="editor_transfer_try_again">@string/ui_try_again</string>
@@ -455,7 +469,7 @@
       not called "style": it is the protocol byte, counted from zero, so labelling it as a
       style would have it disagree with every "Style N" the rest of the app shows.
     -->
-    <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s…\npayload %4$d B / 16 MiB limit</string>
+    <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s\npayload %4$d B, watch limit 4 MiB</string>
     <string name="editor_destructive_note">A duplicate is added at the end of the drawing order, 8 px right and down from its original (the other way near an edge), and selected for editing. Removing a duplicate deletes it instead of listing it under Removed. Removal and duplication rebuild the widget table and its checksums.</string>
     <string name="editor_transfer_progress">%1$d/%2$d windows · %3$d/%4$d bytes</string>
     <string name="editor_preview_details">Preview details</string>

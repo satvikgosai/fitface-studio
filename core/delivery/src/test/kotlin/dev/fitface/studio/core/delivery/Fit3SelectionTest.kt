@@ -12,11 +12,13 @@ import org.junit.Test
  * with nothing saying why, and unpairing was the only cure anyone could guess at.
  */
 class Fit3SelectionTest {
+    /** [name] only labels the test case: candidates carry no name, so no reason can print one. */
+    @Suppress("UNUSED_PARAMETER")
     private fun candidate(
         name: String,
         isDiscoveredPeer: Boolean = false,
         connected: Boolean = false,
-    ) = Fit3Candidate(name = name, isDiscoveredPeer = isDiscoveredPeer, connected = connected)
+    ) = Fit3Candidate(isDiscoveredPeer = isDiscoveredPeer, connected = connected)
 
     private fun selectedIndex(vararg candidates: Fit3Candidate): Int {
         val selection = selectFit3(candidates.toList())
@@ -92,18 +94,17 @@ class Fit3SelectionTest {
 
     /**
      * A tie is reported as a tie. Silence here is the actual complaint: the send failed
-     * with "no watch" on a phone with two of them bonded.
+     * with "no watch" on a phone with two of them bonded. It is counted, not named: the
+     * reason reaches the diagnostics report, and a Fit3's name carries an address suffix.
      */
     @Test
-    fun anAmbiguousChoiceNamesTheWatchesInsteadOfClaimingThereAreNone() {
+    fun anAmbiguousChoiceCountsTheWatchesInsteadOfClaimingThereAreNone() {
         val reason = reason(
             candidate("Galaxy Fit3 (1A2B)"),
             candidate("Galaxy Fit3 (9Z8Y)"),
         )
 
         assertTrue(reason, reason.contains("2 bonded Fit3 watches"))
-        assertTrue(reason, reason.contains("Galaxy Fit3 (1A2B)"))
-        assertTrue(reason, reason.contains("Galaxy Fit3 (9Z8Y)"))
         assertTrue("it has to say what to do next", reason.contains("companion app"))
     }
 
@@ -116,9 +117,6 @@ class Fit3SelectionTest {
         )
 
         assertTrue(reason, reason.contains("2 bonded Fit3 watches are connected"))
-        assertTrue(reason, reason.contains("Galaxy Fit3 (1A2B)"))
-        assertTrue(reason, reason.contains("Galaxy Fit3 (9Z8Y)"))
-        assertTrue("the disconnected one is not part of the ambiguity", !reason.contains("SM-R390"))
     }
 
     /** Three bonded and one connected still resolves, rather than refusing on count. */
@@ -134,9 +132,9 @@ class Fit3SelectionTest {
         )
     }
 
-    /** Nothing here reads an address, so nothing here can print one. */
+    /** Nothing here reads an address or a name, so nothing here can print either. */
     @Test
-    fun aReasonNeverCarriesABluetoothAddress() {
+    fun aReasonNeverCarriesABluetoothIdentity() {
         val reasons = listOf(
             reason(),
             reason(candidate("Galaxy Fit3 (1A2B)"), candidate("Galaxy Fit3 (9Z8Y)")),
@@ -148,6 +146,7 @@ class Fit3SelectionTest {
 
         reasons.forEach { reason ->
             assertTrue(reason, !Regex("([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}").containsMatchIn(reason))
+            assertTrue(reason, !reason.contains("1A2B") && !reason.contains("9Z8Y"))
         }
     }
 }

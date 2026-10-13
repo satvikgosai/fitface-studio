@@ -33,6 +33,9 @@ internal interface TransferListener {
     )
 
     fun onTransferStatus(message: String)
+
+    /** Raw bytes the watch addressed to this agent, recorded for the diagnostics report. */
+    fun onWatchReply(data: ByteArray) {}
     fun onTransferComplete(payload: DirectInstallPayload)
 
     /**
@@ -66,8 +69,23 @@ class OtaTransferDeliveryAgent(context: Context) :
      * on transferring against the same watch.
      */
     private val attempt = AtomicInteger()
+
+    /** Decides who sends `BT_CLOSE` for an attempt; see [BtCloseGate]. */
+    private val btClose = BtCloseGate()
+
+    /** The attempt whose `BT_OPEN` has gone out, so a cancel closes only a channel it opened. */
+    private val opened = AtomicInteger()
+
+    /** The peer the live attempt's `BT_OPEN` went to, which is the one its close has to reach. */
+    @Volatile
+    private var openedPeer: SAPeerAgent? = null
     private val message = object : SAMessage(this) {
-        override fun onReceive(peerAgent: SAPeerAgent, data: ByteArray) = Unit
+        // Nothing here acts on a reply: `BT_OPEN` is followed after a fixed pause, as on
+        // hardware so far. They are recorded so a hardware run shows whether the watch's
+        // `41 …`/`42 …` answers ever reach this component at all.
+        override fun onReceive(peerAgent: SAPeerAgent, data: ByteArray) {
+            transferListener?.onWatchReply(data)
+        }
 
         override fun onSent(peerAgent: SAPeerAgent, transactionId: Int) = Unit
 
@@ -135,11 +153,13 @@ class OtaTransferDeliveryAgent(context: Context) :
             {
                 if (attempt.get() != token) return@postDelayed
                 try {
+                    openedPeer = peer
+                    opened.set(token)
                     message.send(peer, BT_OPEN_REQUEST)
                     connectAndTransfer(token, band, peer, payload, identity)
                 } catch (error: Exception) {
                     transferRunning.set(false)
-                    sendBtClose(peer)
+                    closeChannel(token, peer)
                     report(token) {
                         it.onTransferFailed(
                             error.message ?: "Unable to open the Fit3 transfer channel",
@@ -186,7 +206,10 @@ class OtaTransferDeliveryAgent(context: Context) :
                     it.onTransferFailed(error.message ?: error.javaClass.simpleName)
                 }
             } finally {
-                sendBtClose(peer)
+                // Only while this is still the live attempt: a cancelled worker's close has
+                // already been sent by `cancelTransfer`, and a late one could close the
+                // session a retry has opened since.
+                closeChannel(token, peer)
                 SystemClock.sleep(TEARDOWN_PAUSE_MS)
                 runCatching { socket?.close() }
                 // Only if this thread is still the live attempt. A cancelled one unwinds
@@ -220,6 +243,10 @@ class OtaTransferDeliveryAgent(context: Context) :
      * anyway: it needs a whole re-discovery first.
      */
     internal fun cancelTransfer() {
+        // Closed here, once, for the attempt being abandoned — before the token moves on, so
+        // the worker's own `finally` finds itself superseded and sends nothing.
+        val live = attempt.get()
+        openedPeer?.takeIf { opened.get() == live }?.let { closeChannel(live, it) }
         attempt.incrementAndGet()
         runCatching { activeSocket?.close() }
         transferThread?.interrupt()
@@ -383,7 +410,6 @@ class OtaTransferDeliveryAgent(context: Context) :
                 ?.takeIf(String::isNotBlank)
                 ?.uppercase(Locale.US)
             Fit3Candidate(
-                name = deviceName(device).ifBlank { "an unnamed bonded watch" },
                 isDiscoveredPeer = address != null && address == peerAddress,
                 connected = address != null && address in connectedAddresses,
             )
@@ -411,8 +437,11 @@ class OtaTransferDeliveryAgent(context: Context) :
     private fun deviceName(device: BluetoothDevice): String =
         runCatching { device.name.orEmpty() }.getOrDefault("")
 
-    private fun sendBtClose(peer: SAPeerAgent) {
-        runCatching { message.send(peer, BT_CLOSE_REQUEST) }
+    /** Sends `BT_CLOSE` for [token] if it is still live and nobody has closed it yet. */
+    private fun closeChannel(token: Int, peer: SAPeerAgent) {
+        if (btClose.claim(token, attempt.get())) {
+            runCatching { message.send(peer, BT_CLOSE_REQUEST) }
+        }
     }
 
     private fun buildFileInfoRequest(payload: DirectInstallPayload): ByteArray {
@@ -526,13 +555,40 @@ internal object SppResponseWait {
                 if (response.containsToken(received, token)) return token
             }
         }
-        throw IOException(TIMED_OUT)
+        // The full wait still runs — the per-wait bounds are hardware-proven and a faster
+        // failure would change them — but what the watch did say is kept. Discarding it
+        // turned a refusal such as `331` into an anonymous timeout.
+        throw IOException(timedOutMessage(response, received))
+    }
+
+    /** [TIMED_OUT], plus whatever the watch sent instead of an expected token. */
+    fun timedOutMessage(response: ByteArray, received: Int): String =
+        if (received <= 0) {
+            TIMED_OUT
+        } else {
+            "$TIMED_OUT (the watch answered \"${printable(response, received)}\")"
+        }
+
+    /** Printable ASCII as itself, anything else as `\xNN`, so a report stays one plain line. */
+    private fun printable(bytes: ByteArray, length: Int): String = buildString {
+        for (index in 0 until minOf(length, MAX_RESPONSE_BYTES)) {
+            val value = bytes[index].toInt() and 0xFF
+            when {
+                value == '"'.code || value == '\\'.code -> append("\\x%02X".format(value))
+                value in 0x20..0x7E -> append(value.toChar())
+                else -> append("\\x%02X".format(value))
+            }
+        }
     }
 }
 
-/** One bonded watch, reduced to what choosing between them needs. */
+/**
+ * One bonded watch, reduced to what choosing between them needs.
+ *
+ * Deliberately nameless: the selection's reasons are reported, and a name here is one a
+ * reason could print.
+ */
 internal data class Fit3Candidate(
-    val name: String,
     /** The accessory the discovered OTA peer lives on is this device. */
     val isDiscoveredPeer: Boolean = false,
     /** The adapter reports a live connection to it. */
@@ -573,15 +629,16 @@ internal fun selectFit3(candidates: List<Fit3Candidate>): Fit3Selection = when {
         when {
             peers.size == 1 -> Fit3Selection.Selected(peers.single())
             connected.size == 1 -> Fit3Selection.Selected(connected.single())
+            // Counts, never names: a reason becomes the install failure, which reaches the
+            // diagnostics report, and a Fit3's Bluetooth name usually carries a suffix
+            // derived from its address.
             connected.size > 1 -> Fit3Selection.Unavailable(
-                "${connected.size} bonded Fit3 watches are connected at once " +
-                    "(${connected.joinToString { candidates[it].name }}), so there is no way " +
-                    "to tell which one to send to. Disconnect all but the one you want.",
+                "${connected.size} bonded Fit3 watches are connected at once, so there is no " +
+                    "way to tell which one to send to. Disconnect all but the one you want.",
             )
             else -> Fit3Selection.Unavailable(
-                "This phone has ${candidates.size} bonded Fit3 watches " +
-                    "(${candidates.joinToString { it.name }}) and none of them is connected. " +
-                    "Connect the one you want in the companion app, then send again.",
+                "This phone has ${candidates.size} bonded Fit3 watches and none of them is " +
+                    "connected. Connect the one you want in the companion app, then send again.",
             )
         }
     }

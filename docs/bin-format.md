@@ -306,7 +306,21 @@ every unnamed fixed pointer in that group has the named typeface:
 
 ### Glyph tables — the strings the watch draws
 
-Eight locale entries per face:
+The two reference faces carry eight locale entries each. The firmware opens
+`font_<language>.bin` for its current language and falls back to `font_en.bin` (local
+firmware notes, `%s/font_%s.bin`). So a language the face does not carry reads English,
+which is also what the preview assumes. Across the 99-container corpus:
+
+| Keyed tables | Faces |
+| --- | ---: |
+| 8 | 62 |
+| 7 | 1 |
+| 5 | 6 |
+| 2 | 2 |
+| `font_en.bin` only | 8 |
+| none | 20 |
+
+Every table has this layout:
 
 | Offset | Size | Field |
 | ---: | ---: | --- |
@@ -391,7 +405,9 @@ equals `numbered_font_file_count << 8` with no exception. Bytes `+0x10` and
 `+0x12/+0x13` have no effect.
 
 The header validator itself only requires nonzero widget count and widget-byte
-length. Image lookup computes `0x18 + widget_bytes + relative_offset`; it does
+length (instruction-level reading). The editor still allows an emptied style or AOD;
+see [identity, layout and structural edits](#identity-layout-and-structural-edits) for
+how Install treats one. Image lookup computes `0x18 + widget_bytes + relative_offset`; it does
 not use `+0x14`, and does not bound each image against `+0x0C`. Those stronger
 equalities remain mandatory writer checks.
 
@@ -429,11 +445,12 @@ The full corpus adds 50, 64, 80 and 140. Every observed byte is accounted for
 by its type schema. Type census:
 
 > **Geometry is type-specific.** `0x1C`/`0x1E` are alignment fields on
-> Static/Hand and endpoints on Rule, not universal extents. Face `00079` stores
-> width 1 for digit sprites whose frames are 52 px wide, and `00022` stores height
-> 20 for frames that are 136 px tall. For any widget that addresses a raster, the
-> raster's own dimensions are authoritative and the stored extent may be a
-> placeholder. Pair, Comp, Badge, vector Arc, image Arc and LineBar constructors
+> Static/Hand and endpoints on Rule, not universal extents. On Sprite they are not
+> read at all. `00079`'s `(1, 0)` beside 52 px digit frames and `00022`'s `(0, 20)`
+> beside 136 px ones are not stored extents. They are the producer's alignment-style
+> values, codes {0, 1} and targets {0, 10, 20, 40, 50} across the corpus, written on
+> a type that ignores them. For any widget that addresses a raster, the raster's
+> own dimensions are authoritative. Pair, Comp, Badge, vector Arc, image Arc and LineBar constructors
 > do consume explicit geometry; image Arc and LineBar additionally reference a
 > raster.
 >
@@ -502,7 +519,7 @@ package cannot define a new one. The map is:
 | 5 | AM/PM |
 | 9; 10/11 | minute; minute tens/units |
 | 13; 14/15 | second; second tens/units |
-| 17 | weekday |
+| 17 | weekday, Monday first (0 = Monday … 6 = Sunday; `00013`'s seven weekday frames render MON…SUN) |
 | 18/19/20 | day; day tens/units |
 | 21; 22/23 | month; month tens/units (Sprite 21 is zero-based artwork) |
 | 24; 25/26/27/28 | year; year thousands/hundreds/tens/units |
@@ -816,7 +833,23 @@ The header CRC covers the directory even though the tested watch ignores CRCs on
 install. Whole-style relocation leaves section-relative pointers unchanged; changes
 inside the image section require the declared pointer map. Download identity, bounds,
 mutation selectors and schemas are checked before commit. Final delivery checks
-one-byte face/sampler IDs, canonical filename, copied payload size and SHA-256.
+one-byte face/sampler IDs (face 1–255, sampler 0–9), canonical filename, copied payload
+size and SHA-256.
+
+`DeliveryChecks` then refuses a well-formed container that does not describe itself
+consistently:
+
+- container version not 4;
+- `setting.bin`, `preview.bin`, `aod.bin` or `style0.bin` missing or duplicated;
+- entry paths, `setting.bin +0x10` and the package naming different faces;
+- `setting.bin` without `LQ_WF` and its struct magic;
+- `+0x34` not the number of styles present, or `+0x35` naming no style;
+- more than ten styles, or styles not numbered from zero without gaps.
+
+All 99 vendor containers and every edit the app makes pass these checks. The
+`setting.bin` name slots are deliberately not checked: the watch never reads them, and
+`00018` stores `"00018_Overall image(Large)"` there.
+
 Unusual bounded vendor joins remain warnings; edit errors block commit and delivery.
 
 ### The size ceiling
@@ -824,6 +857,11 @@ Unusual bounded vendor joins remain warnings; edit errors block commit and deliv
 `WATCH_CONTAINER_BYTE_CEILING` is **4 MiB exactly**, confirmed on an SM-R390 and
 enforced by `rebuild` and `Session.validatedBytes()`. This is a settled application
 constraint based on firmware behaviour, not a limit of the `u32` format fields.
+
+The firmware states it directly. The normal `AT^WF_ADD` extractor range-checks the file
+size before reading the header: `(size - 0x18561) < 0x3E7AA0`, an inclusive range of
+99,681 bytes through exactly 4,194,304 (instruction-level, local firmware notes). The
+smallest catalogue container is about ten times that minimum.
 Oversized files can validate, transfer and be accepted while the old face remains.
 
 Recorded background-addition runs (205,880 bytes per style):
@@ -855,7 +893,7 @@ Imports and raster growth can also cross the ceiling.
 | Original identity survives index changes | Schema-3 checkpoints persist `SessionLineage` native sources and duplicate status; operations remap current indices explicitly. Legacy migration uses `originalWidgetSources` once. Unknown originals cannot be resized. Never use raw offsets or `originalRecords[globalIndex]` as identity. |
 | Source IDs are not identities | Static source is zero in 678/681 records; Sprite `(type, source)` happens to be unique in 1,486/1,518, not universally |
 | Every declared raster pointer is relocated | Static `+0x20`, Sprite's exact frame-count words, Hand `words[1]`, Arc `words[4]` (30/30), LineBar `words[2]` (16/16) |
-| Empty widget tables are valid | Removing the last widget retains the image section; snapshot, restore, preview and installer accept zero widgets |
+| Empty widget tables are legal while editing | Removing the last widget retains the image section; snapshot, restore and preview accept zero widgets. The firmware's style-header validator requires a nonzero count (§6), so Install sends an emptied style or AOD with a warning naming it. Whether the watch draws or skips one is untested |
 
 Sign-based anchoring misplaced 62 records on ten faces (`00015`, `00016`, `00018`,
 `00023`, `00027`, `00030`, `00051`, `00066`, `00089`, `00096`): 43 off-panel
@@ -1302,6 +1340,20 @@ sweeps these paths. Global index is a selector within a snapshot, not an origina
 All 99 vendor containers carry `aod.bin`: 442 widgets, 991 rasters; 66 digital and
 33 analog faces. Only 32 have panel rasters (26 RGB565, 6 RGB565+A); 67 compose on
 black. It has the same entry grammar and editing rules as styles.
+
+The stock always-on envelope is narrower than a style's:
+
+| Widget type | Sources used in stock AODs |
+| --- | --- |
+| Hands | hour 1 and minute 9 only (33 each), never seconds |
+| Sprites | clock digits 2, 3, 10 and 11 (66 each), plus one each of 17, 106, 107, 109 and 110 |
+| Values | 0, 5, 17, 18, 116 and 125 |
+| Composites | dates |
+| Statics | 68 |
+
+No stock AOD carries an animation, a battery reading or a health metric. That is a
+corpus fact; whether the firmware draws those in AOD is unknown, which matters for the
+always-on display warnings in imports and planned animations.
 
 `Session.editTargets` enforces isolation in both directions, tested byte-for-byte by
 `AodIsolationTest`. `AOD_ENTRY_NAME` belongs to `:core:model`. `selectedVariant`

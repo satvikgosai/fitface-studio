@@ -109,6 +109,12 @@ data class DirectInstallState(
      */
     val failure: String? = null,
     val message: String = "Checking watch setup…",
+    /**
+     * What the watch sent this app's two agents, as `<agent> <hex>`, newest last and at most
+     * [MAX_WATCH_REPLIES]. Protocol bytes only: the replies carry face and style numbers,
+     * never a device identity.
+     */
+    val watchReplies: List<String> = emptyList(),
 ) {
     val peersCached: Boolean
         get() = watchfacePeerCached && otaPeerCached
@@ -336,6 +342,18 @@ internal object DeliveryProgress {
         DeliveryEvent.FAILURE -> current in DirectInstallState.ActivePhases
     }
 }
+
+/** How many received watch replies [DirectInstallState.watchReplies] keeps. */
+internal const val MAX_WATCH_REPLIES = 8
+
+/**
+ * [state] with one more received reply recorded, oldest dropped past [MAX_WATCH_REPLIES].
+ *
+ * Kept apart from the phase machine on purpose: a reply is evidence, not progress, so it is
+ * recorded in any phase and moves nothing.
+ */
+internal fun withWatchReply(state: DirectInstallState, agent: String, data: ByteArray): DirectInstallState =
+    state.copy(watchReplies = (state.watchReplies + "$agent ${data.replyHex()}").takeLast(MAX_WATCH_REPLIES))
 
 /** How long a phase that is merely waiting on the accessory framework may stay silent. */
 internal const val PHASE_WATCHDOG_MS = 20_000L

@@ -202,7 +202,15 @@ class EditorViewModel @Inject constructor(
         }
         viewModelScope.launch {
             var lastPhase: DirectInstallPhase? = null
+            var lastReplies = emptyList<String>()
             directInstaller.state.collect { delivery ->
+                // Received protocol bytes, logged once each as they arrive: on the coexistence
+                // route nothing is expected here, so any entry is news worth a line.
+                if (delivery.watchReplies != lastReplies) {
+                    delivery.watchReplies.filterNot(lastReplies::contains)
+                        .forEach { diagnostics.info(TAG, "Watch reply", it) }
+                    lastReplies = delivery.watchReplies
+                }
                 // Physical delivery cannot be exercised in this repository's tests, so the
                 // phase order a real transfer walked is the only account of where one
                 // stopped. Counts and booleans only — no peer handle, address or name.
@@ -1215,6 +1223,8 @@ class EditorViewModel @Inject constructor(
                             "bytes=${install.acknowledgedBytes}/${install.totalBytes} " +
                             "windows=${install.acknowledgedWindows}/${install.totalWindows}",
                         install.failure?.let { "failure=$it" },
+                        install.watchReplies.takeIf { it.isNotEmpty() }
+                            ?.let { "replies=${it.joinToString("; ")}" },
                     ),
                 ),
             )

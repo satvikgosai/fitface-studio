@@ -98,8 +98,9 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
   AOD constant and targeting function. AOD cannot refresh a style-picker thumbnail.
 - Native removal preserves resources for restore. Imported removal must preserve
   resources still owned or referenced elsewhere, including saved removed records.
-- Empty widget tables are valid. Reset returns to the project's pristine package,
-  including a custom template's stripped original.
+- Empty widget tables are valid while editing; Install warns before sending one.
+  Reset returns to the project's pristine package, including a custom template's
+  stripped original.
 - Cross-resource observations remain warnings unless the editing contract makes
   them blocking. Do not reject unusual vendor input merely for differing from a census.
 

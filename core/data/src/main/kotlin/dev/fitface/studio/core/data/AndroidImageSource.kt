@@ -5,9 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.media.ExifInterface
 import android.net.Uri
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
@@ -32,13 +34,14 @@ class AndroidImageSource @Inject constructor(
         while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 1024) {
             sample *= 2
         }
-        val bitmap = contentResolver.openInputStream(parsed)?.use {
+        val decoded = contentResolver.openInputStream(parsed)?.use {
             BitmapFactory.decodeStream(
                 it,
                 null,
                 BitmapFactory.Options().apply { inSampleSize = sample },
             )
         } ?: throw IllegalArgumentException("The selected image could not be decoded")
+        val bitmap = upright(decoded, orientation(parsed))
         return try {
             val pixels = IntArray(bitmap.width * bitmap.height)
             bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
@@ -56,7 +59,19 @@ class AndroidImageSource @Inject constructor(
     ): IntArray {
         require(width > 0 && height > 0) { "Target dimensions must be positive" }
         val parsed = Uri.parse(uri)
-        val bounds = readBounds(parsed)
+        val orientation = orientation(parsed)
+        // Sampled before it is turned, so a quarter-turned photo is measured on its stored
+        // axes: its height on screen is its stored width.
+        val bounds = readBounds(parsed).let { stored ->
+            if (orientation.swapsAxes) {
+                BitmapFactory.Options().apply {
+                    outWidth = stored.outHeight
+                    outHeight = stored.outWidth
+                }
+            } else {
+                stored
+            }
+        }
         val maximumDecodeWidth = (width * placement.zoom.coerceIn(1f, 8f))
             .toInt()
             .coerceAtLeast(width)
@@ -70,13 +85,14 @@ class AndroidImageSource @Inject constructor(
         ) {
             sample *= 2
         }
-        val source = contentResolver.openInputStream(parsed)?.use {
+        val decoded = contentResolver.openInputStream(parsed)?.use {
             BitmapFactory.decodeStream(
                 it,
                 null,
                 BitmapFactory.Options().apply { inSampleSize = sample },
             )
         } ?: throw IllegalArgumentException("The selected image could not be decoded")
+        val source = upright(decoded, orientation)
         var output: Bitmap? = null
         try {
             output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -112,6 +128,49 @@ class AndroidImageSource @Inject constructor(
             output?.recycle()
             source.recycle()
         }
+    }
+
+    /**
+     * The EXIF orientation of the picked file, or [ExifInterface.ORIENTATION_NORMAL].
+     *
+     * `BitmapFactory` ignores this tag, and phone cameras commonly store a portrait photo
+     * on its side with orientation 6, so a camera photo used to arrive as a sideways
+     * background. Any failure to read it means "as stored", which is what it was before.
+     */
+    private fun orientation(uri: Uri): Int = runCatching {
+        contentResolver.openInputStream(uri)?.use { stream ->
+            ExifInterface(stream).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL,
+            )
+        }
+    }.getOrNull() ?: ExifInterface.ORIENTATION_NORMAL
+
+    private val Int.swapsAxes: Boolean
+        get() = this in QuarterTurnOrientations
+
+    /** [bitmap] turned and mirrored as its [orientation] tag says, recycling the original. */
+    private fun upright(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.setRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.setRotate(-90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f)
+            else -> return bitmap
+        }
+        val turned = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (turned !== bitmap) bitmap.recycle()
+        return turned
     }
 
     private fun readBounds(uri: Uri): BitmapFactory.Options {
@@ -164,3 +223,10 @@ class AndroidImageSource @Inject constructor(
         return RectF(left, top, left + width, top + height)
     }
 }
+
+private val QuarterTurnOrientations = setOf(
+    ExifInterface.ORIENTATION_TRANSPOSE,
+    ExifInterface.ORIENTATION_ROTATE_90,
+    ExifInterface.ORIENTATION_TRANSVERSE,
+    ExifInterface.ORIENTATION_ROTATE_270,
+)

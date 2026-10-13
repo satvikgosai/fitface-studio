@@ -47,6 +47,38 @@ format, storage full and a full favourites list; none of those reach the phone
 here, which is exactly why a face that transfers cleanly and never appears has to
 be diagnosed from the watch rather than from the app.
 
+The reply's layout is `44 16 <status> 04 <id> 1D <sampler>`.
+
+| Status | Meaning (stock plugin enum) |
+| ---: | --- |
+| 1 | success |
+| 2 | low watch battery |
+| 3 | file not found at the given path |
+| 4 | wrong binary format |
+| 5 | favourites list full |
+| 6 | installed-face storage full |
+
+Two sources corroborate the layout and codes: the stock plugin's own parser
+(`InstallBandFaceResponseParser`, plugin 2.2.14) and Fit3-App, an independent
+implementation that owns the link and decodes them. Neither is a capture on this
+app's route.
+
+Fit3-App also shows the watch registering a completed `/user/wf` file and replying
+on its own after `32`. So the watch probably sends two such replies per install, both
+to the plugin's component.
+
+Should a reply ever reach `WatchfaceDeliveryAgent` anyway, it is decoded, never
+taken as success merely for arriving:
+
+- only a reply naming the pending face and style settles the request;
+- status 1 counts as delivered;
+- statuses 2–6 fail with a plain reason;
+- anything else is ignored.
+
+Both agents record received bytes, at most eight as hex, in
+`DirectInstallState.watchReplies` for the diagnostics report. A hardware run then shows
+where replies go.
+
 ## Channel handover
 
 Discovery needs the stock plugin connected; transfer needs its channel released.
@@ -157,6 +189,10 @@ worker alive; abandonment must make it unable to send or publish afterward.
 
 - `OtaTransferDeliveryAgent` compares the attempt token in listeners, SPP polls and
   delayed handlers. Never reuse a boolean the next attempt can clear.
+- `BT_CLOSE` (`03`) goes out once per attempt that sent `BT_OPEN`, through `BtCloseGate`.
+  `cancelTransfer()` closes the attempt it abandons before advancing the token; the worker's
+  `finally` closes only while it is still live. A late close from an abandoned worker could
+  otherwise close the session a retry has opened.
 - `WatchfaceDeliveryAgent.cancelInstall()` clears pending payload so a late `onSent`
   cannot finalize it.
 - `DeliveryProgress.accepts` runs **inside** the installer's atomic state update;

@@ -16,6 +16,9 @@ internal interface InstallListener {
      *   and the setup has to rewind to discovery.
      */
     fun onInstallFailed(message: String, peerLost: Boolean = false)
+
+    /** Raw bytes the watch addressed to this agent, recorded for the diagnostics report. */
+    fun onWatchReply(data: ByteArray) {}
 }
 
 class WatchfaceDeliveryAgent(context: Context) :
@@ -28,10 +31,21 @@ class WatchfaceDeliveryAgent(context: Context) :
     private val installMessage = object : SAMessage(this) {
         override fun onReceive(peerAgent: SAPeerAgent, data: ByteArray) {
             // Band replies target the stock plugin's reserved local component ID 6 in
-            // the proven coexistence architecture. Handle a direct response if
-            // a future framework version routes it here, but do not require it.
-            val payload = claimPendingInstall() ?: return
-            installListener?.onInstallDelivered(payload)
+            // the proven coexistence architecture, so this may never run. If one does
+            // arrive it is recorded, then read for what it says: only a decoded reply for
+            // the pending face and style settles the request, and only success counts as
+            // delivered. Anything else stays pending for `onSent` or the watchdog.
+            installListener?.onWatchReply(data)
+            val reply = WatchfaceInstallProtocol.decodeReply(data) ?: return
+            val refusal = if (reply.accepted) null else reply.refusal ?: return
+            val payload = pendingInstall.claimIf {
+                it.faceId == reply.faceId && it.samplerId == reply.samplerId
+            } ?: return
+            if (refusal == null) {
+                installListener?.onInstallDelivered(payload)
+            } else {
+                installListener?.onInstallFailed(refusal)
+            }
         }
 
         override fun onSent(peerAgent: SAPeerAgent, transactionId: Int) {
@@ -132,6 +146,17 @@ internal class PendingInstallSlot {
 
     /** The payload, to exactly one caller. Every later call gets null until the next [offer]. */
     fun claim(): DirectInstallPayload? = slot.getAndSet(null)
+
+    /**
+     * The payload, to exactly one caller, but only if [matches] accepts it: a watch reply
+     * names the face and style it answers, and an answer about another request settles
+     * nothing.
+     */
+    fun claimIf(matches: (DirectInstallPayload) -> Boolean): DirectInstallPayload? {
+        val current = slot.get() ?: return null
+        if (!matches(current)) return null
+        return current.takeIf { slot.compareAndSet(it, null) }
+    }
 
     /** Forgets the request, so nothing it reports later is believed. */
     fun abandon() {

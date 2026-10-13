@@ -23,6 +23,7 @@ import dev.fitface.studio.core.format.PreviewStream
 import dev.fitface.studio.core.format.Fit3CapacityException
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.CustomFaceTemplate
+import dev.fitface.studio.core.format.DeliveryChecks
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.FaceResources
@@ -153,7 +154,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 val entry = StyleWidgetMatch.requireVariantEntry(source.container.entryByBasename(variant))
                 val guides = FaceRecordParser.widgetGuides(entry)
                 val composition = WidgetPreviewComposer.compose(entry, source.container.entries,
-                    WidgetTextRasterizer::render, java.util.Locale.getDefault().toString())
+                    WidgetTextRasterizer::render, previewDictionaryLocale())
                 // `composed` is the donor face itself, and it was already being built here
                 // to obtain the layers — the picker draws it rather than describing each
                 // record in words, and hit-tests the same guides on it.
@@ -181,7 +182,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 .validate(current.originalContainer, result.edit.container, origins)
             val entry = result.edit.container.entryByBasename(targetVariant)
             val preview = WidgetPreviewComposer.compose(entry, result.edit.container.entries,
-                WidgetTextRasterizer::render, java.util.Locale.getDefault().toString()).composed
+                WidgetTextRasterizer::render, previewDictionaryLocale()).composed
             val ticket = UUID.randomUUID().toString()
             currentCoroutineContext().ensureActive()
             pendingImport = PendingImport(ticket, source, current, current.currentContainer, targetVariant, result)
@@ -229,7 +230,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 source.container.entryByBasename(donorVariant))
             val preview = WidgetPreviewComposer.compose(result.edit.container.entryByBasename(targetVariant),
                 result.edit.container.entries, WidgetTextRasterizer::render,
-                java.util.Locale.getDefault().toString()).composed
+                previewDictionaryLocale()).composed
             val ticket = UUID.randomUUID().toString()
             currentCoroutineContext().ensureActive()
             pendingBackground = PendingBackground(ticket, source, current, current.currentContainer, targetVariant, result)
@@ -372,7 +373,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 error,
             )
         }
-        val locale = java.util.Locale.getDefault().toString()
+        val locale = previewDictionaryLocale()
         var container = stripped
         val previews = mutableMapOf<Int, ByteArray>()
         FaceResources.selectableStyles(stripped).forEachIndexed { index, entry ->
@@ -2733,6 +2734,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     )
                 }
             }
+            // Well formed is not the same as consistent: the watch reads setting.bin's ID and
+            // style count and installs by path, so those have to agree with the face itself.
+            val delivery = DeliveryChecks.check(reparsed, apk.faceId)
+            if (!delivery.canSend) {
+                throw WatchFaceException(
+                    "The edited watch face does not describe itself consistently, so it will " +
+                        "not be installed. Reset project edits to restore the original face.",
+                    delivery.refusals.joinToString { "${it.code}: ${it.detail}" },
+                )
+            }
             return binary
         }
 
@@ -2768,14 +2779,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
         private var cachedAodPreview: AodRender? = null
 
-        fun previewLocale(): String = java.util.Locale.getDefault().let {
-            when (it.language) {
-                "zh" -> if (it.script == "Hant" || it.country in setOf("TW", "HK", "MO")) "cn2" else "cn0"
-                "pt" -> "pt_rPT"
-                "fr", "ko", "ja", "it" -> it.language
-                else -> "en"
-            }
-        }
+        fun previewLocale(): String = previewDictionaryLocale()
 
         /**
          * [WidgetPreviewComposer.compose] for the current `aod.bin`. Null when the container
@@ -2969,6 +2973,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             } else {
                 currentContainer.validate()
             }
+            val delivery = DeliveryChecks.check(currentContainer, apk.faceId)
             val backgrounds = styles.filter {
                 FaceRecordParser.backgroundImage(it) != null
             }.map { it.basename }
@@ -3036,6 +3041,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 imageCount = images.size,
                 validationErrors = report.errors.map { it.code },
                 validationWarnings = report.warnings.map { it.code },
+                deliveryRefusals = delivery.refusals.map { it.code },
+                emptyVariants = delivery.emptyVariants,
                 isDirty = currentContainer !== originalContainer,
                 thumbnailRefreshed = thumbnailRefreshed,
                 pickerThumbnail = pickerThumbnail,
@@ -3203,6 +3210,23 @@ private val StyleNamePattern = Regex("""style(\d+)\.bin""")
 private val PreviewFileNamePattern = Regex("""style(\d+)\.png""")
 
 /** The index in `styleN.bin`, which is the index the package's previews use too. */
+/**
+ * Which of a face's `font_<key>.bin` dictionaries the preview reads for the phone's language.
+ *
+ * Faces ship eight keyed dictionaries (`cn0`, `cn2`, `en`, `fr`, `it`, `ja`, `ko`, `pt_rPT`),
+ * and a key no face has falls back to English. One mapping for every preview: the editor's,
+ * a donor's, an import review's and the custom template's picker frame. Passing the raw
+ * locale (`fr_FR`) instead named a dictionary that never exists, so those previews were
+ * always English while the canvas beside them was French.
+ */
+internal fun previewDictionaryLocale(locale: java.util.Locale = java.util.Locale.getDefault()): String =
+    when (locale.language) {
+        "zh" -> if (locale.script == "Hant" || locale.country in setOf("TW", "HK", "MO")) "cn2" else "cn0"
+        "pt" -> "pt_rPT"
+        "fr", "ko", "ja", "it" -> locale.language
+        else -> "en"
+    }
+
 private fun styleIndexOf(basename: String): Int? =
     StyleNamePattern.matchEntire(basename)?.groupValues?.get(1)?.toIntOrNull()
 

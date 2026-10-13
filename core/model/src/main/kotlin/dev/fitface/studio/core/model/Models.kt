@@ -147,6 +147,15 @@ fun widgetResizeLimit(shippedExtent: Int, kind: WidgetResizeKind): Int = when (k
  */
 const val WATCH_CONTAINER_BYTE_CEILING: Int = 4 * 1024 * 1024
 
+/**
+ * The most numbered styles a face can carry, so sampler IDs run 0 to 9.
+ *
+ * The stock plugin's and Fit3-App's install encoders both restrict the sampler to `0..9`,
+ * and no catalogue face has more than ten styles. Delivery refuses an eleventh rather than
+ * send a style number the watch has never been shown to accept.
+ */
+const val WATCH_MAX_STYLES: Int = 10
+
 /** Container sizes in the unit the watch's limit is quoted in, e.g. `4.16 MiB`. */
 fun mebibytes(bytes: Int): String =
     String.format(java.util.Locale.US, "%.2f MiB", bytes / (1024.0 * 1024.0))
@@ -914,6 +923,14 @@ data class EditorSnapshot(
     val imageCount: Int,
     val validationErrors: List<String>,
     val validationWarnings: List<String>,
+    /**
+     * Why this container would be refused at send although it is well formed: its paths,
+     * `setting.bin` and package disagree about which face it is, or its declared style count
+     * is wrong. Codes only; empty for every face the app produces.
+     */
+    val deliveryRefusals: List<String> = emptyList(),
+    /** Styles, and the always-on display, with no widgets: sendable, but say so first. */
+    val emptyVariants: List<String> = emptyList(),
     val isDirty: Boolean,
     val thumbnailRefreshed: Boolean = false,
     /**
@@ -1061,8 +1078,12 @@ class DirectInstallPayload(
         get() = payload.size
 
     init {
-        require(faceId in 0..255) { "Face ID must fit in the Fit3 protocol byte" }
-        require(samplerId in 0..255) { "Sampler ID must fit in the Fit3 protocol byte" }
+        // One byte each in the install command, but not every byte value is a face: no face
+        // has ID 0, and the stock plugin's own encoder caps the sampler at 9.
+        require(faceId in 1..255) { "Face ID must be 1 to 255 for the Fit3 install command" }
+        require(samplerId in 0 until WATCH_MAX_STYLES) {
+            "Sampler ID must be 0 to ${WATCH_MAX_STYLES - 1} for the Fit3 install command"
+        }
         require(
             fileName == "SM-R390_${faceId.toString().padStart(5, '0')}_256x402.bin",
         ) { "Binary filename does not match face ID $faceId" }

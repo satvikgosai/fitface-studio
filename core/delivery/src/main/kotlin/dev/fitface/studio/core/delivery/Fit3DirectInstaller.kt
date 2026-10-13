@@ -165,6 +165,10 @@ class Fit3DirectInstaller @Inject constructor(
             if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.FAILURE)) return
             if (peerLost) restartDiscovery(message) else fail(message)
         }
+
+        override fun onWatchReply(data: ByteArray) {
+            mutableState.update { withWatchReply(it, "ota", data) }
+        }
     }
 
     private val installListener = object : InstallListener {
@@ -200,6 +204,10 @@ class Fit3DirectInstaller @Inject constructor(
         override fun onInstallFailed(message: String, peerLost: Boolean) {
             if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.FAILURE)) return
             if (peerLost) restartDiscovery(message) else fail(message)
+        }
+
+        override fun onWatchReply(data: ByteArray) {
+            mutableState.update { withWatchReply(it, "watchface", data) }
         }
     }
 
@@ -531,7 +539,9 @@ class Fit3DirectInstaller @Inject constructor(
         watchfaceAgent = null
         otaAgent = null
         discoveryStarted = false
-        mutableState.update { DirectInstallState() }
+        // Replies survive a reset: they are evidence for the report, and starting over is
+        // usually the step taken right before someone copies it.
+        mutableState.update { DirectInstallState(watchReplies = it.watchReplies) }
         refreshEnvironment()
     }
 

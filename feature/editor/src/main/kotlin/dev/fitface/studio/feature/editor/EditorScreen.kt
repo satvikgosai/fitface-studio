@@ -50,6 +50,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -96,6 +97,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -174,6 +176,11 @@ fun EditorRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
+    // A multi-megabyte transfer outlasts a short screen timeout, and nobody has shown one
+    // survives the phone locking part-way. Holding the screen on while the watch is
+    // receiving costs nothing and needs no permission. It lives here rather than on Install
+    // so leaving that page mid-transfer does not drop it.
+    KeepScreenOn(state.directInstall.phase in SendingPhases)
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -183,8 +190,12 @@ fun EditorRoute(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
         viewModel.refreshDirectInstallEnvironment()
-        if (result.values.any { granted -> !granted }) {
-            val permanentlyDenied = result.keys.any { permission ->
+        val denied = result.filterValues { granted -> !granted }.keys
+        if (denied.isNotEmpty()) {
+            // Only a denied permission can be "don't ask again". A granted one also answers
+            // false to shouldShowRequestPermissionRationale, so asking it too sent a mixed
+            // result straight to Settings when a plain retry would have done.
+            val permanentlyDenied = denied.any { permission ->
                 val activity = context as? Activity
                 activity != null && !activity.shouldShowRequestPermissionRationale(permission)
             }
@@ -3511,7 +3522,9 @@ private fun InstallWorkspace(
     onCanvas: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val valid = snapshot.validationErrors.isEmpty()
+    // Refused at send either way: malformed (validationErrors), or well formed but naming
+    // another face or the wrong style count (deliveryRefusals).
+    val valid = snapshot.validationErrors.isEmpty() && snapshot.deliveryRefusals.isEmpty()
     // Sending is gated on having seen the validated render, and every commit clears that
     // flag. The render is the first thing on this page, so arriving is reviewing — but an
     // edit made *while here* clears it again and would leave the send button inert.
@@ -3601,6 +3614,22 @@ private fun InstallWorkspace(
         // Warnings are never folded away. A collapsed section is something the reader
         // chose not to read; a warning they never saw is one this page failed to give.
         snapshot.validationWarnings.forEach { warning -> StatusBanner(FitStatus.Warning, warning) }
+        // An empty style is legal while editing and is sent, but nobody has yet seen what the
+        // watch does with one, so the reader hears it before sending rather than after.
+        snapshot.emptyVariants.forEach { basename ->
+            StatusBanner(
+                FitStatus.Warning,
+                when {
+                    basename == AOD_ENTRY_NAME -> stringResource(R.string.editor_install_empty_aod)
+                    // The last style cannot be deleted, so do not suggest it.
+                    snapshot.styleNames.size <= 1 -> stringResource(
+                        R.string.editor_install_empty_only_style,
+                        variantLabel(basename),
+                    )
+                    else -> stringResource(R.string.editor_install_empty_style, variantLabel(basename))
+                },
+            )
+        }
         // This page presents the plate above as what is about to be installed, so what
         // that picture cannot show has to be said here and not only on the canvas.
         if (snapshot.selectedVariantApproximate) {
@@ -3647,13 +3676,17 @@ private fun InstallWorkspace(
     }
 }
 
-/** The five joins `Session.validate()` reports, in the order it reports them. */
+/**
+ * The joins `Session.validate()` reports, in the order it reports them, then the identity and
+ * style-count checks `DeliveryChecks` adds before a send.
+ */
 private val ValidationChecks = listOf(
     R.string.editor_check_entry_bounds,
     R.string.editor_check_record_sizes,
     R.string.editor_check_crc,
     R.string.editor_check_payload_length,
     R.string.editor_check_face_id,
+    R.string.editor_check_identity,
 )
 
 /**
@@ -4895,6 +4928,16 @@ private fun TransferPanel(
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     label = stringResource(R.string.editor_transfer_done_label),
                 )
+                // The watch's verdict goes to the stock plugin, not here, so a face that
+                // transferred cleanly and never appears is explained by what the watch can
+                // refuse — said as possibilities, never as what happened this time.
+                FitDetails(label = stringResource(R.string.editor_transfer_not_showing_label)) {
+                    Text(
+                        stringResource(R.string.editor_transfer_not_showing),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.fitText.secondary,
+                    )
+                }
                 // Sending the same bytes again is legitimate — a watch can reject a
                 // face for reasons that have nothing to do with the payload.
                 FitButton(
@@ -5036,18 +5079,22 @@ private fun PayloadReadout(state: DirectInstallState) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         val none = stringResource(R.string.editor_payload_none)
-        Text(
-            stringResource(
-                R.string.editor_payload_detail,
-                state.faceId?.toString() ?: none,
-                state.samplerId?.toString() ?: none,
-                state.sha256?.take(24) ?: none,
-                state.totalBytes,
-            ),
-            modifier = Modifier.padding(top = 9.dp),
-            style = FitFaceType.numeric,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // The whole hash, selectable: it is what matches this send to an exported archive or
+        // to another installer's library, and a 24-character prefix cannot be pasted there.
+        SelectionContainer {
+            Text(
+                stringResource(
+                    R.string.editor_payload_detail,
+                    state.faceId?.toString() ?: none,
+                    state.samplerId?.toString() ?: none,
+                    state.sha256 ?: none,
+                    state.totalBytes,
+                ),
+                modifier = Modifier.padding(top = 9.dp),
+                style = FitFaceType.numeric,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -5384,4 +5431,21 @@ private fun DeleteProjectDialog(
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
         },
     )
+}
+
+/** The phases in which bytes or the install command are on their way to the watch. */
+private val SendingPhases = setOf(
+    DirectInstallPhase.VERIFYING,
+    DirectInstallPhase.TRANSFERRING,
+    DirectInstallPhase.INSTALLING,
+)
+
+/** Keeps this window's screen on while [active], and lets it go when that ends or on exit. */
+@Composable
+private fun KeepScreenOn(active: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(view, active) {
+        view.keepScreenOn = active
+        onDispose { view.keepScreenOn = false }
+    }
 }

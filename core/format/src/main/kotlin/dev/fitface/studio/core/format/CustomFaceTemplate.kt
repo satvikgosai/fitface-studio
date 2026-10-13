@@ -15,7 +15,7 @@ import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
  * so once those are gone the other three are copies with nothing to choose between — and
  * removes those readings from it through [StructuralEditor.removeWidget], the same edit the
  * tray's ✕ makes. What is left is by construction something a reader could have made by
- * hand, bar the style count, which no edit in the app changes. Face `00006` suits it because nothing on it is anchored to
+ * hand, bar keeping one style, which style deletion can also do. Face `00006` suits it because nothing on it is anchored to
  * anything — every alignment reference names no record — so the removals are allowed in any
  * order; its eleven rasters a style all belong to the clock, so stripping leaves no dead
  * weight; and its digit glyphs carry alpha, so a photo added behind them shows between the

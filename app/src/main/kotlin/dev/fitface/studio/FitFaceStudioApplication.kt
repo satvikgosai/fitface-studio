@@ -6,7 +6,7 @@ import dagger.hilt.android.HiltAndroidApp
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.DiagnosticsLevel
 import dev.fitface.studio.core.model.DiagnosticsLog
-import dev.fitface.studio.core.model.diagnosticSummary
+import dev.fitface.studio.core.model.crashFileText
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -55,14 +55,7 @@ class FitFaceStudioApplication : Application() {
                     message = "Uncaught on ${thread.name}",
                     error = error,
                 )
-                reporter.crashFile().writeText(
-                    buildString {
-                        appendLine("crash=${error.diagnosticSummary()}")
-                        val entries = diagnostics.snapshot()
-                        val origin = entries.firstOrNull()?.atEpochMillis ?: 0L
-                        entries.forEach { appendLine(it.render(origin)) }
-                    },
-                )
+                reporter.crashFile().writeText(crashFileText(error, diagnostics.snapshot()))
             }
             previous?.uncaughtException(thread, error)
         }
