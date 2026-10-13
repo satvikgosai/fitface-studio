@@ -234,6 +234,69 @@ class CanvasIntegrityTest {
         org.junit.Assume.assumeTrue("corpus faces 00106/00023 missing", checked > 0)
     }
 
+    /**
+     * A widget pushed as far past an edge as the editor allows (issue #14) is the same
+     * artwork, cut off at the edge. Every layer is identical, and every pixel of the face
+     * that changes lies inside a rectangle that moved, before or after: the widget's, or one
+     * positioned against it. A wrapped or stretched draw would change pixels elsewhere. A
+     * picture, a value and a composite on `00106`, past each of the four edges.
+     */
+    @Test fun pushingAWidgetPartlyOffTheFaceChangesOnlyItsOwnPixels() {
+        val path = containers.firstOrNull { it.fileName.toString().contains("00106") }
+        assumeTrue("corpus face 00106 missing", path != null)
+        val original = Fit3Container.parse(Files.readAllBytes(path!!))
+        val entry = original.entryByBasename("style0.bin")
+        val old = WidgetPreviewComposer.compose(entry, original.entries, WidgetTextRasterizer::render)
+        val width = old.composed.width
+        val height = old.composed.height
+        val guides = FaceRecordParser.widgetGuides(entry)
+        var checked = 0
+        for (type in listOf(3, 5, 13)) {
+            val widget = guides.firstOrNull {
+                it.type == type && it.canEditPosition && it.placement == WidgetPlacement.CANVAS
+            } ?: continue
+            // The editor's own limit: a tenth, at least 10 px, stays on the face.
+            val keepX = minOf(widget.width, maxOf(10, widget.width / 10))
+            val keepY = minOf(widget.height, maxOf(10, widget.height / 10))
+            val targets = listOf(
+                -(widget.width - keepX) to widget.drawTop,
+                width - keepX to widget.drawTop,
+                widget.drawLeft to -(widget.height - keepY),
+                widget.drawLeft to height - keepY,
+            )
+            for ((left, top) in targets) {
+                val label = "00106 type $type at $left,$top"
+                val edited = FaceEditor.moveWidget(original, entry.basename, widget.globalIndex, widget.type,
+                    widget.sequenceId, widget.x + left - widget.drawLeft, widget.y + top - widget.drawTop).container
+                org.junit.Assert.assertEquals(label, emptyList<Any>(), edited.validate().errors)
+                val editedEntry = edited.entryByBasename(entry.basename)
+                val new = WidgetPreviewComposer.compose(editedEntry, edited.entries, WidgetTextRasterizer::render)
+                old.widgetImageLayers.forEach { before ->
+                    val after = new.widgetImageLayers.single { it.globalIndex == before.globalIndex }
+                    org.junit.Assert.assertArrayEquals("$label #${before.globalIndex}", before.frame.argb, after.frame.argb)
+                }
+                val now = FaceRecordParser.widgetGuides(editedEntry).associateBy { it.globalIndex }
+                val moved = guides.filter { was ->
+                    now.getValue(was.globalIndex).let { it.drawLeft != was.drawLeft || it.drawTop != was.drawTop }
+                }
+                assertTrue("$label: the widget must move", moved.any { it.globalIndex == widget.globalIndex })
+                val boxes = moved + moved.map { now.getValue(it.globalIndex) }
+                val changed = old.composed.argb.indices.filter { old.composed.argb[it] != new.composed.argb[it] }
+                assertTrue("$label: the move must show", changed.isNotEmpty())
+                val pad = 16
+                changed.forEach { pixel ->
+                    val x = pixel % width; val y = pixel / width
+                    assertTrue("$label: pixel $x,$y changed outside the moved widgets", boxes.any {
+                        x in it.drawLeft - pad until it.drawLeft + it.width + pad &&
+                            y in it.drawTop - pad until it.drawTop + it.height + pad
+                    })
+                }
+            }
+            checked++
+        }
+        assumeTrue("00106 has none of the widget types checked", checked > 0)
+    }
+
     /** One face's canvas, assembled exactly the way `WatchFaceRepositoryImpl` does. */
     private class Canvas(
         val guides: List<WidgetGuide>,

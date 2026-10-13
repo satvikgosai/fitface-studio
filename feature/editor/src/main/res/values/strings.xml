@@ -95,6 +95,8 @@
     <string name="editor_canvas_hint_set">Tap to add or remove widgets; tap empty space to clear. Move them together with the arrows.</string>
     <string name="editor_canvas_hint_all_styles">Editing every style that has this widget.</string>
     <string name="editor_canvas_hint_this_style">Editing this style only.</string>
+    <!-- Under the canvas hint while the selected widget hangs past an edge of the face. -->
+    <string name="editor_canvas_partly_off_face">The watch cuts off the part outside the face.</string>
     <string name="editor_canvas_hint_aod">Editing the always-on display only.</string>
     <string name="editor_canvas_nudge_all_styles">@string/editor_canvas_hint_all_styles</string>
     <string name="editor_canvas_nudge_this_style">@string/editor_canvas_hint_this_style</string>
@@ -230,6 +232,12 @@
     <string name="editor_axis_x">X</string>
     <string name="editor_axis_y">Y</string>
     <string name="editor_encoded">stored %1$d, %2$d</string>
+    <string name="editor_position_x_field">Left edge (X)</string>
+    <string name="editor_position_y_field">Top edge (Y)</string>
+    <string name="editor_position_range">%1$d to %2$d</string>
+    <string name="editor_position_apply">Apply position</string>
+    <string name="editor_position_centre_x">Centre horizontally</string>
+    <string name="editor_position_centre_y">Centre vertically</string>
     <!-- Shown when the stored value is an offset from another widget rather than from the
          panel, so the numbers above and the numbers in the file legitimately differ. -->
     <string name="editor_encoded_offset">stored %1$d, %2$d · measured from widget #%3$d</string>

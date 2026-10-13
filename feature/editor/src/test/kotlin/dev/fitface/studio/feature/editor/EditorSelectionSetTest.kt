@@ -355,13 +355,14 @@ class EditorSelectionSetTest {
     }
 
     /**
-     * As far as the most constrained member can go. A widget flush with the right edge
-     * cannot step right, so neither does the set — clamping each on its own would have let
-     * the other carry on and sheared the arrangement.
+     * As far as the most constrained member can go. A widget already as far past the right
+     * edge as it may go cannot step right, so neither does the set — clamping each on its
+     * own would have let the other carry on and sheared the arrangement.
      */
     @Test fun aMemberAtTheEdgeHoldsTheWholeSet() {
+        val rightLimit = PanelWidth - offFaceKeepVisible(40)
         val (vm, repository) = opened(listOf(
-            widget(1, x = 20, y = 20), widget(2, x = PanelWidth - 40, y = 120),
+            widget(1, x = 20, y = 20), widget(2, x = rightLimit, y = 120),
         ))
         vm.selectWidget(1)
         vm.toggleInSelection(2)
@@ -371,7 +372,7 @@ class EditorSelectionSetTest {
         vm.nudgeSelection(-5, 0)
         settle()
         assertEquals(listOf(15 to 20), repository.moves.getValue(1))
-        assertEquals(listOf(PanelWidth - 45 to 120), repository.moves.getValue(2))
+        assertEquals(listOf(rightLimit - 5 to 120), repository.moves.getValue(2))
     }
 
     /**

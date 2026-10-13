@@ -886,6 +886,7 @@ Imports and raster growth can also cross the ceiling.
 | Panel geometry comes from the declared entry path, not image 0 | `panelSize`; `00022` starts with a 37×28 icon; `00108` styles 0–3 with a 204×204 dial |
 | Backgrounds are exactly widgets drawing panel-sized rasters | Multiple layers are legal (`00076`, `00089`); `backgroundImage` may be null |
 | Position is `origin + stored` | `WidgetLayout`, `drawLeft/drawTop`; write-back subtracts origin, never guesses from the sign |
+| A widget may hang past the panel edge | Vendor faces ship it: a 2026-10 census of the 99 containers found 44 rasters on five faces (`00002`, `00016`, `00023`, `00024`, `00096`) drawn up to 11 px past an edge, plus 159 text boxes; none is wholly off. The editor's one clamp, `constrainDragCoordinate` with `offFaceKeepVisible`, keeps a tenth of the drawn outline per axis (at least 10 px, at most all of it) on the panel for drag, nudge, set nudge and typed positions, and admits a starting position already further out. Write-back and the signed 16-bit range are unchanged. Larger overhangs than the vendor ones have not been sent to a watch |
 | Hand selection differs from rendering | `WidgetPlacement.HIDDEN` suppresses a false axis-aligned outline; hands still render and can be selected from the list |
 | Exact type schemas, not a generic minimum size | All 4,034 producer records have their type's exact size; a 40-byte Composite is not a valid 100-byte record |
 | Four alignment-reference fields only | Static/Hand `+0x1E`, Value/Composite `+0x22`, enabled by the adjacent code; see §7 |
@@ -1181,7 +1182,9 @@ style-local and the selected style's pixel size would squash a sibling turned di
 rung down while turned. `ArtworkTurnTest` covers quarter and arbitrary turns, aligned and
 shared widgets, opaque pictures, refusals and resize while turned, and turns 168 distinct
 artwork pools in the first style of the 99 faces and back to their shipped bytes. `CanvasIntegrityTest`
-checks a turned line, arc or picture changes only pixels inside rectangles that changed.
+checks a turned line, arc or picture changes only pixels inside rectangles that changed,
+and that a widget pushed to the off-panel limit past each edge keeps its artwork and changes
+only pixels inside rectangles that moved.
 Rotation editing has software/corpus/emulator coverage; physical-watch checks of changed
 live text, clipping, turned lines, arcs and artwork, and wake behaviour remain unperformed.
 Resized artwork with new dimensions is accepted on hardware; turned artwork, including an
@@ -1383,9 +1386,10 @@ widget import, and original/modified standalone-BIN installation.
 These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
 need particular attention; imported type/source combinations remain incompletely
 verified. Composite, Rule and vector arc recolours are software/corpus/emulator checked
-only. No AOD edit (including added background), imported-image deletion, or the
-single-style custom-template recipe has been verified on a watch. Resource preview
-tests prove joins and edit invariants, not exact ROM fonts, antialiasing or live data.
+only, as are overhangs larger than the vendor faces' 11 px. No AOD edit (including
+added background), imported-image deletion, or the single-style custom-template recipe
+has been verified on a watch. Resource preview tests prove joins and edit invariants,
+not exact ROM fonts, antialiasing or live data.
 `AodCanvasSweepTest` covers all 99 AOD entries in software. Other firmware may
 read fields treated as no-effect here. Delivery recovery gaps
 are tracked in [Direct install](direct-install.md#unverified).

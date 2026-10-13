@@ -236,7 +236,8 @@ class EditorViewModelTest {
     /**
      * A held nudge cannot walk a widget off the panel. It used to be bounded only by the
      * Short range, and a widget nudged past the edge could no longer be tapped at all —
-     * only the Widgets list could reach it again.
+     * only the Widgets list could reach it again. It may hang past an edge now (issue #14),
+     * but [offFaceKeepVisible] of it always stays on the face to tap.
      */
     @Test
     fun nudgingHoldsTheWidgetOnThePanel() {
@@ -253,8 +254,10 @@ class EditorViewModelTest {
         val moved = requireNotNull(
             viewModel.state.value.snapshot?.widgets?.single { it.globalIndex == 1 },
         )
-        assertEquals("held at the left edge", 0, moved.drawLeft)
-        assertEquals("held at the top edge", 0, moved.drawTop)
+        val overhang = 40 - offFaceKeepVisible(40)
+        assertEquals("held with 10 px still on the face", 10, offFaceKeepVisible(40))
+        assertEquals("held past the left edge", -overhang, moved.drawLeft)
+        assertEquals("held past the top edge", -overhang, moved.drawTop)
     }
 
     /**
@@ -283,10 +286,11 @@ class EditorViewModelTest {
         assertEquals("one pixel right, not flung across the face", before + 1, moved.drawLeft)
     }
 
-    /** Nudging into an edge the widget is already against changes nothing at all. */
+    /** Nudging past the furthest a widget may hang off the face changes nothing at all. */
     @Test
     fun aNudgeRefusedByTheClampCommitsNothing() {
-        val atEdge = widget(globalIndex = 1, x = 0, y = 0)
+        val limit = -(40 - offFaceKeepVisible(40))
+        val atEdge = widget(globalIndex = 1, x = limit, y = limit)
         val repository = FakeRepository(snapshot(listOf(atEdge)), commitImmediately = true)
         val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
@@ -297,6 +301,48 @@ class EditorViewModelTest {
 
         assertEquals(0, repository.attempts)
         assertNull(viewModel.state.value.pendingWidgetMove)
+    }
+
+    /**
+     * A typed position or a Centre tap is measured from the move being saved, like a nudge,
+     * so it lands where it says even while an earlier nudge is still committing.
+     */
+    @Test
+    fun aPlacedPositionLandsWhereItSaysWhileANudgeIsSaving() {
+        val repository = FakeRepository(snapshot(widgets))
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+
+        viewModel.nudgeWidget(1, 1, 0)
+        settle() // 21 is in flight, but the snapshot still reports 20.
+        viewModel.placeWidget(1, left = 100, top = null)
+        assertEquals(100f, viewModel.state.value.pendingWidgetMove?.displayX)
+        assertEquals(20f, viewModel.state.value.pendingWidgetMove?.displayY)
+        repository.releaseAll()
+        settle()
+        assertEquals(listOf(21 to 20, 100 to 20), repository.committed(1))
+    }
+
+    /** The edges are the drawn ones, written back through the origin and held by the clamp. */
+    @Test
+    fun aPlacedPositionIsWrittenThroughTheOriginAndClamped() {
+        val anchored = widget(globalIndex = 1, x = -30, y = -40, originX = 216, originY = 362)
+        val repository = FakeRepository(snapshot(listOf(anchored)), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+
+        viewModel.placeWidget(1, left = 100, top = 50)
+        settle()
+        viewModel.placeWidget(1, left = 1000, top = null)
+        settle()
+        val limit = PanelWidth - offFaceKeepVisible(40)
+        viewModel.placeWidget(1, left = limit, top = 50)
+        settle()
+
+        assertEquals(listOf(-116 to -312, limit - 216 to -312), repository.committed(1))
+        assertEquals("the last one was already there", 2, repository.attempts)
     }
 
     /**

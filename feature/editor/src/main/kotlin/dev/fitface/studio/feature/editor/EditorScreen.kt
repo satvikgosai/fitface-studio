@@ -89,6 +89,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -102,6 +103,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -289,6 +291,7 @@ fun EditorRoute(
         ),
         onMoveWidget = viewModel::moveWidget,
         onNudgeWidget = viewModel::nudgeWidget,
+        onPlaceWidget = viewModel::placeWidget,
         onRemoveWidget = viewModel::removeSelectedWidget,
         onDuplicateWidget = viewModel::duplicateSelectedWidget,
         onRestoreWidget = viewModel::restoreWidget,
@@ -392,6 +395,7 @@ private fun EditorScreen(
     selection: SelectionActions,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
+    onPlaceWidget: (Int, Int?, Int?) -> Unit,
     onRemoveWidget: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRestoreWidget: (Long) -> Unit,
@@ -553,6 +557,7 @@ private fun EditorScreen(
                         selection = selection,
                         onMoveWidget = onMoveWidget,
                         onNudgeWidget = onNudgeWidget,
+                        onPlaceWidget = onPlaceWidget,
                         onRemoveWidget = onRemoveWidget,
                         onDuplicateWidget = onDuplicateWidget,
                         onRestoreWidget = onRestoreWidget,
@@ -1032,6 +1037,7 @@ private fun EditorPageContent(
     selection: SelectionActions,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
+    onPlaceWidget: (Int, Int?, Int?) -> Unit,
     onRemoveWidget: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRestoreWidget: (Long) -> Unit,
@@ -1098,7 +1104,7 @@ private fun EditorPageContent(
             modifier = modifier,
         )
         EditorPage.Inspector -> InspectorWorkspace(
-            state, snapshot, selected, onNudgeWidget, onApplyAll, onRemoveWidget,
+            state, snapshot, selected, onNudgeWidget, onPlaceWidget, onApplyAll, onRemoveWidget,
             onDuplicateWidget, onResizeWidget, onWidgetColor, onRotateWidget, onArrangeWidget, modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
@@ -1296,6 +1302,22 @@ private fun CanvasHint(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Said as what the watch does rather than as a warning: a widget hanging off the face
+        // is a design choice, not a fault. Its line is kept, blank, whenever one widget is
+        // selected, because the face is sized to the space left: showing it only when needed
+        // shrank the face as a widget crossed an edge and grew it again on the way back.
+        val snapshot = state.snapshot
+        if (selected != null && setSize == 0 && selected.placement == WidgetPlacement.CANVAS) {
+            val off = snapshot != null &&
+                isPartlyOffFace(selected, snapshot.preview.width, snapshot.preview.height)
+            Text(
+                if (off) stringResource(R.string.editor_canvas_partly_off_face) else "",
+                modifier = Modifier.widthIn(max = 300.dp)
+                    .then(if (off) Modifier else Modifier.clearAndSetSemantics {}),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (selected == null && setSize == 0) {
             TextButton(onClick = onOpenWidgets) {
                 Text(
@@ -2539,6 +2561,7 @@ private fun InspectorWorkspace(
     snapshot: EditorSnapshot,
     widget: WidgetGuide?,
     onNudgeWidget: (Int, Int, Int) -> Unit,
+    onPlaceWidget: (Int, Int?, Int?) -> Unit,
     onApplyAll: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onDuplicate: () -> Unit,
@@ -2662,6 +2685,17 @@ private fun InspectorWorkspace(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.fitText.secondary,
             )
+            if (isPartlyOffFace(widget, snapshot.preview.width, snapshot.preview.height)) {
+                Text(
+                    stringResource(R.string.editor_canvas_partly_off_face),
+                    modifier = Modifier.padding(top = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }
+            PositionEntry(
+                widget, snapshot.preview.width, snapshot.preview.height, widget.canEditPosition,
+            ) { left, top -> onPlaceWidget(widget.globalIndex, left, top) }
         }
         WidgetSizeControls(widget, !state.isWorking, onResize)
         RotationControls(widget, snapshot, state.applyWidgetEditsToAllStyles, !state.isWorking, onRotate)
@@ -2965,6 +2999,97 @@ private fun CoordinateControl(
             RepeatingNudgeButton(increase, enabled, Modifier.weight(1f), onPlus)
         }
     }
+}
+
+/**
+ * An exact position: type the left and top edges, or centre the widget on the face.
+ *
+ * On the page rather than in a dialog, for the reason rotation is: a position is judged
+ * against the preview above. The fields take the same numbers the readouts show. One past
+ * the off-face limit is refused with the range rather than quietly clamped, so what is
+ * applied is what was typed.
+ */
+@Composable
+private fun PositionEntry(
+    widget: WidgetGuide,
+    panelWidth: Int,
+    panelHeight: Int,
+    enabled: Boolean,
+    onPlace: (Int?, Int?) -> Unit,
+) {
+    // Keyed on the position, so a nudge or drag that lands refills the fields.
+    var typedX by rememberSaveable(widget.globalIndex, widget.drawLeft) {
+        mutableStateOf(widget.drawLeft.toString())
+    }
+    var typedY by rememberSaveable(widget.globalIndex, widget.drawTop) {
+        mutableStateOf(widget.drawTop.toString())
+    }
+    val rangeX = placeableRange(widget, panelWidth, horizontal = true)
+    val rangeY = placeableRange(widget, panelHeight, horizontal = false)
+    val left = typedX.trim().toIntOrNull()?.takeIf { it in rangeX }
+    val top = typedY.trim().toIntOrNull()?.takeIf { it in rangeY }
+    val centreX = centredDrawEdge(widget, panelWidth, horizontal = true)
+    val centreY = centredDrawEdge(widget, panelHeight, horizontal = false)
+    Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PositionField(
+                R.string.editor_position_x_field, typedX, { typedX = it }, rangeX, left != null, enabled,
+                Modifier.weight(1f),
+            )
+            PositionField(
+                R.string.editor_position_y_field, typedY, { typedY = it }, rangeY, top != null, enabled,
+                Modifier.weight(1f),
+            )
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FitButton(
+                stringResource(R.string.editor_position_apply),
+                { if (left != null && top != null) onPlace(left, top) },
+                enabled = enabled && left != null && top != null &&
+                    (left != widget.drawLeft || top != widget.drawTop),
+                style = FitButtonStyle.Secondary,
+            )
+            FitButton(
+                stringResource(R.string.editor_position_centre_x),
+                { onPlace(centreX, null) },
+                enabled = enabled && centreX != widget.drawLeft && centreX in rangeX,
+                style = FitButtonStyle.Secondary,
+            )
+            FitButton(
+                stringResource(R.string.editor_position_centre_y),
+                { onPlace(null, centreY) },
+                enabled = enabled && centreY != widget.drawTop && centreY in rangeY,
+                style = FitButtonStyle.Secondary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PositionField(
+    @StringRes label: Int,
+    value: String,
+    onValueChange: (String) -> Unit,
+    range: IntRange,
+    valid: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        enabled = enabled,
+        singleLine = true,
+        label = { Text(stringResource(label)) },
+        isError = !valid,
+        supportingText = {
+            Text(stringResource(R.string.editor_position_range, range.first, range.last))
+        },
+    )
 }
 
 @Composable
@@ -4151,7 +4276,13 @@ private fun DirectWatchCanvas(
             .pointerInput(snapshot.selectedVariant.basename, pendingImage?.uri, editing) {
                 if (pendingImage == null && editing) {
                     detectDragGestures(
-                        onDragStart = { position ->
+                        orientationLock = null,
+                        // Hit-tested where the finger went down, not where it had got to
+                        // when the touch slop was passed. A widget hanging off the face may
+                        // show only 10 px, and dragging that slice back in moved the start
+                        // point off it before the hit test ran, so the drag found nothing.
+                        onDragStart = { down, _, _ ->
+                            val position = down.position
                             // A set moves with the arrows, together. Dragging one member
                             // would pull it out of the arrangement the set is for.
                             if (!latestEnabled || latestMultiSelection.isNotEmpty()) {
@@ -4209,6 +4340,7 @@ private fun DirectWatchCanvas(
                                     extent = widget.visualBounds.width,
                                     canvasExtent = current.preview.width,
                                     drawOffset = widget.visualOffsetX,
+                                    keepVisible = offFaceKeepVisible(widget.visualBounds.width),
                                 )
                                 val vertical = stepDragAxis(
                                     track = dragTrack.y,
@@ -4217,6 +4349,7 @@ private fun DirectWatchCanvas(
                                     extent = widget.visualBounds.height,
                                     canvasExtent = current.preview.height,
                                     drawOffset = widget.visualOffsetY,
+                                    keepVisible = offFaceKeepVisible(widget.visualBounds.height),
                                 )
                                 dragTrack = Offset(horizontal.track, vertical.track)
                                 draggingPosition = Offset(horizontal.position, vertical.position)
@@ -4227,7 +4360,7 @@ private fun DirectWatchCanvas(
                             if (draggingIndex >= 0) onWidget(draggingIndex)
                             draggingIndex = -1
                         },
-                        onDragEnd = {
+                        onDragEnd = { _ ->
                             if (draggingIndex >= 0) {
                                 val current = latestSnapshot
                                 val widget = current.widgets.firstOrNull {
@@ -4363,9 +4496,21 @@ private fun DirectWatchCanvas(
                         size = Size(widget.visualBounds.width * scaleX, widget.visualBounds.height * scaleY),
                         style = Stroke(if (selected) 2.dp.toPx() else 1.dp.toPx()),
                     )
+                    if (selected) {
+                        drawOffFaceMarkers(
+                            left = x * scaleX,
+                            top = y * scaleY,
+                            width = widget.visualBounds.width * scaleX,
+                            height = widget.visualBounds.height * scaleY,
+                            color = selectedGuideColor,
+                            thickness = 4.dp.toPx(),
+                        )
+                    }
                     if (order >= 0) {
-                        drawPickBadge(order + 1, Offset(x * scaleX, y * scaleY),
-                            selectedGuideColor, badgeMeasurer)
+                        // Held inside the face, or a widget hanging off the top-left edge
+                        // would lose the number that says where it is in the set.
+                        drawPickBadge(order + 1, Offset((x * scaleX).coerceAtLeast(0f),
+                            (y * scaleY).coerceAtLeast(0f)), selectedGuideColor, badgeMeasurer)
                     }
                 }
             }
@@ -5158,17 +5303,107 @@ internal fun constrainDragCoordinate(
     extent: Int,
     canvasExtent: Int,
     drawOffset: Int = 0,
+    /**
+     * How much of the widget has to stay on the face. The whole of it by default; the
+     * editor passes [offFaceKeepVisible] so a widget can hang partly off an edge.
+     */
+    keepVisible: Int = extent,
 ): Float {
+    val visible = keepVisible.coerceIn(0, extent.coerceAtLeast(0))
     // Negated as an Int, not as a Float: `-drawOffset.toFloat()` is -0.0f at the common
     // drawOffset of 0, and coerceIn hands that back as the clamped value, so a widget held
     // at the left edge reported -0.0 where every caller and test expects 0.0.
-    val minimum = minOf((-drawOffset).toFloat(), starting)
+    val minimum = minOf((-(extent - visible) - drawOffset).toFloat(), starting)
     val maximum = maxOf(
-        ((canvasExtent - extent).coerceAtLeast(0) - drawOffset).toFloat(),
+        ((canvasExtent - visible).coerceAtLeast(0) - drawOffset).toFloat(),
         starting,
     )
     return proposed.coerceIn(minimum, maximum)
 }
+
+/**
+ * A bar along each face edge the selected widget continues past, spanning the part of that
+ * edge it crosses, so a widget hanging off the face reads as continuing rather than cut.
+ */
+private fun DrawScope.drawOffFaceMarkers(
+    left: Float,
+    top: Float,
+    width: Float,
+    height: Float,
+    color: Color,
+    thickness: Float,
+) {
+    val right = left + width
+    val bottom = top + height
+    val spanTop = top.coerceIn(0f, size.height)
+    val spanBottom = bottom.coerceIn(0f, size.height)
+    val spanLeft = left.coerceIn(0f, size.width)
+    val spanRight = right.coerceIn(0f, size.width)
+    if (left < 0f && spanBottom > spanTop) {
+        drawRect(color, Offset(0f, spanTop), Size(thickness, spanBottom - spanTop))
+    }
+    if (right > size.width && spanBottom > spanTop) {
+        drawRect(color, Offset(size.width - thickness, spanTop), Size(thickness, spanBottom - spanTop))
+    }
+    if (top < 0f && spanRight > spanLeft) {
+        drawRect(color, Offset(spanLeft, 0f), Size(spanRight - spanLeft, thickness))
+    }
+    if (bottom > size.height && spanRight > spanLeft) {
+        drawRect(color, Offset(spanLeft, size.height - thickness), Size(spanRight - spanLeft, thickness))
+    }
+}
+
+/** Whether [widget]'s drawn rectangle crosses an edge of a [panelWidth] × [panelHeight] face. */
+internal fun isPartlyOffFace(widget: WidgetGuide, panelWidth: Int, panelHeight: Int): Boolean {
+    val left = widget.drawLeft + widget.visualBounds.left
+    val top = widget.drawTop + widget.visualBounds.top
+    return left < 0 || top < 0 ||
+        left + widget.visualBounds.width > panelWidth || top + widget.visualBounds.height > panelHeight
+}
+
+/**
+ * The left edge ([horizontal]) or top edge that centres [widget] on a face [panelExtent]
+ * wide or tall. Measured on the turned outline, so a turned picture is centred as it looks.
+ */
+internal fun centredDrawEdge(widget: WidgetGuide, panelExtent: Int, horizontal: Boolean): Int {
+    val bounds = widget.visualBounds
+    return if (horizontal) {
+        (panelExtent - bounds.width) / 2 - bounds.left
+    } else {
+        (panelExtent - bounds.height) / 2 - bounds.top
+    }
+}
+
+/**
+ * The left edges ([horizontal]) or top edges [widget] may be given: the drag and nudge clamp,
+ * widened to admit where it already is, in the numbers Edit widget shows.
+ */
+internal fun placeableRange(widget: WidgetGuide, panelExtent: Int, horizontal: Boolean): IntRange {
+    val bounds = widget.visualBounds
+    val extent = if (horizontal) bounds.width else bounds.height
+    val current = (if (horizontal) widget.drawLeft else widget.drawTop).toFloat()
+    fun limit(proposed: Float) = constrainDragCoordinate(
+        proposed, current, extent, panelExtent,
+        drawOffset = if (horizontal) bounds.left else bounds.top,
+        keepVisible = offFaceKeepVisible(extent),
+    ).roundToInt()
+    return limit(Float.NEGATIVE_INFINITY)..limit(Float.POSITIVE_INFINITY)
+}
+
+/**
+ * How much of a widget has to stay on the face when it is pushed past an edge (issue #14):
+ * a tenth of it, but never less than [OffFaceMinimumVisible] panel pixels, and never more
+ * than the widget itself. Measured per axis, on the drawn outline.
+ *
+ * Enough remains to see and to tap again, so a widget pushed aside can always be brought
+ * back from the canvas. Vendor faces already hang artwork up to 11 px off the panel
+ * (`00002`, `00016`, `00023`, `00024`, `00096`), and the watch clips it; larger overhangs
+ * have not been checked on a watch.
+ */
+internal fun offFaceKeepVisible(extent: Int): Int =
+    minOf(extent, maxOf(OffFaceMinimumVisible, extent / 10)).coerceAtLeast(0)
+
+internal const val OffFaceMinimumVisible = 10
 
 /**
  * One axis of a drag: the finger's own running total, and the position to draw and commit.
@@ -5188,11 +5423,12 @@ internal fun stepDragAxis(
     extent: Int,
     canvasExtent: Int,
     drawOffset: Int = 0,
+    keepVisible: Int = extent,
 ): DragAxis {
     val moved = track + delta
     return DragAxis(
         track = moved,
-        position = constrainDragCoordinate(moved, starting, extent, canvasExtent, drawOffset),
+        position = constrainDragCoordinate(moved, starting, extent, canvasExtent, drawOffset, keepVisible),
     )
 }
 

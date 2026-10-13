@@ -25,6 +25,8 @@ import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.WidgetResizeStepPercent
+import dev.fitface.studio.core.model.drawLeft
+import dev.fitface.studio.core.model.drawTop
 import dev.fitface.studio.core.model.nextWidgetSize
 import dev.fitface.studio.core.model.widgetSizePercent
 import javax.inject.Inject
@@ -719,7 +721,27 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
-     * Holds a nudged widget's rectangle on the panel.
+     * Moves a widget so its drawn rectangle's left and top edges land on [left] and [top],
+     * the numbers Edit widget shows; null leaves that axis where it is. Typed positions and
+     * the Centre buttons come here.
+     *
+     * Measured from the queued target, not the snapshot, so a number typed while a nudge is
+     * still committing lands where it says. It is then a nudge by the difference, with the
+     * same clamp, range check and commit queue.
+     */
+    fun placeWidget(globalIndex: Int, left: Int?, top: Int?) {
+        val snapshot = mutableState.value.snapshot ?: return
+        val widget = snapshot.widgets.firstOrNull { it.globalIndex == globalIndex } ?: return
+        val base = pendingTarget(snapshot.selectedVariant.basename, globalIndex)
+            ?: PendingWidgetTarget(widget.x, widget.y, widget.type, widget.sequenceId)
+        val deltaX = left?.let { it - (widget.drawLeft + base.x - widget.x) } ?: 0
+        val deltaY = top?.let { it - (widget.drawTop + base.y - widget.y) } ?: 0
+        if (deltaX != 0 || deltaY != 0) nudgeWidget(globalIndex, deltaX, deltaY)
+    }
+
+    /**
+     * Keeps a nudged widget on the panel: at least [offFaceKeepVisible] of it, so it can hang
+     * partly past an edge (issue #14) yet always be tapped again.
      *
      * A nudge works in *stored* coordinates, and a stored coordinate is legitimately
      * negative — it is an offset from whatever the widget is positioned against, and a
@@ -748,6 +770,7 @@ class EditorViewModel @Inject constructor(
                     extent = widget.visualBounds.width,
                     canvasExtent = snapshot.preview.width,
                     drawOffset = widget.visualOffsetX,
+                    keepVisible = offFaceKeepVisible(widget.visualBounds.width),
                 ).roundToInt(),
                 origin = widget.originX,
             ),
@@ -758,6 +781,7 @@ class EditorViewModel @Inject constructor(
                     extent = widget.visualBounds.height,
                     canvasExtent = snapshot.preview.height,
                     drawOffset = widget.visualOffsetY,
+                    keepVisible = offFaceKeepVisible(widget.visualBounds.height),
                 ).roundToInt(),
                 origin = widget.originY,
             ),
