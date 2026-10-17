@@ -276,7 +276,12 @@ artwork on its next resize. See [format: rotating widgets](bin-format.md#rotatin
 The same checkpoint commits survivor identities, filtered/remapped removed records
 and active-style fallback with the edited BIN. Packaged PNG files retain pristine
 names; the editor and library resolve them through the survivor map. The library
-caches only the small map by immutable checkpoint path, bounded to 64 checkpoints.
+reads only that map, from the head of each checkpoint (`readCheckpointVariants`): the
+session state is written lineage first and container last, so the read stops within
+the first few hundred bytes, and a schema before 3 has no map to look for. Decoding whole
+checkpoints instead held the first list of 79 projects back 8–40 s on the emulator (debug
+build). It caches the small map by immutable checkpoint path, bounded to 64 checkpoints,
+and checks the chosen `style<N>.png` directly, listing the previews only as a fallback.
 Reset restores the pristine variant identities and bytes. No database version
 change or extra storage permission is required.
 

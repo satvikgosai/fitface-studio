@@ -11,6 +11,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -46,14 +49,17 @@ class StylePreviewProjectTest {
         database = Room.inMemoryDatabaseBuilder(context, FitFaceDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repository = WatchFaceRepositoryImpl(
-            context = context,
-            projectDao = database.projectDao(),
-            imageSource = AndroidImageSource(context.contentResolver),
-            contentResolver = context.contentResolver,
-            diagnostics = DiagnosticsLog(),
-        )
+        repository = newRepository()
     }
+
+    /** A new repository is a new process: nothing it reads is cached yet. */
+    private fun newRepository() = WatchFaceRepositoryImpl(
+        context = context,
+        projectDao = database.projectDao(),
+        imageSource = AndroidImageSource(context.contentResolver),
+        contentResolver = context.contentResolver,
+        diagnostics = DiagnosticsLog(),
+    )
 
     // Both guards matter: with no corpus the assumption in `setUp` fires before either
     // field is assigned, and an uninitialised `lateinit` read here would turn every
@@ -114,6 +120,71 @@ class StylePreviewProjectTest {
         s = repository.resetEdits()
         assertEquals("style2.bin", s.activeStyleName)
         assertEquals(original.styleNames.size, s.styleNames.size)
+    }
+
+    /**
+     * The list reads only the style map at the head of a checkpoint. Decoding whole
+     * checkpoints held the first list back 7–8 s on a cold start; here the saved container
+     * is cut short, so a list that still decoded it would lose the map and show the wrong
+     * style, the deleted style's neighbour.
+     */
+    @Test
+    fun aColdListFollowsTheStyleMapWithoutDecodingTheSavedContainer() = runBlocking {
+        val original = repository.openPackage(facePackage(styleId = 2))
+        val expected = original.stylePreviewPaths.getValue("style2.bin")
+        val s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        assertEquals("style1.bin", s.activeStyleName)
+        val checkpoint = File(requireNotNull(database.projectDao().findById(s.projectId)?.editedBinPath))
+        val text = checkpoint.readText()
+        assertTrue("the lineage is not at the head of the file", text.startsWith("{\"schema\":3,\"lineage\":{"))
+        val container = text.indexOf("\"editedContainer\":\"")
+        assertEquals("the container is not written last", text.length - 2,
+            text.indexOf('"', container + "\"editedContainer\":\"".length))
+        checkpoint.writeText(text.substring(0, container + 40))
+
+        repository = newRepository()
+        assertEquals(expected, repository.observeProjects().first().single().previewImagePath)
+    }
+
+    /**
+     * Checkpoints written before the lineage moved to the head keep removed records and
+     * import baselines ahead of it, and stay that way until their next edit. The list must
+     * still find the map behind them, and opening, which decodes the whole file, must not
+     * care about the order at all.
+     */
+    @Test
+    fun aCheckpointInTheEarlierFieldOrderStillPicksItsPreviewAndOpens() = runBlocking {
+        val original = repository.openPackage(facePackage(styleId = 2))
+        val expected = original.stylePreviewPaths.getValue("style2.bin")
+        var s = repository.deleteStyles(setOf("style0.bin"), repository.styleManagement().revision)
+        val widget = s.widgets.first { candidate ->
+            candidate.width > 0 && candidate.height > 0 &&
+                s.widgets.none { it.alignedToGlobalIndex == candidate.globalIndex }
+        }
+        s = repository.removeWidget(
+            styleName = s.selectedVariant.basename,
+            globalIndex = widget.globalIndex,
+            widgetType = widget.type,
+            sequenceId = widget.sequenceId,
+            x = widget.x,
+            y = widget.y,
+            requireFinal = false,
+            applyToAllStyles = false,
+        )
+        assertEquals(1, s.removedWidgets.size)
+        val checkpoint = File(requireNotNull(database.projectDao().findById(s.projectId)?.editedBinPath))
+        val fields = Json.parseToJsonElement(checkpoint.readText()).jsonObject
+        val earlierOrder = listOf("schema", "thumbnailRefreshed", "removed", "importOrigins", "lineage", "editedContainer")
+        assertTrue("a field the earlier order does not name: ${fields.keys}", earlierOrder.containsAll(fields.keys))
+        checkpoint.writeText(JsonObject(earlierOrder.mapNotNull { key -> fields[key]?.let { key to it } }.toMap()).toString())
+        assertTrue("the removed records are not ahead of the lineage", checkpoint.readText().startsWith("{\"schema\":3,\"removed\":["))
+
+        repository = newRepository()
+        assertEquals(expected, repository.observeProjects().first().single().previewImagePath)
+        val reopened = repository.openProject(s.projectId)
+        assertEquals("style1.bin", reopened.activeStyleName)
+        assertEquals(1, reopened.removedWidgets.size)
+        assertEquals(expected, reopened.stylePreviewPaths.getValue("style1.bin"))
     }
 
     @Test

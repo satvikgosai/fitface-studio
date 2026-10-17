@@ -277,7 +277,7 @@ private fun LibraryScreen(
             LibraryHeader(
                 page = page,
                 state = state,
-                projectCount = state.projects.size,
+                projectCount = state.projects.size.takeIf { state.projectsLoaded },
                 loading = state.isLoadingCatalog,
                 onPage = { page = it },
                 onRefresh = onRefresh,
@@ -348,7 +348,8 @@ private val ACTION_TOUCH_TARGET = 48.dp
 internal fun LibraryHeader(
     page: LibraryPage,
     state: LibraryUiState,
-    projectCount: Int,
+    /** Null until the projects have been read, so the tab never claims none. */
+    projectCount: Int?,
     loading: Boolean,
     onPage: (LibraryPage) -> Unit,
     onRefresh: () -> Unit,
@@ -482,7 +483,8 @@ internal fun LibraryHeader(
                 modifier = Modifier.weight(1f),
             )
             FitChip(
-                text = stringResource(R.string.library_tab_projects, projectCount),
+                text = projectCount?.let { stringResource(R.string.library_tab_projects, it) }
+                    ?: stringResource(R.string.library_tab_projects_loading),
                 selected = page == LibraryPage.Projects,
                 onClick = { onPage(LibraryPage.Projects) },
                 modifier = Modifier.weight(1f),
@@ -594,8 +596,13 @@ private fun WatchFaceGrid(
 }
 
 @Composable
-private fun CatalogLoading() {
-    val loadingDescription = stringResource(R.string.library_loading_a11y)
+private fun CatalogLoading() = LoadingRow(
+    stringResource(R.string.library_loading_title),
+    stringResource(R.string.library_loading_a11y),
+)
+
+@Composable
+private fun LoadingRow(title: String, loadingDescription: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -607,12 +614,7 @@ private fun CatalogLoading() {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        Column {
-            Text(
-                stringResource(R.string.library_loading_title),
-                style = MaterialTheme.typography.titleSmall,
-            )
-        }
+        Text(title, style = MaterialTheme.typography.titleSmall)
     }
 }
 
@@ -1065,6 +1067,15 @@ private fun ProjectsList(
         contentPadding = LibraryPageInsets,
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
+        if (!state.projectsLoaded) {
+            item {
+                LoadingRow(
+                    stringResource(R.string.library_projects_loading_title),
+                    stringResource(R.string.library_projects_loading_a11y),
+                )
+            }
+            return@LazyColumn
+        }
         if (state.projects.isEmpty()) {
             item { ProjectsEmptyState(onBrowse) }
             item { CustomFaceCard(state, startCustomFace) }

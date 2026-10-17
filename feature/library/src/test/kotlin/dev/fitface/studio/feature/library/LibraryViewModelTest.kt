@@ -20,6 +20,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -71,6 +72,25 @@ class LibraryViewModelTest {
     )
     private val repository = mockk<WatchFaceRepository>(relaxed = true) {
         every { observeProjects() } returns emptyFlow()
+    }
+
+    /**
+     * Before the first read the list is empty without being known to be, and the Projects
+     * tab read "Projects 0" over "No projects yet" until it arrived — seconds, with many
+     * edited projects. An empty first read is still a read.
+     */
+    @Test
+    fun theProjectsAreUnknownUntilTheFirstReadEvenAnEmptyOne() {
+        val saved = MutableSharedFlow<List<ProjectSummary>>(extraBufferCapacity = 1)
+        every { repository.observeProjects() } returns saved
+        val viewModel = LibraryViewModel(repository, FakeCatalog(loaded = catalogue), DiagnosticsLog(), reporter())
+        settle()
+        assertFalse(viewModel.state.value.projectsLoaded)
+
+        saved.tryEmit(emptyList())
+        settle()
+        assertTrue(viewModel.state.value.projectsLoaded)
+        assertEquals(emptyList<ProjectSummary>(), viewModel.state.value.projects)
     }
 
     /** The bug: a tap in the cache-painted window before the network answers. */

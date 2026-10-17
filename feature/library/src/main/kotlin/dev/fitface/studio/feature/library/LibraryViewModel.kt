@@ -56,6 +56,12 @@ data class LibraryUiState(
      * them" is a question neither flow can answer alone.
      */
     val projects: List<ProjectSummary> = emptyList(),
+    /**
+     * Whether [projects] has been read at all. Until it has, an empty list means "not read
+     * yet", not "none": showing "Projects 0" and "No projects yet" to someone with saved work
+     * is alarming however briefly it lasts.
+     */
+    val projectsLoaded: Boolean = false,
     val projectQuery: String = "",
     val projectSort: ProjectSort = ProjectSort.RECENT,
     val projectSortReversed: Boolean = false,
@@ -305,7 +311,7 @@ class LibraryViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             repository.observeProjects().collect { saved ->
-                mutableState.update { it.copy(projects = saved) }
+                mutableState.update { it.copy(projects = saved, projectsLoaded = true) }
             }
         }
         viewModelScope.launch {

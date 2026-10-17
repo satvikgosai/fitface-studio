@@ -18,6 +18,8 @@
     <string name="library_action_syncing">SYNCING</string>
     <string name="library_tab_watch_faces">@string/library_title_watch_faces</string>
     <string name="library_tab_projects">Projects %1$d</string>
+    <!-- Before the saved projects have been read: no count, rather than a false 0. -->
+    <string name="library_tab_projects_loading">Projects</string>
 
     <!-- Catalogue grid -->
     <string name="library_catalogue_a11y">Watch face catalogue</string>
@@ -120,6 +122,8 @@
     <!-- Projects -->
     <string name="library_projects_saved">Saved automatically</string>
     <string name="library_projects_local_count">%1$d local</string>
+    <string name="library_projects_loading_title">Loading projects…</string>
+    <string name="library_projects_loading_a11y">Loading your saved projects</string>
     <string name="library_projects_empty_title">No projects yet</string>
     <string name="library_projects_empty_detail">Download a watch face or import a project to start. The original and your applied edits are saved privately on this device.</string>
     <string name="library_browse">Browse watch faces</string>

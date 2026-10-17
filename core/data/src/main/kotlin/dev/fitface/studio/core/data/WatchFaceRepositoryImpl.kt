@@ -4,6 +4,8 @@ import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.JsonReader
+import android.util.JsonToken
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -2356,6 +2358,47 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
     private fun isCheckpoint(file: File) = file.name.matches(CHECKPOINT_NAME)
 
+    /**
+     * The checkpoint's style-name map ([SessionLineage.variants]) and nothing else, read from
+     * the head of the file.
+     *
+     * The projects list needs only this, to pick each row's thumbnail, and [readCheckpoint]
+     * decodes the whole file: a base64 container of up to several MB. Done for every edited
+     * project, that held the first list back by 7–8 s on a cold start (emulator, 27 edited
+     * projects). `JsonReader` skips no faster than that decode reads (searching every file
+     * end to end took 25 s), so this must not skip far: a schema before 3 has no lineage, and
+     * the container is written last, so meeting it means there is no map to find.
+     * [StoredSessionState] writes the lineage early, before import baselines that can run to
+     * megabytes; files written before it did are read past those, slower but still correct.
+     */
+    private fun readCheckpointVariants(file: File): Map<String, String> =
+        JsonReader(file.bufferedReader()).use { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "schema" -> if (reader.nextInt() < 3) return@use emptyMap()
+                    "editedContainer" -> return@use emptyMap()
+                    "lineage" -> {
+                        if (reader.peek() != JsonToken.BEGIN_OBJECT) return@use emptyMap()
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            if (reader.nextName() != "variants") {
+                                reader.skipValue()
+                                continue
+                            }
+                            val variants = linkedMapOf<String, String>()
+                            reader.beginObject()
+                            while (reader.hasNext()) variants[reader.nextName()] = reader.nextString()
+                            return@use variants
+                        }
+                        return@use emptyMap()
+                    }
+                    else -> reader.skipValue()
+                }
+            }
+            emptyMap()
+        }
+
     private fun readCheckpoint(file: File): StoredSessionState {
         require(file.isFile && file.length() in 1..MAX_CHECKPOINT_BYTES.toLong()) { "The project's saved edit data is missing or too large." }
         val stored = json.decodeFromString<StoredSessionState>(file.readText())
@@ -2503,8 +2546,22 @@ class WatchFaceRepositoryImpl @Inject constructor(
     private val previewVariantCache = linkedMapOf<String, Map<String, String>>()
 
     private fun projectPreviewImage(project: ProjectEntity): String? {
-        val previews = previewsDirectory(project.id)
-            .listFiles()
+        val directory = previewsDirectory(project.id)
+        val originalVariant = project.editedBinPath?.let { path ->
+            synchronized(previewVariantCache) {
+                previewVariantCache.getOrPut(path) {
+                    runCatching { File(path).takeIf(::isCheckpoint)?.let(::readCheckpointVariants).orEmpty() }
+                        .getOrDefault(emptyMap())
+                }.also { while (previewVariantCache.size > 64) previewVariantCache.remove(previewVariantCache.keys.first()) }
+            }
+        }?.get(project.selectedStyle) ?: project.selectedStyle
+        // The style it was left on, by its name: one file to check rather than a listing of
+        // every style's, which is most of what a long list costs once checkpoints are cheap.
+        originalVariant?.let(::styleIndexOf)
+            ?.let { File(directory, "style$it.png") }
+            ?.takeIf { it.isFile && it.length() > 0 }
+            ?.let { return it.absolutePath }
+        return directory.listFiles()
             ?.filter { it.isFile && it.length() > 0 }
             ?.mapNotNull { file ->
                 PreviewFileNamePattern.matchEntire(file.name)
@@ -2513,20 +2570,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ?.toIntOrNull()
                     ?.let { it to file }
             }
-            ?.sortedBy { it.first }
-            ?: return null
-        if (previews.isEmpty()) return null
-        val originalVariant = project.editedBinPath?.let { path ->
-            synchronized(previewVariantCache) {
-                previewVariantCache.getOrPut(path) {
-                    runCatching { File(path).takeIf(::isCheckpoint)?.let(::readCheckpoint)?.lineage?.variants.orEmpty() }
-                        .getOrDefault(emptyMap())
-                }.also { while (previewVariantCache.size > 64) previewVariantCache.remove(previewVariantCache.keys.first()) }
-            }
-        }?.get(project.selectedStyle) ?: project.selectedStyle
-        val selected = originalVariant?.let(::styleIndexOf)
-        val chosen = previews.firstOrNull { it.first == selected } ?: previews.first()
-        return chosen.second.absolutePath
+            ?.minByOrNull { it.first }
+            ?.second
+            ?.absolutePath
     }
 
     /**
@@ -3395,11 +3441,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
 @Serializable
 private data class StoredSessionState(
+    // Declaration order is file order, and the projects list depends on it: it reads the
+    // lineage's style map from the head of a checkpoint and stops at the container
+    // (`readCheckpointVariants`). Keep the lineage ahead of the import baselines and the
+    // container last. Readers do not care about order; only that list's speed does.
     val schema: Int = 1,
+    val lineage: SessionLineage? = null,
     val thumbnailRefreshed: Boolean = false,
     val removed: List<StoredRemovedWidget> = emptyList(),
     val importOrigins: WidgetImportOrigins? = null,
-    val lineage: SessionLineage? = null,
     /** Present only in the app-private atomic checkpoint, never in exported session.json. */
     val editedContainer: String? = null,
 )

@@ -51,12 +51,16 @@ class LibraryHeaderLayoutTest {
 
     /** Captured from the composition so the test cannot drift from the string resources. */
     private var projectsTab: String = ""
+    private var projectsTabUnread: String = ""
+    private var projectsTabZero: String = ""
     private var menuLabel: String = ""
     private var importLabel: String = ""
 
-    private fun setHeader() {
+    private fun setHeader(projectCount: Int? = PROJECT_COUNT) {
         compose.setContent {
             projectsTab = stringResource(R.string.library_tab_projects, PROJECT_COUNT)
+            projectsTabUnread = stringResource(R.string.library_tab_projects_loading)
+            projectsTabZero = stringResource(R.string.library_tab_projects, 0)
             menuLabel = stringResource(UiR.string.ui_app_menu_a11y)
             importLabel = stringResource(R.string.library_action_import)
             FitFaceTheme(darkTheme = true) {
@@ -66,7 +70,7 @@ class LibraryHeaderLayoutTest {
                         isLoadingCatalog = false,
                         previousCrash = crashed,
                     ),
-                    projectCount = PROJECT_COUNT,
+                    projectCount = projectCount,
                     loading = false,
                     onPage = { page = it },
                     onRefresh = {},
@@ -125,6 +129,14 @@ class LibraryHeaderLayoutTest {
             withRefresh.size,
             withImport.size,
         )
+    }
+
+    /** Before the projects have been read the tab names no count: a 0 would say there are none. */
+    @Test
+    fun theProjectsTabClaimsNoCountBeforeTheProjectsAreRead() {
+        setHeader(projectCount = null)
+        compose.onNodeWithText(projectsTabUnread).assertIsDisplayed()
+        compose.onNodeWithText(projectsTabZero).assertDoesNotExist()
     }
 
     /** IMPORT is an ordinary action of the Projects page, with nothing to turn on first. */
