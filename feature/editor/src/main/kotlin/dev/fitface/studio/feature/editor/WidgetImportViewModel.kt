@@ -400,6 +400,8 @@ class WidgetImportViewModel @Inject constructor(
         val donor = current.donor ?: return
         val variant = current.variant ?: return
         mutable.update { it.copy(saving = true, error = null) }
+        // A batch is one undo step, however many widgets it adds.
+        val group = EditGroups.next()
         run {
             for (index in mutable.value.batchRemaining) {
                 mark(index, WidgetImportOutcome.ADDING)
@@ -407,7 +409,7 @@ class WidgetImportViewModel @Inject constructor(
                     val preview = repository.previewWidgetImport(
                         donor.handle, variant.basename, index, projectId, target,
                     )
-                    val snapshot = repository.importWidget(preview.ticket)
+                    val snapshot = repository.importWidget(preview.ticket, group)
                     mutable.update { it.copy(batchSnapshot = snapshot) }
                     mark(index, WidgetImportOutcome.ADDED)
                 } catch (cancelled: CancellationException) {

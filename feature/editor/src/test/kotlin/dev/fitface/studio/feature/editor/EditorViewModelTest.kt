@@ -3,6 +3,7 @@ package dev.fitface.studio.feature.editor
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.PreviewFrame
@@ -346,6 +347,57 @@ class EditorViewModelTest {
     }
 
     /**
+     * Undo drops the queued moves and waits for the one being committed, so nothing a nudge
+     * started can land after the undo and put back what it took away (R390 Studio's v0.6.12
+     * bug).
+     */
+    @Test
+    fun anUndoWaitsForTheMoveInFlightAndDropsTheQueuedOnes() {
+        val repository = FakeRepository(snapshot(widgets).copy(undoKind = EditKind.RESIZE))
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+
+        viewModel.beginNudge()
+        viewModel.nudgeWidget(1, 1, 0)
+        settle() // 21 is being committed, held open by the gate.
+        viewModel.nudgeWidget(1, 1, 0) // 22 is queued behind it.
+        viewModel.undo()
+        repository.releaseAll()
+        settle()
+
+        assertEquals(listOf("move 21,20", "undo"), repository.events)
+        assertEquals(listOf(21 to 20), repository.committed(1))
+        assertEquals(EditKind.MOVE, viewModel.state.value.historyNotice?.kind)
+        assertNull(viewModel.state.value.pendingWidgetMove)
+    }
+
+    /** Everything one press commits is one undo group; the next press, or a typed position, is another. */
+    @Test
+    fun onePressIsOneUndoGroup() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+
+        viewModel.beginNudge()
+        viewModel.nudgeWidget(1, 1, 0)
+        settle()
+        viewModel.nudgeWidget(1, 2, 0)
+        settle()
+        viewModel.beginNudge()
+        viewModel.nudgeWidget(1, 1, 0)
+        settle()
+        viewModel.placeWidget(1, left = 100, top = null)
+        settle()
+
+        val (first, second, third, typed) = repository.groups
+        assertEquals("a held press", first, second)
+        assertTrue("a new press", third != second)
+        assertTrue("a typed position", typed != third && typed != null)
+    }
+
+    /**
      * Any opaque colour reaches the repository with the widget's own type — text, rule or
      * arc, not only a value — and null asks for the original back. A translucent colour and
      * the colour already in force commit nothing.
@@ -503,17 +555,33 @@ class EditorViewModelTest {
             x: Int,
             y: Int,
             applyToAllStyles: Boolean,
+            group: Long?,
         ): EditorSnapshot {
             attempts++
             moves.getOrPut(globalIndex) { mutableListOf() }.add(x to y)
+            groups += group
             if (!commitImmediately) gate.await()
             failWith?.let { throw it }
+            events += "move $x,$y"
             current = current.copy(
                 widgets = current.widgets.map {
                     if (it.globalIndex == globalIndex) it.copy(x = x, y = y) else it
                 },
                 isDirty = true,
+                undoKind = EditKind.MOVE,
             )
+            return current
+        }
+
+        /** The undo group each move was committed under, in order. */
+        val groups = mutableListOf<Long?>()
+
+        /** Moves and undos in the order the repository saw them. */
+        val events = mutableListOf<String>()
+
+        override suspend fun undo(): EditorSnapshot {
+            events += "undo"
+            current = current.copy(undoKind = null, redoKind = EditKind.MOVE)
             return current
         }
     }

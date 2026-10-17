@@ -818,6 +818,15 @@ data class EditAuditSummary(
     val sizeDelta: Int = 0,
 )
 
+/**
+ * What one undo step changed, in the words the editor shows: "Undo move", "Redo resize".
+ * Coarse on purpose; the diagnostics history keeps the precise operation.
+ */
+enum class EditKind {
+    MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, RESTORE, DUPLICATE, IMPORT, BACKGROUND,
+    STYLES, THUMBNAIL, TEXT,
+}
+
 data class EditorSnapshot(
     val projectId: Long,
     val faceId: String,
@@ -932,6 +941,10 @@ data class EditorSnapshot(
     /** Styles, and the always-on display, with no widgets: sendable, but say so first. */
     val emptyVariants: List<String> = emptyList(),
     val isDirty: Boolean,
+    /** What Undo would take back, or null when there is nothing to undo. */
+    val undoKind: EditKind? = null,
+    /** What Redo would put back, or null when there is nothing to redo. */
+    val redoKind: EditKind? = null,
     val thumbnailRefreshed: Boolean = false,
     /**
      * The face-picker thumbnail of [activeStyleName] as it is stored now: one frame of
@@ -1144,7 +1157,7 @@ interface WatchFaceRepository {
     suspend fun widgetDonorVariant(handle: String, variant: String): WidgetDonorVariant = throw UnsupportedOperationException()
     suspend fun previewWidgetImport(handle: String, donorVariant: String, index: Int,
         projectId: Long, targetVariant: String): WidgetImportPreview = throw UnsupportedOperationException()
-    suspend fun importWidget(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
+    suspend fun importWidget(ticket: String, group: Long? = null): EditorSnapshot = throw UnsupportedOperationException()
     suspend fun releaseWidgetDonor(handle: String) {}
     suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
         throw UnsupportedOperationException()
@@ -1287,6 +1300,8 @@ interface WatchFaceRepository {
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        /** Edits sharing a group in a row are one undo step: a held nudge, a set's moves. */
+        group: Long? = null,
     ): EditorSnapshot
 
     suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
@@ -1328,6 +1343,7 @@ interface WatchFaceRepository {
         y: Int,
         requireFinal: Boolean,
         applyToAllStyles: Boolean,
+        group: Long? = null,
     ): EditorSnapshot
 
     suspend fun duplicateWidget(
@@ -1338,6 +1354,7 @@ interface WatchFaceRepository {
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long? = null,
     ): EditorSnapshot
 
     /** Re-appends a widget that [removeWidget] took out, at the end of the table. */
@@ -1347,6 +1364,14 @@ interface WatchFaceRepository {
     suspend fun refreshThumbnail(): EditorSnapshot
 
     suspend fun resetEdits(): EditorSnapshot
+
+    /**
+     * Steps back one edit, or forward again after an undo. History belongs to the open
+     * session: opening any project, this one included, Reset or delete clears it.
+     */
+    suspend fun undo(): EditorSnapshot = throw UnsupportedOperationException()
+
+    suspend fun redo(): EditorSnapshot = throw UnsupportedOperationException()
 
     suspend fun prepareDirectInstall(): DirectInstallPayload
 

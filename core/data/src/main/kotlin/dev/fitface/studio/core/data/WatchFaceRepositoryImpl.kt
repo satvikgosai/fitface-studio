@@ -56,6 +56,7 @@ import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.DuplicatedProject
 import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ExportedProject
@@ -93,13 +94,18 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -192,7 +198,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun importWidget(ticket: String): EditorSnapshot = withContext(Dispatchers.Default) {
+    override suspend fun importWidget(ticket: String, group: Long?): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val pending = pendingImport?.takeIf { it.ticket == ticket }
                 ?: throw WatchFaceException("Preview this widget again before adding it.")
@@ -203,7 +209,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val origins = current.originsWith(pending.donor.faceId, pending.variant, pending.result)
             val snapshot = commit(current, pending.result.edit.container,
                 pending.result.edit.audit("Widget imported from face ${pending.donor.faceId} into ${pending.variant}"),
-                pending.variant, origins)
+                pending.variant, origins, kind = EditKind.IMPORT, group = group)
             pendingImport = null
             snapshot
         }
@@ -256,7 +262,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val snapshot = commit(current, pending.result.edit.container,
                 pending.result.edit.audit("Background imported from face ${pending.donor.faceId}"),
                 importOrigins = origins,
-                lineage = if (pending.result.addedBackground) current.withAddedBackgrounds(pending.result.edit.changedStyles) else current.identities())
+                lineage = if (pending.result.addedBackground) current.withAddedBackgrounds(pending.result.edit.changedStyles) else current.identities(),
+                kind = EditKind.BACKGROUND,
+            )
             pendingBackground = null
             snapshot
         }
@@ -270,8 +278,46 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
     override fun observeProjects(): Flow<List<ProjectSummary>> =
         projectDao.observeAll()
+            .onEach(::sweepStaleHistory)
             .map { projects -> projects.map { it.toSummary(projectPreviewImage(it)) } }
             .flowOn(Dispatchers.IO)
+
+    /**
+     * Once a process, the first time the library reads the projects: deletes every
+     * checkpoint a project row does not name. Undo history lives only as long as the session
+     * that wrote it, and a process Android kills mid-session never gets to delete its steps;
+     * without this they would stay on disk, up to [HISTORY_MAX_BYTES] a project, until that
+     * one project happened to be opened again. The open session's project is left alone: its
+     * history is live.
+     *
+     * It runs beside the list, not ahead of it: on a cold start, listing a library of 80 projects
+     * took up to 0.3 s, which the first frame of projects would otherwise wait for. The lock
+     * is taken a project at a time, so an open waits for one directory at most, and the row is
+     * read again under it before anything is deleted: the list is a snapshot, and a session
+     * opened since may have moved the row to a checkpoint the snapshot does not name.
+     */
+    private fun sweepStaleHistory(projects: List<ProjectEntity>) {
+        if (!historySwept.compareAndSet(false, true)) return
+        historySweep = housekeeping.launch {
+            projects.forEach { listed ->
+                runCatching {
+                    mutex.withLock {
+                        if (listed.id == session?.projectId) return@withLock
+                        val keep = listed.editedBinPath?.let(::File)
+                        if (checkpointFiles(listed.id).all { it == keep }) return@withLock
+                        val project = projectDao.findById(listed.id) ?: return@withLock
+                        sweepCheckpoints(project.id, project.editedBinPath?.let(::File))
+                    }
+                }
+            }
+        }
+    }
+
+    private val historySwept = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val housekeeping = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** The sweep [observeProjects] started, for a test to wait on. */
+    internal var historySweep: Job? = null
 
     override fun observeImageFit(): Flow<ImageFit> =
         context.editorPreferences.data.map { preferences ->
@@ -499,7 +545,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         loaded.projectId = projectId
         loaded.projectName = project.projectName ?: loaded.sourceName
         loaded.stylePreviewFiles = stylePreviews
-        return loaded.also { session = it }.snapshot()
+        return loaded.also(::replaceSession).snapshot()
     }
 
     override suspend fun openProject(projectId: Long): EditorSnapshot =
@@ -541,7 +587,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 )
                 loaded.projectName = project.resolvedName
                 loaded.stylePreviewFiles = stylePreviews
-                loaded.also { session = it }.snapshot()
+                sweepCheckpoints(project.id, loaded.currentFile)
+                loaded.also(::replaceSession).snapshot()
             }
         }
 
@@ -1107,6 +1154,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     edit.changedStyles,
                     operation = "Manual background placement",
                 ),
+                kind = EditKind.BACKGROUND,
             )
             }
         }
@@ -1206,6 +1254,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ),
                     importOrigins = origins,
                     lineage = current.withAddedBackgrounds(edit.changedStyles),
+                    kind = EditKind.BACKGROUND,
                 )
             }
         }
@@ -1242,6 +1291,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     edit.changedStyles,
                     operation = "Background tint",
                 ),
+                kind = EditKind.BACKGROUND,
             )
         }
     }
@@ -1274,6 +1324,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Pair widget position/color",
                 ),
                 styleName,
+                kind = EditKind.TEXT,
             )
         }
     }
@@ -1311,6 +1362,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Widget colour changed " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
+                kind = EditKind.COLOUR,
             )
         }
     }
@@ -1357,6 +1409,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Widget colour reset " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
+                kind = EditKind.COLOUR,
             )
         }
     }
@@ -1369,6 +1422,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1393,6 +1447,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Widget moved " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
+                kind = EditKind.MOVE, group = group,
             )
         }
     }
@@ -1422,6 +1477,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     current,
                     edit.container,
                     edit.audit("Background resize + pointer relocation"),
+                    kind = EditKind.BACKGROUND,
                 )
             }
         }
@@ -1435,7 +1491,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             commit(current, result.edit.container, result.edit.audit("Widget layers rearranged in $styleName"), styleName,
                 importOrigins = current.importOrigins?.renumber(styleName, result.indices::get),
                 lineage = current.identities().remap(styleName, result.indices::get),
-                indexMappings = mapOf(styleName to result.indices))
+                indexMappings = mapOf(styleName to result.indices), kind = EditKind.ARRANGE)
         }
     }
 
@@ -1457,7 +1513,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     sequenceId, x, y, angleTenths, targetIndices, pristine = current.originalContainer,
                     pristineWidgets = current.pristineWidgets(targets, styleName, globalIndex))
                 commit(current, edit.container, EditAuditSummary(edit.changedPayloadBytes,
-                    edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName)
+                    edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName, kind = EditKind.ROTATE)
             }
         }
 
@@ -1494,7 +1550,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
         return commit(current, edit.container,
             edit.audit("Widget artwork turned " + editScope(styleName, applyToAllStyles)), styleName,
-            lineage = lineage)
+            lineage = lineage, kind = EditKind.ROTATE)
     }
 
     override suspend fun resizeWidget(
@@ -1541,6 +1597,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 edit.container,
                 edit.audit("Widget resized " + editScope(styleName, applyToAllStyles)),
                 styleName,
+                kind = EditKind.RESIZE,
             )
         }
     }
@@ -1554,6 +1611,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         y: Int,
         requireFinal: Boolean,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1639,6 +1697,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ),
                     droppedImages = edit.droppedImages,
                     lineage = survivingIdentities,
+                    kind = EditKind.REMOVE, group = group,
                 )
             }
             if (duplicate) {
@@ -1649,6 +1708,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     styleName,
                     importOrigins = renumbered,
                     lineage = survivingIdentities,
+                    kind = EditKind.REMOVE, group = group,
                 )
             }
             val removed = RemovedWidget(
@@ -1673,6 +1733,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 importOriginId = current.importOrigins?.find(styleName, globalIndex)?.id,
             )
             val previousRemoved = current.removedWidgets.toList()
+            val before = current.currentState()
             current.removedWidgets += removed
             try {
                 commit(
@@ -1682,6 +1743,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     styleName,
                     importOrigins = renumbered,
                     lineage = survivingIdentities,
+                    kind = EditKind.REMOVE, group = group,
+                    before = before,
                 )
             } catch (error: Throwable) {
                 current.removedWidgets.clear()
@@ -1703,6 +1766,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     removed.recordsByVariant,
                 )
                 val previousRemoved = current.removedWidgets.toList()
+                val before = current.currentState()
                 current.removedWidgets.remove(removed)
                 try {
                     commit(
@@ -1724,6 +1788,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                                 else SessionLineage.capture(current.originalContainer, edit.container, current.importOrigins)
                                     .widgets[variant]?.get(index) ?: NativeWidgetOrigin())
                         },
+                        kind = EditKind.RESTORE,
+                        before = before,
                     )
                 } catch (error: Throwable) {
                     current.removedWidgets.clear()
@@ -1766,6 +1832,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 return@withLock current.snapshot()
             }
             val previousThumbnail = current.thumbnailContainer
+            val before = current.currentState()
             current.thumbnailContainer = edit.container
             try {
                 commit(
@@ -1777,6 +1844,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         operation = "Face-picker thumbnail re-rendered for " +
                             snapshot.activeStyleName,
                     ),
+                    kind = EditKind.THUMBNAIL,
+                    before = before,
                 )
             } catch (error: Throwable) {
                 current.thumbnailContainer = previousThumbnail
@@ -1793,6 +1862,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1845,6 +1915,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         FaceRecordParser.scanWidgets(edit.container.entryByBasename(variant)).last().globalIndex,
                         origin.copy(duplicate = true))
                 },
+                kind = EditKind.DUPLICATE, group = group,
             )
         }
     }
@@ -1870,10 +1941,14 @@ class WatchFaceRepositoryImpl @Inject constructor(
             current.thumbnailContainer = null
             try {
                 val snapshot = current.snapshot()
+                val previousFile = current.currentFile
                 persistEdited(current, keepEdited = false)
+                current.currentFile = null
+                discardHistory(current)
+                retire(current, previousFile)
                 current.recordHistory("reset to the original container")
                 diagnostics.info(TAG, "Edits reset")
-                snapshot
+                current.labelled(snapshot)
             } catch (error: Throwable) {
                 current.currentContainer = previousContainer
                 current.audit = previousAudit
@@ -1975,7 +2050,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 mapping[origin.variant]?.let { origin.copy(variant = it) }
             }).takeIf { it.widgets.isNotEmpty() } }
             commit(current, edit.container, edit.audit("Unused styles deleted"), importOrigins = origins,
-                lineage = current.identities().retainVariants(mapping), variantMappings = mapping)
+                lineage = current.identities().retainVariants(mapping), variantMappings = mapping, kind = EditKind.STYLES)
         }
     }
 
@@ -1990,6 +2065,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
         lineage: SessionLineage = current.identities(),
         indexMappings: Map<String, Map<Int, Int>> = emptyMap(),
         variantMappings: Map<String, String>? = null,
+        /** What the undo step is called. */
+        kind: EditKind,
+        /** Commits sharing a group in a row are one undo step. */
+        group: Long? = null,
+        /** The state undo returns to, when the caller changed the session before committing. */
+        before: HistoryState = current.currentState(),
     ): EditorSnapshot {
         val previousContainer = current.currentContainer
         val previousAudit = current.audit
@@ -2029,7 +2110,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
             current.removedWidgets.clear()
             current.removedWidgets += relocated
             val snapshot = current.snapshot(styleName)
-            persistEdited(current, keepEdited = true)
+            current.currentFile = persistEdited(current, keepEdited = true)
+            recordStep(current, before, kind, group)
             // Recorded only once the edit has actually stuck. The worst bugs here leave a
             // container that validates, transfers and is accepted while drawing wrong, so
             // nothing throws and this ordered list is the only account of what was done.
@@ -2044,7 +2126,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 "styles=${audit.changedStyles.joinToString("/")} " +
                     "delta=${audit.sizeDelta} size=${container.fileSize}",
             )
-            snapshot
+            current.labelled(snapshot)
         } catch (error: Throwable) {
             current.currentContainer = previousContainer
             current.audit = previousAudit
@@ -2058,10 +2140,14 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
-    /** Immutable BIN + identities + removals, followed by the single Room pointer swap. */
-    private suspend fun persistEdited(current: Session, keepEdited: Boolean) {
-        if (current.projectId <= 0) return
-        val project = projectDao.findById(current.projectId) ?: return
+    /**
+     * Immutable BIN + identities + removals, followed by the single Room pointer swap.
+     * Returns the file the row now names, or null for the pristine package. The file it
+     * replaces is left alone: an undo step may still need it, and [retire] decides.
+     */
+    private suspend fun persistEdited(current: Session, keepEdited: Boolean): File? {
+        if (current.projectId <= 0) return null
+        val project = projectDao.findById(current.projectId) ?: return null
         val directory = projectDirectory(current.projectId)
         if (keepEdited) {
             // A new immutable file plus one Room pointer swap is the commit point. Neither
@@ -2071,6 +2157,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 Base64.getEncoder().encodeToString(current.currentContainer.toByteArray()))
             val bytes = json.encodeToString(stored).encodeToByteArray()
             require(bytes.size <= MAX_CHECKPOINT_BYTES) { "This project's saved edit data is too large." }
+            makeRoomForCheckpoint(current, directory, bytes.size)
             withContext(NonCancellable) {
                 try {
                     writeAtomically(checkpoint, bytes)
@@ -2080,22 +2167,181 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     checkpoint.delete()
                     throw error
                 }
-                project.editedBinPath?.let(::File)?.takeIf {
-                    it.parentFile == directory && isCheckpoint(it) && it != checkpoint
-                }?.let { runCatching { it.delete() } }
             }
-            return
+            return checkpoint
         }
         withContext(NonCancellable) {
             projectDao.insert(project.copy(editedBinPath = null, selectedStyle = current.activeStyleName,
                 updatedAtEpochMillis = System.currentTimeMillis()))
             File(directory, "edited.bin").delete()
             File(directory, "session.json").delete()
-            project.editedBinPath?.let(::File)?.takeIf {
-                it.parentFile == directory && isCheckpoint(it)
-            }?.let { runCatching { it.delete() } }
+        }
+        return null
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Undo and redo
+    // ---------------------------------------------------------------------------------------
+
+    override suspend fun undo(): EditorSnapshot = step(back = true)
+
+    override suspend fun redo(): EditorSnapshot = step(back = false)
+
+    /**
+     * One step through the session's history. The checkpoints every commit already writes
+     * are the history: a step names the file its state lives in, and moving to it is the
+     * same pointer swap a commit makes. The state being left goes onto the other stack.
+     */
+    private suspend fun step(back: Boolean): EditorSnapshot = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val current = requireSession()
+            val from = if (back) current.undoSteps else current.redoSteps
+            val to = if (back) current.redoSteps else current.undoSteps
+            val step = from.removeLastOrNull() ?: return@withLock current.snapshot()
+            // The stacks move first so the snapshot names the next undo and redo; a failed
+            // restore puts them back.
+            val here = current.currentState()
+            val previousGroup = current.historyGroup
+            to.addLast(HistoryStep(here, step.kind, step.group))
+            current.historyGroup = null
+            val snapshot = try {
+                restore(current, step.state)
+            } catch (error: Throwable) {
+                to.removeLast()
+                from.addLast(step)
+                current.historyGroup = previousGroup
+                throw error
+            }
+            // Only the newest step on each side keeps its state in memory.
+            to.dropLast(1).lastOrNull()?.state?.memory = null
+            from.lastOrNull()?.state?.memory = null
+            current.recordHistory("${if (back) "undo" else "redo"} ${step.kind.name.lowercase()}")
+            diagnostics.info(TAG, if (back) "Undo" else "Redo", step.kind.name)
+            snapshot
         }
     }
+
+    /**
+     * Puts [state] back as the session and points the project row at its file. All or
+     * nothing: on any failure the session is what it was and the row is unchanged.
+     */
+    private suspend fun restore(current: Session, state: HistoryState): EditorSnapshot {
+        val previous = current.currentState()
+        try {
+            val memory = state.memory
+            val file = state.file
+            when {
+                memory != null -> current.apply(memory)
+                file == null -> current.apply(HistoryMemory(current.originalContainer, null, null,
+                    emptyList(), thumbnailRefreshed = false, audit = null))
+                isCheckpoint(file) -> {
+                    val stored = readCheckpoint(file)
+                    val bytes = Base64.getDecoder().decode(requireNotNull(stored.editedContainer))
+                    current.currentContainer = Fit3Container.parse(bytes)
+                    validateEdited(bytes, current, stored.importOrigins, stored.lineage)
+                    current.audit = null
+                    applyStoredState(stored, current)
+                }
+                else -> {
+                    // A pre-checkpoint project's `edited.bin`, with its removals beside it.
+                    current.apply(HistoryMemory(Fit3Container.parse(file.readBytes()), null, null,
+                        emptyList(), thumbnailRefreshed = false, audit = null))
+                    restoreSessionState(projectDirectory(current.projectId), current)
+                }
+            }
+            current.activeStyleName = state.activeStyleName
+            current.selectedVariantName = state.selectedVariantName
+            // Rendered before the row moves: a state that cannot be shown is not swapped in.
+            val snapshot = current.snapshot()
+            if (current.projectId > 0) {
+                withContext(NonCancellable) {
+                    val project = requireNotNull(projectDao.findById(current.projectId)) {
+                        "This project no longer exists."
+                    }
+                    projectDao.insert(project.copy(editedBinPath = file?.absolutePath,
+                        selectedStyle = state.activeStyleName, updatedAtEpochMillis = System.currentTimeMillis()))
+                }
+            }
+            current.currentFile = file
+            return snapshot
+        } catch (error: Throwable) {
+            current.apply(requireNotNull(previous.memory))
+            current.activeStyleName = previous.activeStyleName
+            current.selectedVariantName = previous.selectedVariantName
+            throw error
+        }
+    }
+
+    /** Adds the state a commit replaced as a step, or folds it into the step its group began. */
+    private fun recordStep(current: Session, before: HistoryState, kind: EditKind, group: Long?) {
+        if (!current.historyEnabled || current.projectId <= 0) {
+            retire(current, before.file)
+            return
+        }
+        if (group != null && group == current.historyGroup && current.undoSteps.isNotEmpty()) {
+            // The same press or set action: the step already holds where it began, and the
+            // state in between is nobody's.
+            retire(current, before.file)
+        } else {
+            current.undoSteps.lastOrNull()?.state?.memory = null
+            current.undoSteps.addLast(HistoryStep(before, kind, group))
+        }
+        while (current.redoSteps.isNotEmpty()) retire(current, current.redoSteps.removeLast().state.file)
+        evict(current)
+        current.historyGroup = group
+    }
+
+    /** Drops the oldest steps beyond [HISTORY_MAX_STEPS] or [HISTORY_MAX_BYTES] of files. */
+    private fun evict(current: Session) {
+        fun bytes() = (current.undoSteps + current.redoSteps).sumOf { it.state.file?.takeIf(::isCheckpoint)?.length() ?: 0L }
+        while (current.undoSteps.isNotEmpty() &&
+            (current.undoSteps.size > HISTORY_MAX_STEPS || bytes() > HISTORY_MAX_BYTES)) {
+            retire(current, current.undoSteps.removeFirst().state.file)
+        }
+    }
+
+    private fun discardHistory(current: Session) {
+        (current.undoSteps + current.redoSteps).forEach { it.state.memory = null }
+        val files = (current.undoSteps + current.redoSteps).mapNotNull { it.state.file }
+        current.undoSteps.clear()
+        current.redoSteps.clear()
+        current.historyGroup = null
+        files.forEach { retire(current, it) }
+    }
+
+    /** Deletes a checkpoint nothing names any more: not the row, not a step. */
+    private fun retire(current: Session, file: File?) {
+        if (file == null || !isCheckpoint(file) || file == current.currentFile) return
+        if ((current.undoSteps + current.redoSteps).any { it.state.file == file }) return
+        if (current.projectId > 0 && file.parentFile != projectDirectory(current.projectId)) return
+        runCatching { file.delete() }
+    }
+
+    /**
+     * Gives up the session's history when the phone is too full for the next checkpoint
+     * beside it, so a full phone costs undo rather than the edit. Checked before writing:
+     * a write that fails for any other reason must fail the commit, as it always has.
+     */
+    private fun makeRoomForCheckpoint(current: Session, directory: File, bytes: Int) {
+        if (current.undoSteps.isEmpty() && current.redoSteps.isEmpty()) return
+        if (directory.usableSpace >= 2L * bytes + HISTORY_SPACE_MARGIN) return
+        diagnostics.info(TAG, "History turned off", "free=${directory.usableSpace} needed=$bytes")
+        discardHistory(current)
+        current.historyEnabled = false
+    }
+
+    private fun replaceSession(next: Session) {
+        session?.let(::discardHistory)
+        session = next
+    }
+
+    /** Checkpoints the row does not name are a crash's leftovers: history never outlives a session. */
+    private fun sweepCheckpoints(projectId: Long, keep: File?) {
+        checkpointFiles(projectId).filter { it != keep }.forEach { runCatching { it.delete() } }
+    }
+
+    private fun checkpointFiles(projectId: Long) =
+        projectDirectory(projectId).listFiles().orEmpty().filter(::isCheckpoint)
 
     // Schema 4 only when an artwork turn is saved. Readers use `ignoreUnknownKeys`, so an
     // older build would drop the turn without a word and then straighten the artwork on its
@@ -2108,7 +2354,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         lineage = current.identities(),
     )
 
-    private fun isCheckpoint(file: File) = file.name.matches(Regex("edit-[a-f0-9-]{36}\\.checkpoint"))
+    private fun isCheckpoint(file: File) = file.name.matches(CHECKPOINT_NAME)
 
     private fun readCheckpoint(file: File): StoredSessionState {
         require(file.isFile && file.length() in 1..MAX_CHECKPOINT_BYTES.toLong()) { "The project's saved edit data is missing or too large." }
@@ -2213,6 +2459,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             currentContainer = current,
             sourceName = resolvedName,
             activeStyleName = activeStyleName,
+            currentFile = editedFile?.takeIf { checkpoint != null || current !== original },
         ).also {
             if (checkpoint != null) {
                 validateEdited(current.toByteArray(), it, checkpoint.importOrigins, checkpoint.lineage)
@@ -2351,6 +2598,28 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
+    /** A state an undo or redo returns to. */
+    private class HistoryState(
+        /** The checkpoint holding it, a legacy `edited.bin`, or null for the pristine package. */
+        val file: File?,
+        val activeStyleName: String?,
+        val selectedVariantName: String?,
+        /** Kept only on each stack's newest step, so one undo or redo reads nothing from disk. */
+        var memory: HistoryMemory?,
+    )
+
+    /** Everything a checkpoint holds, already parsed, plus what a checkpoint does not keep. */
+    private class HistoryMemory(
+        val container: Fit3Container,
+        val lineage: SessionLineage?,
+        val importOrigins: WidgetImportOrigins?,
+        val removed: List<RemovedWidget>,
+        val thumbnailRefreshed: Boolean,
+        val audit: EditAuditSummary?,
+    )
+
+    private class HistoryStep(val state: HistoryState, val kind: EditKind, val group: Long?)
+
     private data class Session(
         var projectId: Long,
         val apk: Fit3Apk,
@@ -2391,7 +2660,36 @@ class WatchFaceRepositoryImpl @Inject constructor(
          * Validate page re-render it.
          */
         var thumbnailContainer: Fit3Container? = null,
+        /** The file the project row names: a checkpoint, a legacy `edited.bin`, or null when pristine. */
+        var currentFile: File? = null,
+        /** Session history, newest last. See [step]. */
+        val undoSteps: ArrayDeque<HistoryStep> = ArrayDeque(),
+        val redoSteps: ArrayDeque<HistoryStep> = ArrayDeque(),
+        /** The group of the commit that made the current state, while it is the newest step. */
+        var historyGroup: Long? = null,
+        /** False once a full phone has cost the session its history. */
+        var historyEnabled: Boolean = true,
     ) {
+        fun currentState() = HistoryState(currentFile, activeStyleName, selectedVariantName,
+            HistoryMemory(currentContainer, lineage, importOrigins, removedWidgets.toList(),
+                thumbnailRefreshed = thumbnailContainer === currentContainer, audit = audit))
+
+        /** [snapshot], rendered before history moved, with what Undo and Redo now name. */
+        fun labelled(snapshot: EditorSnapshot) = snapshot.copy(
+            undoKind = undoSteps.lastOrNull()?.kind,
+            redoKind = redoSteps.lastOrNull()?.kind,
+        )
+
+        fun apply(memory: HistoryMemory) {
+            currentContainer = memory.container
+            lineage = memory.lineage
+            importOrigins = memory.importOrigins
+            removedWidgets.clear()
+            removedWidgets += memory.removed
+            thumbnailContainer = memory.container.takeIf { memory.thumbnailRefreshed }
+            audit = memory.audit
+        }
+
         fun identities(): SessionLineage = lineage ?: SessionLineage.capture(originalContainer, currentContainer, importOrigins)
 
         fun editRevision(): String = "$projectId:${WidgetImportOrigins.digest(currentContainer.toByteArray())}"
@@ -3053,6 +3351,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 deliveryRefusals = delivery.refusals.map { it.code },
                 emptyVariants = delivery.emptyVariants,
                 isDirty = currentContainer !== originalContainer,
+                undoKind = undoSteps.lastOrNull()?.kind,
+                redoKind = redoSteps.lastOrNull()?.kind,
                 thumbnailRefreshed = thumbnailRefreshed,
                 pickerThumbnail = pickerThumbnail,
                 pickerThumbnailAfter = pickerThumbnailAfter,
@@ -3068,6 +3368,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
      */
     private companion object {
         const val TAG = "Editor"
+        val CHECKPOINT_NAME = Regex("edit-[a-f0-9-]{36}\\.checkpoint")
 
         /** How many lines of [Session.editHistory] a report carries. */
         const val MaxEditHistory = 60
@@ -3181,6 +3482,13 @@ private data class StoredRemovedWidget(
 /** [RemovedWidget.globalIndex] for a session that predates the field. */
 private const val UnknownGlobalIndex = -1
 private const val MAX_CHECKPOINT_BYTES = 13 * 1024 * 1024
+
+/** Session history bounds: steps kept, and bytes of checkpoint files they may hold on disk. */
+private const val HISTORY_MAX_STEPS = 30
+private const val HISTORY_MAX_BYTES = 48L * 1024 * 1024
+
+/** Free space kept beyond a checkpoint before history gives way to it. */
+private const val HISTORY_SPACE_MARGIN = 16L * 1024 * 1024
 
 /**
  * A manifest read back from a file, cut down to what a project row can hold.

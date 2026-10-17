@@ -78,14 +78,14 @@ class WidgetImportViewModelTest {
         assertEquals("t3", vm.state.value.preview!!.ticket)
         assertTrue(vm.state.value.stylesDeleted)
         assertNull(vm.state.value.capacity)
-        coVerify(exactly = 0) { repository.importWidget(any()) }
+        coVerify(exactly = 0) { repository.importWidget(any(), any()) }
         coVerify(exactly = 0) { repository.releaseWidgetDonor(any()) }
     }
 
     @Test fun batchCapacityRecoveryRetriesOnlyFailedAndQueuedPicksAfterFreshReview() {
         open()
         listOf(3, 5, 4).forEach { priceAndCommit(it, snapshot.copy(isDirty = true)) }
-        coEvery { repository.importWidget("t5") } throws CapacityError()
+        coEvery { repository.importWidget("t5", any()) } throws CapacityError()
         vm.togglePick(3); vm.togglePick(5); vm.togglePick(4); settle()
         vm.addPicks(); settle()
         assertEquals(1, vm.state.value.batchAdded)
@@ -93,13 +93,13 @@ class WidgetImportViewModelTest {
         vm.acceptStyleDeletion(snapshot.copy(isDirty = true)); settle()
         assertEquals(WidgetImportStage.REVIEW, vm.state.value.stage)
         assertEquals(listOf(5, 4), vm.state.value.picks)
-        coVerify(exactly = 1) { repository.importWidget("t3") }
-        coEvery { repository.importWidget("t5") } returns snapshot.copy(isDirty = true)
+        coVerify(exactly = 1) { repository.importWidget("t3", any()) }
+        coEvery { repository.importWidget("t5", any()) } returns snapshot.copy(isDirty = true)
         vm.addPicks(); settle()
         assertEquals(3, vm.state.value.batchAdded)
-        coVerify(exactly = 1) { repository.importWidget("t3") }
-        coVerify(exactly = 2) { repository.importWidget("t5") }
-        coVerify(exactly = 1) { repository.importWidget("t4") }
+        coVerify(exactly = 1) { repository.importWidget("t3", any()) }
+        coVerify(exactly = 2) { repository.importWidget("t5", any()) }
+        coVerify(exactly = 1) { repository.importWidget("t4", any()) }
     }
 
     @Test fun capacityRecoveryDoesNotApplyBackgroundOrOfferRecoveryForOtherLimits() {
@@ -310,13 +310,13 @@ class WidgetImportViewModelTest {
         val preview = WidgetImportPreview("ticket", 1, 100, mockk(relaxed = true), frame())
         coEvery { repository.previewWidgetImport("donor", "style0.bin", 3, 7, "style0.bin") } returns preview
         val commit = CompletableDeferred<EditorSnapshot>()
-        coEvery { repository.importWidget("ticket") } coAnswers { commit.await() }
+        coEvery { repository.importWidget("ticket", any()) } coAnswers { commit.await() }
         vm.togglePick(3); settle(); vm.add(); vm.add(); settle()
         assertTrue(vm.state.value.saving)
         assertFalse(vm.back())
         commit.complete(snapshot.copy(isDirty = true)); settle()
         assertNotNull(vm.state.value.imported)
-        coVerify(exactly = 1) { repository.importWidget("ticket") }
+        coVerify(exactly = 1) { repository.importWidget("ticket", any()) }
         vm.close(); settle()
         assertEquals(WidgetImportUiState(), vm.state.value)
         coVerify(exactly = 1) { repository.releaseWidgetDonor("donor") }
@@ -329,7 +329,7 @@ class WidgetImportViewModelTest {
     private fun priceAndCommit(index: Int, result: EditorSnapshot) {
         val preview = WidgetImportPreview("t$index", 1000, 100, mockk(relaxed = true), frame())
         coEvery { repository.previewWidgetImport("donor", "style0.bin", index, 7, "style0.bin") } returns preview
-        coEvery { repository.importWidget("t$index") } returns result
+        coEvery { repository.importWidget("t$index", any()) } returns result
     }
 
     /**
@@ -350,11 +350,11 @@ class WidgetImportViewModelTest {
         assertEquals(WidgetImportStage.BATCH, vm.state.value.stage)
         coVerifyOrder {
             repository.previewWidgetImport("donor", "style0.bin", 3, 7, "style0.bin")
-            repository.importWidget("t3")
+            repository.importWidget("t3", any())
             repository.previewWidgetImport("donor", "style0.bin", 5, 7, "style0.bin")
-            repository.importWidget("t5")
+            repository.importWidget("t5", any())
             repository.previewWidgetImport("donor", "style0.bin", 4, 7, "style0.bin")
-            repository.importWidget("t4")
+            repository.importWidget("t4", any())
         }
         assertEquals(3, vm.state.value.batchAdded)
         assertTrue(vm.state.value.batch.all { it.outcome == WidgetImportOutcome.ADDED })
@@ -375,7 +375,7 @@ class WidgetImportViewModelTest {
         listOf(3, 5, 4).forEach { priceAndCommit(it, snapshot.copy(isDirty = true)) }
         vm.togglePick(3); vm.togglePick(5); vm.togglePick(4); settle()
         vm.addPicks(); settle()
-        coVerify(exactly = 3) { repository.importWidget(any()) }
+        coVerify(exactly = 3) { repository.importWidget(any(), any()) }
         assertNull(vm.state.value.error)
     }
 
@@ -391,7 +391,7 @@ class WidgetImportViewModelTest {
         priceAndCommit(3, afterFirst)
         priceAndCommit(5, afterFirst)
         priceAndCommit(4, afterFirst)
-        coEvery { repository.importWidget("t5") } throws
+        coEvery { repository.importWidget("t5", any()) } throws
             WatchFaceException("No room left: this would take the face past 4 MB.")
         vm.togglePick(3); vm.togglePick(5); vm.togglePick(4); settle()
         vm.addPicks(); settle()
@@ -401,7 +401,7 @@ class WidgetImportViewModelTest {
         assertEquals("No room left: this would take the face past 4 MB.", batch[1].reason)
         // Not attempted, not failed: the limits only get tighter, so it stopped.
         assertEquals(WidgetImportOutcome.QUEUED, batch[2].outcome)
-        coVerify(exactly = 0) { repository.importWidget("t4") }
+        coVerify(exactly = 0) { repository.importWidget("t4", any()) }
         assertEquals(1, vm.state.value.batchAdded)
         assertEquals(afterFirst, vm.state.value.batchSnapshot)
     }
@@ -411,14 +411,14 @@ class WidgetImportViewModelTest {
         open()
         val after = snapshot.copy(isDirty = true)
         listOf(3, 5, 4).forEach { priceAndCommit(it, after) }
-        coEvery { repository.importWidget("t5") } throws WatchFaceException("nope")
+        coEvery { repository.importWidget("t5", any()) } throws WatchFaceException("nope")
         vm.togglePick(3); vm.togglePick(5); vm.togglePick(4); settle()
         vm.addPicks(); settle()
         vm.continueBatch(); settle()
         assertEquals(2, vm.state.value.batchAdded)
-        coVerify(exactly = 1) { repository.importWidget("t4") }
+        coVerify(exactly = 1) { repository.importWidget("t4", any()) }
         // The refusal stands; continuing does not retry it.
-        coVerify(exactly = 1) { repository.importWidget("t5") }
+        coVerify(exactly = 1) { repository.importWidget("t5", any()) }
         assertEquals(WidgetImportOutcome.FAILED, vm.state.value.batch[1].outcome)
     }
 
@@ -443,7 +443,7 @@ class WidgetImportViewModelTest {
     @Test fun aBatchThatCommittedNothingReturnsToThePicker() {
         open()
         listOf(3, 5).forEach { priceAndCommit(it, snapshot) }
-        coEvery { repository.importWidget("t3") } throws WatchFaceException("nope")
+        coEvery { repository.importWidget("t3", any()) } throws WatchFaceException("nope")
         vm.togglePick(3); vm.togglePick(5); settle()
         vm.addPicks(); settle()
         assertEquals(0, vm.state.value.batchAdded)
@@ -467,7 +467,7 @@ class WidgetImportViewModelTest {
         vm.useSelectedWidget()
         assertEquals(WidgetImportStage.REVIEW, vm.state.value.stage)
         coVerify(exactly = 0) { repository.previewWidgetImport("donor", "style0.bin", 5, 7, "style0.bin") }
-        coVerify(exactly = 0) { repository.importWidget(any()) }
+        coVerify(exactly = 0) { repository.importWidget(any(), any()) }
         assertFalse(vm.back())
         assertEquals(WidgetImportStage.WIDGETS, vm.state.value.stage)
         assertEquals(listOf(3, 5), vm.state.value.picks)
@@ -583,6 +583,6 @@ class WidgetImportViewModelTest {
         vm.addPicks(); settle()
         assertEquals(WidgetImportStage.WIDGETS, vm.state.value.stage)
         assertTrue(vm.state.value.batch.isEmpty())
-        coVerify(exactly = 0) { repository.importWidget(any()) }
+        coVerify(exactly = 0) { repository.importWidget(any(), any()) }
     }
 }

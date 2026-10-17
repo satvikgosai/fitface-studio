@@ -281,6 +281,9 @@ class EditorSelectionSetTest {
         vm.removeSelection()
         settle()
         assertEquals(listOf(3, 2, 1), repository.removed)
+        // One undo takes the whole set back.
+        assertEquals(1, repository.groups.toSet().size)
+        assertNotNull(repository.groups.first())
         assertTrue(vm.state.value.snapshot!!.widgets.isEmpty())
         assertTrue(vm.state.value.multiSelection.isEmpty())
         assertEquals(3, vm.state.value.widgetRemovals)
@@ -505,6 +508,8 @@ class EditorSelectionSetTest {
         val duplicated = mutableListOf<Int>()
         val moves = mutableMapOf<Int, MutableList<Pair<Int, Int>>>()
         val moveScopes = mutableListOf<Boolean>()
+        /** The undo group of every commit, in order. */
+        val groups = mutableListOf<Long?>()
         var failOnCall: Int? = null
         /** When set, every move commit waits for it — the window a held arrow repeats in. */
         var parked: CompletableDeferred<Unit>? = null
@@ -527,10 +532,11 @@ class EditorSelectionSetTest {
 
         override suspend fun removeWidget(
             styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
-            x: Int, y: Int, requireFinal: Boolean, applyToAllStyles: Boolean,
+            x: Int, y: Int, requireFinal: Boolean, applyToAllStyles: Boolean, group: Long?,
         ): EditorSnapshot {
             identify(globalIndex, sequenceId)
             removed += globalIndex
+            groups += group
             current = current.copy(widgets = current.widgets.filter { it.globalIndex != globalIndex }.map {
                 if (it.globalIndex > globalIndex) it.copy(globalIndex = it.globalIndex - 1, ordinal = it.ordinal - 1) else it
             })
@@ -539,11 +545,12 @@ class EditorSelectionSetTest {
 
         override suspend fun duplicateWidget(
             styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
-            x: Int, y: Int, applyToAllStyles: Boolean,
+            x: Int, y: Int, applyToAllStyles: Boolean, group: Long?,
         ): EditorSnapshot {
             val source = identify(globalIndex, sequenceId)
             parkedDuplicate?.await()
             duplicated += globalIndex
+            groups += group
             val next = current.widgets.maxOf { it.globalIndex } + 1
             current = current.copy(widgets = current.widgets + source.copy(globalIndex = next, ordinal = next))
             return current
@@ -551,10 +558,11 @@ class EditorSelectionSetTest {
 
         override suspend fun moveWidget(
             styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
-            x: Int, y: Int, applyToAllStyles: Boolean,
+            x: Int, y: Int, applyToAllStyles: Boolean, group: Long?,
         ): EditorSnapshot {
             moves.getOrPut(globalIndex) { mutableListOf() }.add(x to y)
             moveScopes += applyToAllStyles
+            groups += group
             parked?.await()
             current = current.copy(widgets = current.widgets.map {
                 if (it.globalIndex == globalIndex) it.copy(x = x, y = y) else it

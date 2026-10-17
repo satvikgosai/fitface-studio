@@ -11,6 +11,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
+import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
@@ -35,6 +36,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -59,7 +61,25 @@ internal data class PendingWidgetTarget(
     val y: Int,
     val widgetType: Int,
     val sequenceId: Int,
-)
+) {
+    /**
+     * The undo group the move commits under. Outside the constructor on purpose: two targets
+     * at the same place are the same target, whichever press queued them.
+     */
+    var group: Long? = null
+}
+
+/**
+ * Undo groups: every edit committed under one id in a row is one undo step. Shared by the
+ * editor's view models so two of them can never hand out the same id.
+ */
+internal object EditGroups {
+    private val last = AtomicLong()
+    fun next(): Long = last.incrementAndGet()
+}
+
+/** "Undid move", shown once after an undo or a redo. */
+data class HistoryNotice(val id: Long, val undone: Boolean, val kind: EditKind)
 
 /** Which variant's widget a queued move targets — see [PendingWidgetTarget]. */
 private data class PendingMoveKey(val variantBasename: String, val globalIndex: Int)
@@ -137,6 +157,8 @@ data class EditorUiState(
      * `strings.xml` with the rest of the editor's copy.
      */
     val duplicated: DuplicateNotice? = null,
+    /** What the last undo or redo did, for its snackbar. */
+    val historyNotice: HistoryNotice? = null,
     /**
      * Whether a widget edit reaches every style that has the same widget. **Off until asked
      * for.** Each style carries its own copy of the artwork, so an edit that grows it — a
@@ -176,6 +198,12 @@ class EditorViewModel @Inject constructor(
     val state = mutableState.asStateFlow()
     private var loadedProjectId: Long? = null
     private val messageIds = AtomicLong()
+
+    /** The group a nudge press commits under; a new press starts a new one. */
+    private var nudgeGroup: Long = EditGroups.next()
+
+    /** The coroutine committing queued moves, while there is one. Undo waits for it. */
+    private var moveWorker: Job? = null
     // Move targets waiting to be committed, in the order their widgets were first queued.
     //
     // Every widget move — dragged or nudged — goes through here. A commit is a reparse, a
@@ -422,7 +450,7 @@ class EditorViewModel @Inject constructor(
         if (targets.any { (_, x, y) -> x !in Short.MIN_VALUE..Short.MAX_VALUE || y !in Short.MIN_VALUE..Short.MAX_VALUE }) {
             return
         }
-        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false) }
+        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false, group = nudgeGroup) }
         // Published once, for every member, after they are all queued: the canvas moves the
         // set as one picture on this step, whatever order the commits then land in.
         mutableState.value = mutableState.value.copy(
@@ -464,6 +492,8 @@ class EditorViewModel @Inject constructor(
         }
         val variant = snapshot.selectedVariant.basename
         val allStyles = start.applyWidgetEditsToAllStyles
+        // One undo step for the whole set, however many commits it takes.
+        val group = EditGroups.next()
         viewModelScope.launch {
             // A structural edit renumbers global indices and a queued move names one, the
             // reason `operate` drops them too.
@@ -490,11 +520,12 @@ class EditorViewModel @Inject constructor(
                     latest = when (action) {
                         SelectionAction.DUPLICATE -> repository.duplicateWidget(
                             variant, widget.globalIndex, widget.type, widget.sequenceId,
-                            widget.x, widget.y, applyToAllStyles = allStyles,
+                            widget.x, widget.y, applyToAllStyles = allStyles, group = group,
                         )
                         SelectionAction.REMOVE -> repository.removeWidget(
                             variant, widget.globalIndex, widget.type, widget.sequenceId,
                             widget.x, widget.y, requireFinal = false, applyToAllStyles = allStyles,
+                            group = group,
                         )
                     }
                     if (action == SelectionAction.DUPLICATE) {
@@ -690,7 +721,7 @@ class EditorViewModel @Inject constructor(
         val base = pendingTarget(snapshot.selectedVariant.basename, globalIndex)
             ?: PendingWidgetTarget(selected.x, selected.y, selected.type, selected.sequenceId)
         if (base.x == x && base.y == y) return
-        queueWidgetMove(snapshot, selected, x, y)
+        queueWidgetMove(snapshot, selected, x, y, group = EditGroups.next())
     }
 
     /**
@@ -703,7 +734,7 @@ class EditorViewModel @Inject constructor(
      * and one worker commits whatever the latest target is — dropping the
      * intermediate positions instead of queueing a commit per tick.
      */
-    fun nudgeWidget(globalIndex: Int, deltaX: Int, deltaY: Int) {
+    fun nudgeWidget(globalIndex: Int, deltaX: Int, deltaY: Int, group: Long? = null) {
         val snapshot = mutableState.value.snapshot ?: return
         val widget = snapshot.widgets.firstOrNull { it.globalIndex == globalIndex } ?: return
         if (!widget.canEditPosition) return
@@ -717,7 +748,7 @@ class EditorViewModel @Inject constructor(
         }
         // The clamp refused the step, so the widget is already as far over as it goes.
         if (next == base) return
-        queueWidgetMove(snapshot, widget, next.x, next.y)
+        queueWidgetMove(snapshot, widget, next.x, next.y, group = group ?: nudgeGroup)
     }
 
     /**
@@ -736,7 +767,52 @@ class EditorViewModel @Inject constructor(
             ?: PendingWidgetTarget(widget.x, widget.y, widget.type, widget.sequenceId)
         val deltaX = left?.let { it - (widget.drawLeft + base.x - widget.x) } ?: 0
         val deltaY = top?.let { it - (widget.drawTop + base.y - widget.y) } ?: 0
-        if (deltaX != 0 || deltaY != 0) nudgeWidget(globalIndex, deltaX, deltaY)
+        if (deltaX != 0 || deltaY != 0) nudgeWidget(globalIndex, deltaX, deltaY, EditGroups.next())
+    }
+
+    /** A press of a nudge arrow began: everything it commits, held or not, is one undo step. */
+    fun beginNudge() {
+        nudgeGroup = EditGroups.next()
+    }
+
+    fun undo() = stepHistory(back = true)
+
+    fun redo() = stepHistory(back = false)
+
+    /**
+     * One step back or forward through the session's history.
+     *
+     * Queued moves are dropped and the move being committed is waited for first. Without the
+     * wait, a nudge already handed to the repository would land after the undo and put back
+     * what was just taken away. The selection survives only where the same widget is still
+     * at its index: an undone duplicate or removal renumbers the table.
+     */
+    private fun stepHistory(back: Boolean) {
+        val start = mutableState.value
+        val snapshot = start.snapshot ?: return
+        val kind = (if (back) snapshot.undoKind else snapshot.redoKind) ?: return
+        if (start.isWorking) return
+        val identities = snapshot.widgets.associate { it.globalIndex to (it.type to it.sequenceId) }
+        operate(onSuccess = { next ->
+            val widgets = next.snapshot?.widgets.orEmpty().associateBy { it.globalIndex }
+            fun same(index: Int) = widgets[index]?.let { identities[index] == (it.type to it.sequenceId) } == true
+            // Named from the result, not the request: a move that was still committing when
+            // Undo was tapped is what the undo took back.
+            val done = (if (back) next.snapshot?.redoKind else next.snapshot?.undoKind) ?: kind
+            next.copy(
+                selectedWidgetIndex = next.selectedWidgetIndex?.takeIf(::same),
+                multiSelection = next.multiSelection.filter(::same),
+                historyNotice = HistoryNotice(messageIds.incrementAndGet(), undone = back, kind = done),
+            )
+        }) {
+            moveWorker?.join()
+            if (back) repository.undo() else repository.redo()
+        }
+    }
+
+    fun clearHistoryNotice(id: Long) {
+        val current = mutableState.value
+        if (current.historyNotice?.id == id) mutableState.value = current.copy(historyNotice = null)
     }
 
     /**
@@ -797,6 +873,7 @@ class EditorViewModel @Inject constructor(
         y: Int,
         /** False for a set's members, whose preview is [EditorUiState.pendingSetMove]. */
         previewAlone: Boolean = true,
+        group: Long? = null,
     ) {
         // The variant is captured now, from the canvas this drag/nudge is actually on —
         // never re-read at commit time, when the user may have switched to a different
@@ -806,7 +883,7 @@ class EditorViewModel @Inject constructor(
         // a target queued in the instant a worker is finishing would sit there with nobody
         // left to commit it.
         val startMoveWorker = synchronized(pendingMoves) {
-            pendingMoves[key] = PendingWidgetTarget(x, y, widget.type, widget.sequenceId)
+            pendingMoves[key] = PendingWidgetTarget(x, y, widget.type, widget.sequenceId).also { it.group = group }
             val alreadyDraining = moveWorkerDraining
             moveWorkerDraining = true
             !alreadyDraining
@@ -825,7 +902,7 @@ class EditorViewModel @Inject constructor(
             },
         )
         if (startMoveWorker) {
-            viewModelScope.launch { drainWidgetMoves() }
+            moveWorker = viewModelScope.launch { drainWidgetMoves() }
         }
     }
 
@@ -867,6 +944,7 @@ class EditorViewModel @Inject constructor(
                     x = target.x,
                     y = target.y,
                     applyToAllStyles = mutableState.value.applyWidgetEditsToAllStyles,
+                    group = target.group,
                 )
             }.getOrElse { error ->
                 // Every target still queued was accumulated on top of the position the

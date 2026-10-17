@@ -97,6 +97,26 @@
     <string name="editor_canvas_hint_this_style">Editing this style only.</string>
     <!-- Under the canvas hint while the selected widget hangs past an edge of the face. -->
     <string name="editor_canvas_partly_off_face">The watch cuts off the part outside the face.</string>
+    <!-- Undo and redo beside the canvas hint, and the snackbar after each. -->
+    <string name="editor_undo">Undo</string>
+    <string name="editor_redo">Redo</string>
+    <string name="editor_undo_a11y">Undo %1$s</string>
+    <string name="editor_redo_a11y">Redo %1$s</string>
+    <string name="editor_undone">Undid %1$s</string>
+    <string name="editor_redone">Redid %1$s</string>
+    <string name="editor_edit_kind_move">move</string>
+    <string name="editor_edit_kind_resize">resize</string>
+    <string name="editor_edit_kind_rotate">turn</string>
+    <string name="editor_edit_kind_colour">colour change</string>
+    <string name="editor_edit_kind_arrange">layer order change</string>
+    <string name="editor_edit_kind_remove">removal</string>
+    <string name="editor_edit_kind_restore">restore</string>
+    <string name="editor_edit_kind_duplicate">duplicate</string>
+    <string name="editor_edit_kind_import">import</string>
+    <string name="editor_edit_kind_background">background change</string>
+    <string name="editor_edit_kind_styles">style deletion</string>
+    <string name="editor_edit_kind_thumbnail">picker thumbnail update</string>
+    <string name="editor_edit_kind_text">text change</string>
     <string name="editor_canvas_hint_aod">Editing the always-on display only.</string>
     <string name="editor_canvas_nudge_all_styles">@string/editor_canvas_hint_all_styles</string>
     <string name="editor_canvas_nudge_this_style">@string/editor_canvas_hint_this_style</string>
@@ -188,9 +208,9 @@
     <string name="editor_remove_confirm">Remove</string>
     <!-- A widget from another face is deleted rather than kept under Removed. -->
     <string name="editor_delete_title">Delete widget #%1$d?</string>
-    <string name="editor_delete_body_imported">It came from face %1$s, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Add it from that face again to have it back.</string>
+    <string name="editor_delete_body_imported">It came from face %1$s, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Undo, or add it from that face again, to have it back.</string>
     <string name="editor_delete_confirm">@string/ui_delete</string>
-    <string name="editor_delete_body_duplicate">It is a copy of another widget, so it is deleted instead of going to the Removed list. Duplicate that widget again to have it back.</string>
+    <string name="editor_delete_body_duplicate">It is a copy of another widget, so it is deleted instead of going to the Removed list. Undo, or duplicate that widget again, to have it back.</string>
     <!-- Several widgets at once. Each is still its own edit, one after another. -->
     <string name="editor_widgets_hint">Tap to edit on the canvas; hold to select several.</string>
     <string name="editor_widgets_hint_set">Tap to add or remove widgets from the selection.</string>
@@ -217,8 +237,8 @@
         <item quantity="other">%1$d are copies of other widgets, so they are deleted instead of going to the Removed list.</item>
     </plurals>
     <plurals name="editor_remove_set_imported">
-        <item quantity="one">%1$d came from another face, so it is deleted with its artwork. Add it from that face again to have it back.</item>
-        <item quantity="other">%1$d came from other faces, so they are deleted with their artwork. Add them from those faces again to have them back.</item>
+        <item quantity="one">%1$d came from another face, so it is deleted with its artwork. Undo, or add it from that face again, to have it back.</item>
+        <item quantity="other">%1$d came from other faces, so they are deleted with their artwork. Undo, or add them from those faces again, to have them back.</item>
     </plurals>
     <!-- Each widget is its own commit, so the ones before the refusal are done and saved. -->
     <string name="editor_selection_stopped_duplicate">Duplicated %1$d of %2$d, then stopped: %3$s</string>
@@ -549,7 +569,7 @@
     <string name="editor_style_delete_action">Delete %1$s</string>
     <string name="editor_style_delete_title">Delete %1$s?</string>
     <string name="editor_style_delete_confirm">Delete style</string>
-    <string name="editor_style_delete_one_warning">This permanently removes %1$s and its edits from this project. Reset project restores the original styles but discards all other edits too.</string>
+    <string name="editor_style_delete_one_warning">This removes %1$s and its edits from this project. Undo can bring them back while the project stays open; after that only Reset project restores the original styles, and it discards all other edits too.</string>
     <string name="editor_styles_delete_title">Delete selected styles?</string>
     <string name="editor_styles_review_deletion">Review deletion</string>
     <string name="editor_styles_delete_confirm">Delete styles</string>
@@ -562,7 +582,7 @@
     <string name="editor_style_delete_savings">Frees %1$,d bytes · Styles remaining: %2$d</string>
     <string name="editor_style_renumbering">Remaining styles will be numbered in this order:</string>
     <string name="editor_style_active_after">Active after deletion: %1$s</string>
-    <string name="editor_style_delete_warning">This permanently removes the selected styles and their edits from this project. Reset project restores the original styles but discards all other edits too.</string>
+    <string name="editor_style_delete_warning">This removes the selected styles and their edits from this project. Undo can bring them back while the project stays open; after that only Reset project restores the original styles, and it discards all other edits too.</string>
     <string name="editor_style_delete_saved">Style deletion is saved separately. Cancelling the pending edit will not restore deleted styles.</string>
     <string name="editor_style_aod_kept">AOD is kept separately and cannot be deleted here.</string>
 </resources>

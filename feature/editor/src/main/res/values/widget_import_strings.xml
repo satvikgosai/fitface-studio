@@ -49,8 +49,8 @@
     <string name="widget_import_batch_adding">adding…</string>
     <string name="widget_import_batch_added">added</string>
     <string name="widget_import_batch_saving">Saving. Each widget is a separate save, so this cannot be stopped partway.</string>
-    <!-- Said plainly because it is the one thing about a batch that cannot be undone. -->
-    <string name="widget_import_batch_partial">The %1$d already added are saved to your face. Nothing undoes them but removing them.</string>
+    <!-- Said plainly: what was added stays, and one Undo takes the whole batch back. -->
+    <string name="widget_import_batch_partial">The %1$d already added are saved to your face. One Undo on the canvas takes them all back.</string>
     <string name="widget_import_batch_all_done">All %1$d are saved to your face.</string>
     <!-- Nothing committed, so there is nothing to warn about and nothing to leave for. -->
     <string name="widget_import_batch_none">Nothing was added. Your face is unchanged.</string>

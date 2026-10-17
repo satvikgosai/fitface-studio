@@ -125,6 +125,7 @@ import dev.fitface.studio.core.delivery.EnvironmentAdvisory
 import dev.fitface.studio.core.delivery.SetupStep
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
@@ -247,6 +248,18 @@ fun EditorRoute(
             viewModel.clearDuplicated(duplicated.id)
         }
     }
+    val historyNotice = state.historyNotice
+    val historyText = historyNotice?.let {
+        stringResource(if (it.undone) R.string.editor_undone else R.string.editor_redone, editKindLabel(it.kind))
+    }
+    LaunchedEffect(historyNotice?.id) {
+        if (historyNotice == null || historyText == null) return@LaunchedEffect
+        try {
+            snackbar.showSnackbar(historyText)
+        } finally {
+            viewModel.clearHistoryNotice(historyNotice.id)
+        }
+    }
 
     // A set edit that stopped partway: said in words, because the face has visibly changed
     // and a bare error over it would read as though nothing had.
@@ -288,7 +301,10 @@ fun EditorRoute(
             onNudge = viewModel::nudgeSelection,
             onDuplicate = viewModel::duplicateSelection,
             onRemove = viewModel::removeSelection,
+            onBeginNudge = viewModel::beginNudge,
         ),
+        onUndo = viewModel::undo,
+        onRedo = viewModel::redo,
         onMoveWidget = viewModel::moveWidget,
         onNudgeWidget = viewModel::nudgeWidget,
         onPlaceWidget = viewModel::placeWidget,
@@ -393,6 +409,8 @@ private fun EditorScreen(
     onVariant: (EditorVariant) -> Unit,
     onWidget: (Int?) -> Unit,
     selection: SelectionActions,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onPlaceWidget: (Int, Int?, Int?) -> Unit,
@@ -555,6 +573,8 @@ private fun EditorScreen(
                         onVariant = onVariant,
                         onWidget = onWidget,
                         selection = selection,
+                        onUndo = onUndo,
+                        onRedo = onRedo,
                         onMoveWidget = onMoveWidget,
                         onNudgeWidget = onNudgeWidget,
                         onPlaceWidget = onPlaceWidget,
@@ -1035,6 +1055,8 @@ private fun EditorPageContent(
     onVariant: (EditorVariant) -> Unit,
     onWidget: (Int?) -> Unit,
     selection: SelectionActions,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     onMoveWidget: (Int, Int, Int) -> Unit,
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onPlaceWidget: (Int, Int?, Int?) -> Unit,
@@ -1078,7 +1100,7 @@ private fun EditorPageContent(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
             onResizeWidget, onRotateWidget, onDuplicateWidget, onRemoveWidget,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
-            selection, modifier,
+            selection, onUndo, onRedo, modifier,
         )
         EditorPage.Widgets -> WidgetsWorkspace(
             snapshot = snapshot,
@@ -1104,7 +1126,7 @@ private fun EditorPageContent(
             modifier = modifier,
         )
         EditorPage.Inspector -> InspectorWorkspace(
-            state, snapshot, selected, onNudgeWidget, onPlaceWidget, onApplyAll, onRemoveWidget,
+            state, snapshot, selected, onNudgeWidget, onPlaceWidget, selection.onBeginNudge, onApplyAll, onRemoveWidget,
             onDuplicateWidget, onResizeWidget, onWidgetColor, onRotateWidget, onArrangeWidget, modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
@@ -1163,6 +1185,8 @@ private fun CanvasWorkspace(
     onOpenWidgets: () -> Unit,
     onInspect: () -> Unit,
     selection: SelectionActions,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val picks = state.multiSelection.mapNotNull { index ->
@@ -1193,6 +1217,7 @@ private fun CanvasWorkspace(
                 onDuplicate = onDuplicateWidget,
                 onRemove = onRemoveWidget,
                 onInspect = onInspect,
+                onBeginNudge = selection.onBeginNudge,
             )
         }
         val tray: @Composable () -> Unit = {
@@ -1209,14 +1234,14 @@ private fun CanvasWorkspace(
                         .verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    CanvasHint(state, selected, picks.size, onOpenWidgets)
+                    CanvasHint(state, selected, picks.size, onOpenWidgets, onUndo, onRedo)
                     tray()
                 }
             }
         } else {
             Column(Modifier.fillMaxSize()) {
                 face(Modifier.weight(1f).fillMaxWidth())
-                CanvasHint(state, selected, picks.size, onOpenWidgets)
+                CanvasHint(state, selected, picks.size, onOpenWidgets, onUndo, onRedo)
                 tray()
             }
         }
@@ -1271,9 +1296,68 @@ private fun CanvasHint(
     /** How many widgets are selected together, or zero. */
     setSize: Int,
     onOpenWidgets: () -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+) {
+    // Undo and redo flank the hint rather than sitting in the header: on a narrow phone the
+    // header has the project's name, EDITED, ⋯ and ≡ to fit, and two more buttons left the
+    // name a couple of letters wide. Here they are on screen whether or not anything is
+    // selected, under the face they change.
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HistoryButton(back = true, kind = state.snapshot?.undoKind, enabled = !state.isWorking, onClick = onUndo)
+        CanvasHintText(state, selected, setSize, onOpenWidgets, Modifier.weight(1f).padding(horizontal = 6.dp))
+        HistoryButton(back = false, kind = state.snapshot?.redoKind, enabled = !state.isWorking, onClick = onRedo)
+    }
+}
+
+/** `↶` or `↷`, named for what it would take back or put back; disabled with nothing to do. */
+@Composable
+private fun HistoryButton(back: Boolean, kind: EditKind?, enabled: Boolean, onClick: () -> Unit) {
+    val description = when {
+        kind == null -> stringResource(if (back) R.string.editor_undo else R.string.editor_redo)
+        else -> stringResource(if (back) R.string.editor_undo_a11y else R.string.editor_redo_a11y, editKindLabel(kind))
+    }
+    FitIconButton(
+        glyph = if (back) "↶" else "↷",
+        contentDescription = description,
+        onClick = onClick,
+        enabled = enabled && kind != null,
+    )
+}
+
+/** What an undo step is called in copy: "Undo move", "Undid resize". */
+@Composable
+internal fun editKindLabel(kind: EditKind): String = stringResource(
+    when (kind) {
+        EditKind.MOVE -> R.string.editor_edit_kind_move
+        EditKind.RESIZE -> R.string.editor_edit_kind_resize
+        EditKind.ROTATE -> R.string.editor_edit_kind_rotate
+        EditKind.COLOUR -> R.string.editor_edit_kind_colour
+        EditKind.ARRANGE -> R.string.editor_edit_kind_arrange
+        EditKind.REMOVE -> R.string.editor_edit_kind_remove
+        EditKind.RESTORE -> R.string.editor_edit_kind_restore
+        EditKind.DUPLICATE -> R.string.editor_edit_kind_duplicate
+        EditKind.IMPORT -> R.string.editor_edit_kind_import
+        EditKind.BACKGROUND -> R.string.editor_edit_kind_background
+        EditKind.STYLES -> R.string.editor_edit_kind_styles
+        EditKind.THUMBNAIL -> R.string.editor_edit_kind_thumbnail
+        EditKind.TEXT -> R.string.editor_edit_kind_text
+    },
+)
+
+@Composable
+private fun CanvasHintText(
+    state: EditorUiState,
+    selected: WidgetGuide?,
+    setSize: Int,
+    onOpenWidgets: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -1415,6 +1499,7 @@ private fun SelectionActionBar(
     onDuplicate: () -> Unit,
     onRemove: () -> Unit,
     onInspect: () -> Unit,
+    onBeginNudge: () -> Unit,
 ) {
     var confirmRemoval by rememberSaveable(widget.globalIndex) { mutableStateOf(false) }
     if (confirmRemoval) {
@@ -1470,6 +1555,7 @@ private fun SelectionActionBar(
                     direction = direction,
                     enabled = widget.canEditPosition && enabled,
                     modifier = Modifier.weight(1f),
+                    onPress = onBeginNudge,
                     onStep = { pixels ->
                         onNudgeWidget(
                             widget.globalIndex,
@@ -1660,6 +1746,8 @@ internal class SelectionActions(
     val onNudge: (Int, Int) -> Unit,
     val onDuplicate: () -> Unit,
     val onRemove: () -> Unit,
+    /** A nudge arrow was pressed, for a lone widget or a set: see [EditorViewModel.beginNudge]. */
+    val onBeginNudge: () -> Unit = {},
 )
 
 /**
@@ -1740,6 +1828,7 @@ private fun SelectionSetBar(
                     direction = direction,
                     enabled = movable && enabled,
                     modifier = Modifier.weight(1f),
+                    onPress = selection.onBeginNudge,
                     onStep = { pixels ->
                         selection.onNudge(direction.deltaX * pixels, direction.deltaY * pixels)
                     },
@@ -1917,6 +2006,7 @@ private fun RepeatingNudgeButton(
     direction: NudgeDirection,
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    onPress: () -> Unit = {},
     onStep: (Int) -> Unit,
 ) {
     val description = stringResource(direction.description)
@@ -1924,6 +2014,7 @@ private fun RepeatingNudgeButton(
         enabled = enabled,
         modifier = modifier.semantics { contentDescription = description },
         onStep = onStep,
+        onPress = onPress,
     ) {
         NudgeArrow(direction)
     }
@@ -1946,15 +2037,19 @@ private fun RepeatingButton(
     enabled: Boolean,
     modifier: Modifier,
     onStep: (Int) -> Unit,
+    /** A press began: tap or hold, everything it steps is one undo step. */
+    onPress: () -> Unit = {},
     content: @Composable RowScope.() -> Unit,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
     val step by rememberUpdatedState(onStep)
+    val press by rememberUpdatedState(onPress)
     val steppedWhilePressed = remember { mutableStateOf(false) }
 
     LaunchedEffect(pressed, enabled) {
         if (!pressed || !enabled) return@LaunchedEffect
+        press()
         // The first step is always the one the label promises, however long the press
         // turns out to be: a hold that began as a tap must not overshoot.
         step(1)
@@ -1975,7 +2070,10 @@ private fun RepeatingButton(
 
     FitButton(
         onClick = {
-            if (!steppedWhilePressed.value) step(1)
+            if (!steppedWhilePressed.value) {
+                press()
+                step(1)
+            }
             steppedWhilePressed.value = false
         },
         modifier = modifier,
@@ -2562,6 +2660,7 @@ private fun InspectorWorkspace(
     widget: WidgetGuide?,
     onNudgeWidget: (Int, Int, Int) -> Unit,
     onPlaceWidget: (Int, Int?, Int?) -> Unit,
+    onBeginNudge: () -> Unit,
     onApplyAll: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onDuplicate: () -> Unit,
@@ -2645,6 +2744,7 @@ private fun InspectorWorkspace(
                     { pixels -> onNudgeWidget(widget.globalIndex, -pixels, 0) },
                     { pixels -> onNudgeWidget(widget.globalIndex, pixels, 0) },
                     Modifier.weight(1f),
+                    onBeginNudge,
                 )
                 CoordinateControl(
                     stringResource(R.string.editor_axis_y), displayY, widget.canEditPosition,
@@ -2652,6 +2752,7 @@ private fun InspectorWorkspace(
                     { pixels -> onNudgeWidget(widget.globalIndex, 0, -pixels) },
                     { pixels -> onNudgeWidget(widget.globalIndex, 0, pixels) },
                     Modifier.weight(1f),
+                    onBeginNudge,
                 )
             }
             Text(
@@ -2982,6 +3083,7 @@ private fun CoordinateControl(
     onMinus: (Int) -> Unit,
     onPlus: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    onPress: () -> Unit = {},
 ) {
     Column(
         modifier.background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
@@ -2995,8 +3097,8 @@ private fun CoordinateControl(
             Text(value.toString(), style = FitFaceType.readout)
         }
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            RepeatingNudgeButton(decrease, enabled, Modifier.weight(1f), onMinus)
-            RepeatingNudgeButton(increase, enabled, Modifier.weight(1f), onPlus)
+            RepeatingNudgeButton(decrease, enabled, Modifier.weight(1f), onPress, onMinus)
+            RepeatingNudgeButton(increase, enabled, Modifier.weight(1f), onPress, onPlus)
         }
     }
 }

@@ -114,7 +114,7 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/projects/<id>/source.apk` | The package a project was opened from |
 | `filesDir/projects/<id>/edited.bin` | Legacy edited container, read for backward compatibility |
 | `filesDir/projects/<id>/session.json` | Legacy removed records and thumbnail state |
-| `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state and original widget identities; the row names the committed file |
+| `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state and original widget identities; the row names the committed file, and the open session's undo and redo steps name the others |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
 
@@ -124,10 +124,41 @@ comparison locally. The test never writes to the corpus.
 an edit fails. Every new edit writes a new immutable `edit-<UUID>.checkpoint`
 under `NonCancellable`, containing the BIN, native identities, donor provenance,
 removed records and thumbnail state, then swaps the Room pointer. A failed swap
-removes the candidate file; success sweeps the previous checkpoint. No BIN can
-commit independently of the metadata needed to interpret or restore it. Reset
-clears the pointer before removing old files. Legacy BIN/session pairs remain
-readable and migrate on their next edit; missing checkpoints fail closed.
+removes the candidate file. No BIN can commit independently of the metadata needed to
+interpret or restore it. Reset clears the pointer before removing old files. Legacy
+BIN/session pairs remain readable and migrate on their next edit; missing checkpoints
+fail closed.
+
+### Undo and redo
+
+The checkpoints are the history. A commit no longer deletes the checkpoint it replaces:
+the state it left (that file, or the pristine package, plus the active style and canvas
+variant) becomes an undo step. Undo and redo restore a step through the same reader
+`openProject` uses and make the same Room pointer swap, rendering the state before the
+row moves, so a step that cannot be shown is never made current.
+
+- **Session-scoped, on disk too.** Opening any project (this one again included), Reset
+  and delete end the history and delete its files. A process Android kills mid-session
+  cannot, so each new process sweeps every project's checkpoints the row does not name the
+  first time the library lists projects (the open session's project excepted), and opening
+  a project sweeps its own. The library sweep is a background job beside the list, never
+  ahead of it; it locks one project at a time and rereads that row before deleting, since
+  the list it started from may be stale. Duplicates and archives carry only the current state.
+- **Pristine by identity.** The bottom step reinstates the session's original container
+  object, so `isDirty` (a reference comparison) is false again.
+- **One step per gesture.** Commits carrying the same group in a row become one step: a
+  nudge press however long it is held (`RepeatingButton` reports each press), a set's
+  duplicates, removals or moves, an import batch. Groups are explicit ids, never times.
+- **Waits for moves.** The editor drops queued moves and waits for the one in flight
+  before asking for an undo, so a nudge cannot land after it.
+- **Bounded.** 30 steps and 48 MiB of checkpoint files, oldest dropped first; a 4 MiB
+  face therefore keeps about eight. History gives itself up for the session, before
+  writing, when the phone lacks room for the next checkpoint and a 16 MiB margin.
+- **Callers that change the session before committing** (removal, restore, thumbnail)
+  pass the true before-state to `commit`.
+
+`UndoRedoTest` walks every kind of edit back and forward byte for byte, and covers style
+deletion, grouping, eviction, Reset, the sweep, duplicates and reopening.
 
 Project creation inserts a row to obtain its directory ID, then writes files and
 updates paths under `NonCancellable`. On failure remove files and call
