@@ -87,6 +87,14 @@ catalogue faces — about three minutes — and checks that each one:
 There is no `androidTest` source set; the Room migration test runs under
 Robolectric.
 
+`WatchProbesTest` builds containers that each test one unverified watch behaviour: an
+appended Animation, Indexed8 palette alpha, large overhangs, face IDs outside the
+catalogue, a changed font binding, swapped date sources and a soft-edged appended picture.
+Their writers live in test code only. Every probe must validate and pass the delivery
+checks, and the test fails if one does not. Pass `-Pfit3.probeOut=<dir>` (with `--rerun`)
+to also write each probe as a project archive, which the Library's Import opens like any
+other project. Never commit the output: it holds corpus artwork.
+
 ## The test corpus
 
 Most tests are self-contained. The rest read real watch-face containers and

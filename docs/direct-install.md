@@ -258,6 +258,18 @@ Keep the plugin installed; release only after peers are cached. If the watch dis
 the companion becomes unstable or protocol state diverges, restore the plugin before
 recovery. Never disable the accessory framework or unpair as part of handover.
 
+## Recorded on a watch
+
+One SM-R390, 2026-10-14, with probes built by `WatchProbesTest`:
+
+- **Face IDs outside the catalogue.** The custom-face template installed under `00201` and
+  `00202` sat beside Info_4 rather than replacing it, and each could be selected on the
+  watch. Galaxy Wearable listed both as blank tiles and, with one of them current, showed
+  the Photos face's picture on its main screen.
+- **The stock plugin did not overwrite an edit** after the plugin was given back its
+  access and Galaxy Wearable reconnected. The research's re-send path (Fit3-App report
+  §6.1) was not observed in that run.
+
 ## Unverified
 
 Bluetooth delivery is device-proven on an SM-R390. Timeout recovery and deliberately

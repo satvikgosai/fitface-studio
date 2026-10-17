@@ -304,6 +304,31 @@ every unnamed fixed pointer in that group has the named typeface:
 | 15 | LED Digital | runtime slot 32 | selector-12 fallback |
 | 6, 13, 14, other | not dispatched | none | common fallback |
 
+**A family carries only some glyphs at some sizes.** On a watch (2026-10-14), two word
+labels of `00106` (`steps`, `bpm`; MiSans 24) were each pointed at an appended binding:
+Roboto Bold 40 (selector 2) and LED Digital 32 (selector 15). Both switched font, and both
+drew missing-glyph boxes for most letters (`bpm` became three boxes).
+
+A second run (2026-10-17) moved the four live numbers and the four labels of `00106` to
+other bindings, one each. Every one drew cleanly, so glyph coverage depends on family **and**
+size: Roboto Bold has these letters at 24 but not at 40.
+
+| Family (selector) | Size | Digits | Lowercase letters |
+| --- | ---: | --- | --- |
+| MiSans (0) | 16 | not tried | drawn |
+| MiSans (0) | 40 | drawn | drawn |
+| Roboto Regular (1) | 24 | not tried | drawn |
+| Roboto Regular (1) | 40 | drawn | not tried |
+| Roboto Bold (2) | 24 | not tried | drawn |
+| Roboto Bold (2) | 40 | drawn | **boxes** |
+| LED Digital (15) | 32 | drawn | **boxes** |
+
+The letters tried were those of `steps`, `bpm`, `kcal` and `active time`; uppercase and other
+scripts were not. The catalogue never draws a letter outside selector 0: in its English
+tables every Value or Comp string containing one uses selector 0, while selectors 1, 2, 3,
+9, 10 and 15 draw only digits and `% - / °`. A binding change is therefore safe only for a
+family, size and set of characters shown on a watch, as above or in a catalogue face.
+
 ### Glyph tables — the strings the watch draws
 
 The two reference faces carry eight locale entries each. The firmware opens
@@ -505,7 +530,16 @@ it, and update validity masks come from global runtime state rather than the
 record. The inert handlers read no raw-record byte; `0x0E` is their loader-
 proven minimum, while `0x10` is the safer writer convention because it retains
 the ordinary global-index halfword. No vendor producer sample exists for type
-4, type 9, or an inert type. The exact byte schemas for every observed
+4, type 9, or an inert type.
+
+**Type 4 on a watch** (one SM-R390, 2026-10-14; probes from `WatchProbesTest`, appended
+to the custom-face template). An appended Animation plays. `+0x26` is milliseconds per
+frame: period 1000 advanced once a second (10 cycles of 4 frames in about 40 s), and
+twelve full-panel RGB565 frames at period 100 played smoothly with no reboot and the
+face picker still working. Repeat 3 did **not** stop after three cycles, and the
+animation restarts at frame 1 when the screen wakes, so treat every animation as looping.
+Indexed8 frames honour palette alpha. In the always-on display the same animation ran
+about three times slower (period 1000: 5 cycles in about 60 s). The exact byte schemas for every observed
 type are implemented and JVM-tested in the format layer, and the per-type
 behaviour below supersedes the original two-face guesses.
 
@@ -699,6 +733,11 @@ transparent RGB565+A canvas; zero uses an ordinary label. Comp is therefore auth
 dictionary index and source must be designed with the locale files rather than
 copied independently.
 
+Swapping the numeric day (18) and month (21) sources of every date Comp on `00003` turned
+its month-first date into day-first on a watch (2026-10-14, showed `14/10`). That run
+checked English only; the permutation item at `+0x62` was left as it was, and Italian
+already stores `3214` there.
+
 Numeric selectors are exact: 0/1 use `%d`, 2–6 use `%02d` through `%06d`, and
 any value at least 7 falls back to `%d`. Pair has the analogous wider table
 through selector 8 (`%08d`) and falls back to `%d` at 9 or above. Pair source
@@ -727,6 +766,10 @@ Formats: `0x0082` = RGB565, 2 bytes/px, little-endian half-word with R in bits
 3 bytes/px. `0x0088` = a 1,024-byte, 256-entry BGRA palette followed by one
 8-bit palette index per pixel. These map to GUI image-format enums 4, 5 and 10
 respectively; they are the only codes in the 7,306-image style/AOD corpus.
+A palette entry's alpha byte is honoured: Indexed8 animation frames whose background
+entry has alpha 0 showed the style background through them on a watch (2026-10-14).
+An appended Static with an RGB565+A raster also blends its partial alpha over both the
+background and the widgets beneath it.
 
 **All 171 records in both files have a trailer of exactly four bytes** after
 their format-specific pixel plane, with no exceptions.
@@ -886,7 +929,7 @@ Imports and raster growth can also cross the ceiling.
 | Panel geometry comes from the declared entry path, not image 0 | `panelSize`; `00022` starts with a 37×28 icon; `00108` styles 0–3 with a 204×204 dial |
 | Backgrounds are exactly widgets drawing panel-sized rasters | Multiple layers are legal (`00076`, `00089`); `backgroundImage` may be null |
 | Position is `origin + stored` | `WidgetLayout`, `drawLeft/drawTop`; write-back subtracts origin, never guesses from the sign |
-| A widget may hang past the panel edge | Vendor faces ship it: a 2026-10 census of the 99 containers found 44 rasters on five faces (`00002`, `00016`, `00023`, `00024`, `00096`) drawn up to 11 px past an edge, plus 159 text boxes; none is wholly off. The editor's one clamp, `constrainDragCoordinate` with `offFaceKeepVisible`, keeps a tenth of the drawn outline per axis (at least 10 px, at most all of it) on the panel for drag, nudge, set nudge and typed positions, and admits a starting position already further out. Write-back and the signed 16-bit range are unchanged. Larger overhangs than the vendor ones have not been sent to a watch |
+| A widget may hang past the panel edge | Vendor faces ship it: a 2026-10 census of the 99 containers found 44 rasters on five faces (`00002`, `00016`, `00023`, `00024`, `00096`) drawn up to 11 px past an edge, plus 159 text boxes; none is wholly off. The editor's one clamp, `constrainDragCoordinate` with `offFaceKeepVisible`, keeps a tenth of the drawn outline per axis (at least 10 px, at most all of it) on the panel for drag, nudge, set nudge and typed positions, and admits a starting position already further out. Write-back and the signed 16-bit range are unchanged. On a watch (2026-10-14), a Static, a Sprite, a Value and a turned Composite each placed half off a different edge were clipped cleanly at the panel, with nothing wrapped or moved |
 | Hand selection differs from rendering | `WidgetPlacement.HIDDEN` suppresses a false axis-aligned outline; hands still render and can be selected from the list |
 | Exact type schemas, not a generic minimum size | All 4,034 producer records have their type's exact size; a 40-byte Composite is not a valid 100-byte record |
 | Four alignment-reference fields only | Static/Hand `+0x1E`, Value/Composite `+0x22`, enabled by the adjacent code; see §7 |
@@ -894,7 +937,7 @@ Imports and raster growth can also cross the ceiling.
 | Original identity survives index changes | Schema-3 checkpoints persist `SessionLineage` native sources and duplicate status; operations remap current indices explicitly. Legacy migration uses `originalWidgetSources` once. Unknown originals cannot be resized. Never use raw offsets or `originalRecords[globalIndex]` as identity. |
 | Source IDs are not identities | Static source is zero in 678/681 records; Sprite `(type, source)` happens to be unique in 1,486/1,518, not universally |
 | Every declared raster pointer is relocated | Static `+0x20`, Sprite's exact frame-count words, Hand `words[1]`, Arc `words[4]` (30/30), LineBar `words[2]` (16/16) |
-| Empty widget tables are legal while editing | Removing the last widget retains the image section; snapshot, restore and preview accept zero widgets. The firmware's style-header validator requires a nonzero count (§6), so Install sends an emptied style or AOD with a warning naming it. Whether the watch draws or skips one is untested |
+| Empty widget tables are legal while editing | Removing the last widget retains the image section; snapshot, restore and preview accept zero widgets. The firmware's style-header validator requires a nonzero count (§6), so Install sends an emptied style or AOD with a warning naming it. On a watch (2026-10-14) an emptied style installed and drew black while the always-on display kept its clock; swiping to a tile and back flashed "no watch face" for a moment |
 
 Sign-based anchoring misplaced 62 records on ten faces (`00015`, `00016`, `00018`,
 `00023`, `00027`, `00030`, `00051`, `00066`, `00089`, `00096`): 43 off-panel
@@ -1383,10 +1426,15 @@ marker and tint changes, Pair position/colour, type-aware background/Sprite relo
 non-final removal and append duplication on `00106`, added backgrounds, widget resize,
 widget import, and original/modified standalone-BIN installation.
 
+Probe results from one watch on 2026-10-14 are recorded where each feature is
+described: type-4 animations (§7), palette alpha and appended RGB565+A pictures (§8),
+half-off overhangs and empty styles (identity and structural edits), changed font
+bindings (§5) and a swapped date order (Comp, §7).
+
 These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
 need particular attention; imported type/source combinations remain incompletely
 verified. Composite, Rule and vector arc recolours are software/corpus/emulator checked
-only, as are overhangs larger than the vendor faces' 11 px. No AOD edit (including
+only. No AOD edit (including
 added background), imported-image deletion, or the single-style custom-template recipe
 has been verified on a watch. Resource preview tests prove joins and edit invariants,
 not exact ROM fonts, antialiasing or live data.
