@@ -133,11 +133,15 @@ class WidgetImportViewModel @Inject constructor(
     private var opened = false
     private var targetOriginal: String? = null
 
-    fun start(snapshot: EditorSnapshot, backgroundMode: Boolean = false) {
+    /** A background import writes the selected style alone; see `EditorUiState.backgroundThisStyleOnly`. */
+    private var thisStyleOnly = false
+
+    fun start(snapshot: EditorSnapshot, backgroundMode: Boolean = false, thisStyleOnly: Boolean = false) {
         if (opened && projectId == snapshot.projectId && target == snapshot.selectedVariant.basename &&
-            mutable.value.backgroundMode == backgroundMode) return
+            mutable.value.backgroundMode == backgroundMode && this.thisStyleOnly == thisStyleOnly) return
         close()
         opened = true
+        this.thisStyleOnly = thisStyleOnly
         projectId = snapshot.projectId
         target = snapshot.selectedVariant.basename
         targetOriginal = snapshot.originalVariants[target]
@@ -243,7 +247,8 @@ class WidgetImportViewModel @Inject constructor(
         val variant = current.contentVariant ?: return
         if (!current.backgroundMode || current.busy || current.backgroundContent?.background == null) return
         run {
-            val preview = repository.previewBackgroundImport(source.handle, variant.basename, projectId, target)
+            val preview = repository.previewBackgroundImport(source.handle, variant.basename, projectId, target,
+                thisStyleOnly)
             currentCoroutineContext().ensureActive()
             mutable.update { it.copy(backgroundPreview = preview, stage = WidgetImportStage.REVIEW) }
         }

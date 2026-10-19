@@ -237,7 +237,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
 
     override suspend fun previewBackgroundImport(handle: String, donorVariant: String,
-        projectId: Long, targetVariant: String): BackgroundImportPreview = withContext(Dispatchers.Default) {
+        projectId: Long, targetVariant: String, thisStyleOnly: Boolean): BackgroundImportPreview = withContext(Dispatchers.Default) {
         mutex.withLock {
             pendingBackground = null
             val current = requireSession()
@@ -246,7 +246,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val source = donor?.takeIf { it.handle == handle }
                 ?: throw WatchFaceException("Choose the source watch face again.")
             val result = BackgroundImporter.prepare(current.currentContainer, targetVariant,
-                source.container.entryByBasename(donorVariant))
+                source.container.entryByBasename(donorVariant), thisStyleOnly)
             val preview = WidgetPreviewComposer.compose(result.edit.container.entryByBasename(targetVariant),
                 result.edit.container.entries, WidgetTextRasterizer::render,
                 previewDictionaryLocale()).composed
@@ -1170,11 +1170,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
     override suspend fun replaceBackground(
         imageUri: String,
         placement: ImagePlacement,
+        thisStyleOnly: Boolean,
     ): EditorSnapshot {
         val prepared = withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                val targets = current.backgroundTargetEntries()
+                val targets = current.backgroundScope(thisStyleOnly)
                 if (targets.isEmpty()) {
                     throw IllegalArgumentException("No editable style entries found")
                 }
@@ -1182,7 +1183,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // selected one first. Reading style0 unconditionally made faces whose
                 // first style paints onto black — 00011, and 00108 up to style3 —
                 // refuse an edit their remaining styles could take.
-                val image = current.selectedBackgroundRaster()
+                val image = (if (current.scopedToStyle(thisStyleOnly)) {
+                    FaceRecordParser.backgroundImage(targets.single())
+                } else {
+                    current.selectedBackgroundRaster()
+                })
                     ?: throw WatchFaceException(
                         "No style of this face has a full-face background image to " +
                             "replace — it draws its widgets straight onto black.",
@@ -1193,7 +1198,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     container = current.currentContainer,
                     width = image.width,
                     height = image.height,
-                    styleNames = targets.map { it.basename },
+                    styleNames = targets.filter { FaceRecordParser.backgroundImage(it) != null }
+                        .map { it.basename },
                 )
             }
         }
@@ -1245,11 +1251,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
     override suspend fun addBackground(
         imageUri: String,
         placement: ImagePlacement,
+        thisStyleOnly: Boolean,
     ): EditorSnapshot {
+        val scoped = thisStyleOnly
         val prepared = withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                val scope = current.backgroundTargetEntries()
+                val scope = current.backgroundScope(thisStyleOnly)
                 val bare = scope.filter { FaceRecordParser.backgroundImage(it) == null }
                 if (bare.size != scope.size) {
                     throw WatchFaceException(
@@ -1270,7 +1278,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // one on the canvas first, because it is the only one you can see. With AOD
                 // selected that list is `aod.bin` alone; a normal style is never joined to
                 // it, nor it to them.
-                val targets = current.backgroundAddTargets()
+                val targets = if (current.scopedToStyle(thisStyleOnly)) {
+                    StructuralEditor.backgroundStylesThatFit(
+                        current.currentContainer, scope.map { it.basename }, current.selectedVariantName,
+                    )
+                } else {
+                    current.backgroundAddTargets()
+                }
                 if (targets.isEmpty()) {
                     val cost = StructuralEditor.addedBackgroundBytes(panel.width, panel.height)
                     throw Fit3CapacityException(current.currentContainer.fileSize,
@@ -1319,6 +1333,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         edit.changedStyles,
                         operation = if (targets == listOf(AOD_ENTRY_NAME)) {
                             "Added a full-face background to the always-on display"
+                        } else if (scoped && targets.size == 1) {
+                            "Added a full-face background to ${targets.single()} alone"
                         } else if (targets.size == current.styleEntries().size) {
                             "Added a full-face background"
                         } else {
@@ -3052,6 +3068,18 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 styleEntries()
             }
 
+        /** Whether a background edit asked for the selected style alone, and that is a style. */
+        fun scopedToStyle(thisStyleOnly: Boolean): Boolean =
+            thisStyleOnly && selectedVariantName != null && selectedVariantName != AOD_ENTRY_NAME
+
+        /** [backgroundTargetEntries], or the selected style alone when [scopedToStyle]. */
+        fun backgroundScope(thisStyleOnly: Boolean): List<ContainerEntry> =
+            if (scopedToStyle(thisStyleOnly)) {
+                listOf(currentContainer.entryByBasename(requireNotNull(selectedVariantName)))
+            } else {
+                backgroundTargetEntries()
+            }
+
         fun directInstallPayload(): DirectInstallPayload {
             val binary = validatedBytes()
             val faceId = apk.faceId.toIntOrNull()
@@ -3454,6 +3482,14 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 aodHasBackground = aodEntry?.let {
                     FaceRecordParser.backgroundImage(it) != null
                 } ?: false,
+                selectedCanTakeBackground = selectedVariantName.let { selected ->
+                    selected != null && selected != AOD_ENTRY_NAME && selected !in backgrounds &&
+                        StructuralEditor.backgroundStylesThatFit(
+                            source = currentContainer,
+                            entryBasenames = listOf(selected),
+                            preferred = selected,
+                        ).isNotEmpty()
+                },
                 aodCanTakeBackground = aodEntry != null &&
                     StructuralEditor.backgroundStylesThatFit(
                         source = currentContainer,

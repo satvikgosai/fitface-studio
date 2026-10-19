@@ -326,6 +326,11 @@
     <string name="editor_bg_no_image_detail">Resized to %1$d×%2$d when applied.</string>
     <string name="editor_bg_choose">Choose image</string>
     <string name="editor_bg_fit_heading">Fit</string>
+    <string name="editor_bg_scope_heading">Applies to</string>
+    <string name="editor_bg_scope_all">All styles</string>
+    <string name="editor_bg_scope_this">This style only</string>
+    <string name="editor_bg_scope_this_note">Only %1$s changes. The other styles keep their own backgrounds.</string>
+    <string name="editor_bg_adds_this">Adds a full-face background to %1$s alone. The other styles stay as they are.</string>
     <string name="editor_bg_discard">Discard</string>
     <string name="editor_bg_use">Use positioned image</string>
     <string name="editor_bg_add">Add positioned image</string>

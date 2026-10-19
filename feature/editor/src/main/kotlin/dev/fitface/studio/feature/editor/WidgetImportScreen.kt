@@ -70,11 +70,12 @@ import kotlin.math.roundToInt
 @Composable
 internal fun WidgetImportRoute(initialSnapshot: EditorSnapshot, onDismiss: () -> Unit,
     onImported: (EditorSnapshot) -> Unit, onStylesDeleted: (EditorSnapshot) -> Unit = {},
-    backgroundMode: Boolean = false, viewModel: WidgetImportViewModel = hiltViewModel()) {
+    backgroundMode: Boolean = false, backgroundThisStyleOnly: Boolean = false,
+    viewModel: WidgetImportViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snapshot = state.targetSnapshot ?: initialSnapshot
     var managingStyles by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(backgroundMode) { viewModel.start(snapshot, backgroundMode) }
+    LaunchedEffect(backgroundMode) { viewModel.start(snapshot, backgroundMode, backgroundThisStyleOnly) }
     LaunchedEffect(state.imported) { state.imported?.let { viewModel.close(); onImported(it) } }
     val back = { if (viewModel.back()) { viewModel.close(); onDismiss() } }
     Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false,

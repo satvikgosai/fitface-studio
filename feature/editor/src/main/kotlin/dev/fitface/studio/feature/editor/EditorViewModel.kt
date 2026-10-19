@@ -208,6 +208,11 @@ data class EditorUiState(
      * for styles the reader may never install. Widening an edit is the tray's scope toggle.
      */
     val applyWidgetEditsToAllStyles: Boolean = false,
+    /**
+     * A background edit writes the selected style alone rather than every style. Off by
+     * default, as background edits always were; see [EditorSnapshot.offersBackgroundScope].
+     */
+    val backgroundThisStyleOnly: Boolean = false,
     val previewReviewed: Boolean = false,
     val pendingWidgetMove: WidgetMovePreview? = null,
     /**
@@ -654,6 +659,10 @@ class EditorViewModel @Inject constructor(
             pendingSetMove = emptyList())
     }
 
+    fun setBackgroundThisStyleOnly(value: Boolean) {
+        mutableState.value = mutableState.value.copy(backgroundThisStyleOnly = value)
+    }
+
     fun setApplyWidgetEditsToAllStyles(value: Boolean) {
         if (value && mutableState.value.snapshot?.widgets?.singleOrNull {
             it.globalIndex == mutableState.value.selectedWidgetIndex
@@ -850,16 +859,18 @@ class EditorViewModel @Inject constructor(
     fun applyBackground() {
         val pending = mutableState.value.pendingImage ?: return
         val placement = mutableState.value.placement
-        val adding = mutableState.value.snapshot?.canAddBackground == true
+        val snapshot = mutableState.value.snapshot ?: return
+        val thisStyleOnly = mutableState.value.backgroundThisStyleOnly && snapshot.offersBackgroundScope
+        val adding = snapshot.backgroundAdds(thisStyleOnly)
         operate(
             onSuccess = { current ->
                 current.copy(pendingImage = null, previewReviewed = false)
             },
         ) {
             if (adding) {
-                repository.addBackground(pending.uri, placement)
+                repository.addBackground(pending.uri, placement, thisStyleOnly)
             } else {
-                repository.replaceBackground(pending.uri, placement)
+                repository.replaceBackground(pending.uri, placement, thisStyleOnly)
             }
         }
     }

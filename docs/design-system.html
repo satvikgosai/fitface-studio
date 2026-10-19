@@ -1053,6 +1053,12 @@
     <li>An added picture is edited in its variant only, like an import. Its delete dialog, scope line and full-size label say picture and never name a donor face; the undo label is “new picture”.</li>
   </ul>
 
+  <h3 id="background-scope">Background scope</h3>
+  <ul>
+    <li>With more than one style and a style on the canvas, Background shows <strong>Applies to</strong>: <strong>All styles</strong> (the default, as before) or <strong>This style only</strong>, with one line naming the style that changes. AOD and one-style faces show no choice: their edit already writes one entry.</li>
+    <li>The scope decides add or replace from the scoped style: alone, a style painting onto black is given a background (its own Adds notice says “alone”) while its siblings keep theirs. The partial-background note is about the whole group and is hidden while the scope is one style. Import from another face takes the same scope.</li>
+  </ul>
+
   <h3 id="library-interaction">Library</h3>
   <ul>
     <li>Sort by reversing the primary comparator only; keep stable tie-breakers. Opposite direction labels use equal-length monospace text, at most eight characters, to fit the 288dp content width of a 320dp phone (<code>SortChipLayoutTest</code>).</li>

@@ -932,6 +932,11 @@ data class EditorSnapshot(
      * group — see [canReplaceBackground], which is what the page reads.
      */
     val aodHasBackground: Boolean = false,
+    /**
+     * Whether the selected style, when it has no background, has room under the ceiling to be
+     * given one on its own: what "This style only" adds to.
+     */
+    val selectedCanTakeBackground: Boolean = false,
     /** Whether AOD has room under the ceiling to be *given* a background. */
     val aodCanTakeBackground: Boolean = false,
     /** Size of the container as it stands, measured against the watch's ceiling. */
@@ -1076,6 +1081,30 @@ data class EditorSnapshot(
     val selectedVariantHasBackground: Boolean
         get() = if (isAodSelected) aodHasBackground else selectedVariant.basename in backgroundStyles
 
+    /**
+     * Whether the Background page offers to write the selected style alone. Never for the
+     * always-on display, which a background edit already writes alone, nor for a face with one
+     * style, where the two scopes are the same edit.
+     */
+    val offersBackgroundScope: Boolean
+        get() = !isAodSelected && styleNames.size > 1
+
+    /**
+     * Whether a background edit with this scope adds one rather than replacing one. For the
+     * selected style alone it is that style's own answer: a style painting onto black is given
+     * one even while its siblings carry theirs.
+     */
+    fun backgroundAdds(thisStyleOnly: Boolean): Boolean =
+        if (thisStyleOnly && offersBackgroundScope) !selectedVariantHasBackground else canAddBackground
+
+    /** Whether a background can be placed at all with this scope. */
+    fun canPlaceBackground(thisStyleOnly: Boolean): Boolean =
+        if (thisStyleOnly && offersBackgroundScope) {
+            selectedVariantHasBackground || selectedCanTakeBackground
+        } else {
+            canReplaceBackground || canAddBackground
+        }
+
     /** Widgets the canvas can draw and the user can drag. */
     val canvasWidgets: List<WidgetGuide>
         get() = widgets.filter { it.placement.isVisibleOnCanvas }
@@ -1181,8 +1210,10 @@ interface WatchFaceRepository {
     suspend fun releasePicture(handle: String) {}
     suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
         throw UnsupportedOperationException()
+    /** @param thisStyleOnly write [targetVariant] alone rather than every style. */
     suspend fun previewBackgroundImport(handle: String, donorVariant: String,
-        projectId: Long, targetVariant: String): BackgroundImportPreview = throw UnsupportedOperationException()
+        projectId: Long, targetVariant: String, thisStyleOnly: Boolean = false): BackgroundImportPreview =
+        throw UnsupportedOperationException()
     suspend fun importBackground(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
     fun observeProjects(): Flow<List<ProjectSummary>>
 
@@ -1264,6 +1295,8 @@ interface WatchFaceRepository {
     suspend fun replaceBackground(
         imageUri: String,
         placement: ImagePlacement,
+        /** Replace the selected style's background alone rather than every style's. */
+        thisStyleOnly: Boolean = false,
     ): EditorSnapshot
 
     /**
@@ -1277,6 +1310,8 @@ interface WatchFaceRepository {
     suspend fun addBackground(
         imageUri: String,
         placement: ImagePlacement,
+        /** Give the selected style one alone, even while its siblings carry theirs. */
+        thisStyleOnly: Boolean = false,
     ): EditorSnapshot
 
     suspend fun tintBackground(red: Int, green: Int, blue: Int): EditorSnapshot

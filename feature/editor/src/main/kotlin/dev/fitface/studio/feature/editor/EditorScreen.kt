@@ -336,6 +336,7 @@ fun EditorRoute(
         onDiscardImage = viewModel::cancelBackground,
         onApplyImage = viewModel::applyBackground,
         onImageTint = viewModel::setBackgroundTint,
+        onBackgroundScope = viewModel::setBackgroundThisStyleOnly,
         pictures = PictureActions(
             onChoose = { picturePicker.launch(arrayOf("image/*")) },
             onTransform = viewModel::transformPicture,
@@ -453,6 +454,7 @@ private fun EditorScreen(
     onDiscardImage: () -> Unit,
     onApplyImage: () -> Unit,
     onImageTint: (Int?) -> Unit,
+    onBackgroundScope: (Boolean) -> Unit,
     pictures: PictureActions,
     onReset: () -> Unit,
     onRename: (String) -> Unit,
@@ -490,6 +492,7 @@ private fun EditorScreen(
     }
     if ((importing || importingBackground) && snapshot != null) WidgetImportRoute(snapshot,
         backgroundMode = importingBackground,
+        backgroundThisStyleOnly = state.backgroundThisStyleOnly && snapshot.offersBackgroundScope,
         onStylesDeleted = onStylesDeleted,
         onDismiss = { importing = false; importingBackground = false },
         onImported = { result ->
@@ -612,6 +615,7 @@ private fun EditorScreen(
                         onImportWidget = { importing = true },
                         pictures = pictures,
                         onImageTint = onImageTint,
+                        onBackgroundScope = onBackgroundScope,
                         onImportBackground = { importingBackground = true },
                         onManageStyles = { managingStyles = true },
                         onDeleteStyle = { deletingStyle = it },
@@ -1101,6 +1105,7 @@ private fun EditorPageContent(
     onImportWidget: () -> Unit,
     pictures: PictureActions,
     onImageTint: (Int?) -> Unit,
+    onBackgroundScope: (Boolean) -> Unit,
     onImportBackground: () -> Unit,
     onManageStyles: () -> Unit,
     onDeleteStyle: (String) -> Unit,
@@ -1171,7 +1176,7 @@ private fun EditorPageContent(
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
             onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage,
-            onManageStyles, onImageTint, modifier,
+            onManageStyles, onImageTint, onBackgroundScope, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(
             snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, onDeleteStyle, modifier,
@@ -3272,6 +3277,7 @@ private fun BackgroundWorkspace(
     onApply: () -> Unit,
     onManageStyles: () -> Unit,
     onTint: (Int?) -> Unit,
+    onScope: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -3280,14 +3286,17 @@ private fun BackgroundWorkspace(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         // Adding one is the only thing a face with no panel raster anywhere can be
-        // offered; everything below is otherwise the same-size replacement.
-        val adding = snapshot.canAddBackground
+        // offered; everything below is otherwise the same-size replacement. For the selected
+        // style alone it is that style's own answer.
+        val thisStyleOnly = state.backgroundThisStyleOnly && snapshot.offersBackgroundScope
+        val adding = snapshot.backgroundAdds(thisStyleOnly)
+        val placeable = snapshot.canPlaceBackground(thisStyleOnly)
         DirectWatchCanvas(
             snapshot = snapshot,
             editing = false,
             selectedGlobalIndex = null,
             pendingWidgetMove = null,
-            pendingImage = state.pendingImage.takeIf { snapshot.canReplaceBackground || adding },
+            pendingImage = state.pendingImage.takeIf { placeable },
             placement = state.placement,
             // `editing = false`, so this only gates the pinch that positions the pending
             // image — which commits nothing on its own and stays live during a transfer.
@@ -3297,7 +3306,10 @@ private fun BackgroundWorkspace(
             onTransformImage = onTransformImage,
             modifier = Modifier.widthIn(max = 186.dp),
         )
-        if (!snapshot.canReplaceBackground && !adding) {
+        if (snapshot.offersBackgroundScope) {
+            BackgroundScopeChoice(snapshot, thisStyleOnly, !state.isWorking, onScope)
+        }
+        if (!placeable) {
             NoBackgroundRasterNotice(snapshot)
             if (snapshot.backgroundWouldNotFit) TextButton(onClick = onManageStyles, enabled = !state.isWorking) {
                 Text(stringResource(R.string.editor_manage_styles))
@@ -3305,7 +3317,7 @@ private fun BackgroundWorkspace(
             return@Column
         }
         if (adding) {
-            AddBackgroundNotice(snapshot)
+            AddBackgroundNotice(snapshot, thisStyleOnly)
             if (snapshot.backgroundAddSkipped.isNotEmpty()) TextButton(onClick = onManageStyles, enabled = !state.isWorking) {
                 Text(stringResource(R.string.editor_manage_styles))
             }
@@ -3322,7 +3334,7 @@ private fun BackgroundWorkspace(
                     style = MaterialTheme.typography.titleMedium,
                 )
             }
-            PartialBackgroundNotice(snapshot)
+            if (!thisStyleOnly) PartialBackgroundNotice(snapshot)
             FitButton(
                 stringResource(R.string.editor_bg_choose),
                 onChooseImage,
@@ -3369,7 +3381,7 @@ private fun BackgroundWorkspace(
                 onResetPlacement = onResetPlacement,
             )
             ImageColourControls(state.placement.tint, enabled = !state.isWorking, onTint = onTint)
-            PartialBackgroundNotice(snapshot)
+            if (!thisStyleOnly) PartialBackgroundNotice(snapshot)
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 FitButton(
                     stringResource(R.string.editor_bg_discard),
@@ -3442,8 +3454,38 @@ private fun NoBackgroundRasterNotice(snapshot: EditorSnapshot) {
  * record that draws it — so the page still says so, and says which styles get one when
  * the size ceiling means it cannot be all of them. It used to say it in three paragraphs.
  */
+/**
+ * Which styles a background edit writes: all of them, as always, or the selected one alone.
+ * One style's own background is what makes a face with a different picture per style.
+ */
 @Composable
-private fun AddBackgroundNotice(snapshot: EditorSnapshot) {
+private fun BackgroundScopeChoice(
+    snapshot: EditorSnapshot,
+    thisStyleOnly: Boolean,
+    enabled: Boolean,
+    onScope: (Boolean) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        MicroLabel(stringResource(R.string.editor_bg_scope_heading))
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FitChip(stringResource(R.string.editor_bg_scope_all), !thisStyleOnly, { onScope(false) },
+                Modifier.weight(1f), enabled)
+            FitChip(stringResource(R.string.editor_bg_scope_this), thisStyleOnly, { onScope(true) },
+                Modifier.weight(1f), enabled)
+        }
+        if (thisStyleOnly) {
+            Text(
+                stringResource(R.string.editor_bg_scope_this_note, snapshot.selectedVariantLabel()),
+                modifier = Modifier.padding(top = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddBackgroundNotice(snapshot: EditorSnapshot, thisStyleOnly: Boolean = false) {
     val skipped = snapshot.backgroundAddSkipped
     Column(
         Modifier.fillMaxWidth()
@@ -3455,6 +3497,8 @@ private fun AddBackgroundNotice(snapshot: EditorSnapshot) {
         Text(
             if (snapshot.isAodSelected) {
                 stringResource(R.string.editor_bg_adds_aod)
+            } else if (thisStyleOnly) {
+                stringResource(R.string.editor_bg_adds_this, snapshot.selectedVariantLabel())
             } else if (skipped.isEmpty()) {
                 pluralStringResource(
                     R.plurals.editor_bg_adds_all,

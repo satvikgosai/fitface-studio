@@ -169,6 +169,28 @@ class EditorViewModelTest {
         assertEquals(0xFF0000FF.toInt(), repository.backgroundPlacement?.tint)
     }
 
+    /**
+     * "This style only" reaches the repository where the face has styles to choose between,
+     * and nowhere else: one style, or the always-on display, is already edited alone.
+     */
+    @Test
+    fun aBackgroundGoesToTheSelectedStyleAloneOnlyWhereThereIsAChoice() {
+        val styled = snapshot(widgets).copy(styleNames = listOf("style0.bin", "style1.bin"),
+            backgroundStyles = listOf("style0.bin", "style1.bin"))
+        for ((face, expected) in listOf(styled to true, snapshot(widgets).copy(backgroundStyles = listOf("style0.bin")) to false)) {
+            val repository = FakeRepository(face, commitImmediately = true)
+            val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+            viewModel.loadProject(1)
+            settle()
+            viewModel.setBackgroundThisStyleOnly(true)
+            viewModel.prepareBackground("content://background")
+            settle()
+            viewModel.applyBackground()
+            settle()
+            assertEquals(expected, repository.backgroundThisStyleOnly)
+        }
+    }
+
     /** The library has opened it already; the editor takes that session, not a second load. */
     @Test
     fun theEditorTakesTheProjectTheLibraryOpenedInsteadOfOpeningItAgain() {
@@ -668,6 +690,7 @@ class EditorViewModelTest {
         val addedPictures = mutableListOf<List<Any?>>()
         val released = mutableListOf<String>()
         var backgroundPlacement: ImagePlacement? = null
+        var backgroundThisStyleOnly: Boolean? = null
 
         override suspend fun preparePicture(imageUri: String, projectId: Long, targetVariant: String) =
             requireNotNull(prepared)
@@ -683,8 +706,9 @@ class EditorViewModelTest {
 
         override suspend fun prepareReplacementImage(imageUri: String) = ReplacementImage(imageUri, frame())
 
-        override suspend fun replaceBackground(imageUri: String, placement: ImagePlacement): EditorSnapshot {
+        override suspend fun replaceBackground(imageUri: String, placement: ImagePlacement, thisStyleOnly: Boolean): EditorSnapshot {
             backgroundPlacement = placement
+            backgroundThisStyleOnly = thisStyleOnly
             return current
         }
 

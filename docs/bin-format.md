@@ -1269,7 +1269,14 @@ pixels. Pair colour is hardware-proven; Composite, Rule and arc colour have not 
 
 Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.
 Replacement/tint edits styles that have a background, skipping others and failing
-only if none does. `FaceEditor.tintBackgrounds` maps each current sample to the tint colour
+only if none does.
+
+**Scope.** Replacement, addition and import write every style by default, as they always
+did. **This style only** (`thisStyleOnly`) writes the selected style alone: a replacement
+needs that style to carry a background, and a style painting onto black is *given* one, by
+the addition below, even while its siblings carry theirs, which the whole-face edit cannot do
+on `00011`/`00108`. AOD is always its own scope either way. `BackgroundScopeRepositoryTest`
+checks every other entry stays byte-identical on `00112` and `00108`, for import too. `FaceEditor.tintBackgrounds` maps each current sample to the tint colour
 scaled by its luminance, so tints compound and darken with every application; the app does
 not offer it. Colour is offered only while a new image is placed (`ImagePlacement.tint`):
 the picked picture's decoded pixels are recoloured once by the same rule (`tintedColor`)
