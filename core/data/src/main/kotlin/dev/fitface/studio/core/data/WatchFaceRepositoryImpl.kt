@@ -594,6 +594,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
         }
 
+    override suspend fun openedProject(projectId: Long): EditorSnapshot? = withContext(Dispatchers.Default) {
+        mutex.withLock { session?.takeIf { it.projectId == projectId }?.let { it.labelled(it.snapshot()) } }
+    }
+
     override suspend fun renameProject(projectId: Long, name: String) =
         withContext(Dispatchers.IO) {
             val trimmed = name.trim()

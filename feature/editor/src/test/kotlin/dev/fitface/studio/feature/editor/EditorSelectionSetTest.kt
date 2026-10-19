@@ -480,6 +480,8 @@ class EditorSelectionSetTest {
      */
     private class FakeRepository(private var current: EditorSnapshot) :
         WatchFaceRepository by mockk(relaxed = true) {
+        // Nothing opened ahead of the editor here: it opens the project itself.
+        override suspend fun openedProject(projectId: Long): EditorSnapshot? = null
         override suspend fun prepareReplacementImage(imageUri: String) =
             dev.fitface.studio.core.model.ReplacementImage(imageUri, current.preview)
         val reorders = mutableListOf<Pair<Int, Int>>()

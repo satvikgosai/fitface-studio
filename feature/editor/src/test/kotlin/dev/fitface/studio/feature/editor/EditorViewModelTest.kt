@@ -80,6 +80,25 @@ class EditorViewModelTest {
      * than a commit completes, so committing every tick would queue dozens of reparses to
      * arrive at one position.
      */
+    /** The library has opened it already; the editor takes that session, not a second load. */
+    @Test
+    fun theEditorTakesTheProjectTheLibraryOpenedInsteadOfOpeningItAgain() {
+        val repository = FakeRepository(snapshot(widgets)).apply { alreadyOpen = 1 }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        assertEquals(0, repository.opens)
+        assertEquals(widgets, viewModel.state.value.snapshot?.widgets)
+
+        // Nothing open for it, as after the process was killed: it opens it itself.
+        val cold = FakeRepository(snapshot(widgets))
+        val restored = EditorViewModel(cold, installer, DiagnosticsLog(), reporter())
+        restored.loadProject(1)
+        settle()
+        assertEquals(1, cold.opens)
+        assertEquals(widgets, restored.state.value.snapshot?.widgets)
+    }
+
     @Test
     fun aRunOfMovesCoalescesToTheLatestTargetPerWidget() {
         val repository = FakeRepository(snapshot(widgets))
@@ -545,7 +564,15 @@ class EditorViewModelTest {
 
         override fun observeImageFit() = flowOf(ImageFit.COVER)
 
-        override suspend fun openProject(projectId: Long): EditorSnapshot = current
+        var opens = 0
+            private set
+        /** The project the "library" already opened, which the editor should take as it is. */
+        var alreadyOpen: Long? = null
+
+        override suspend fun openedProject(projectId: Long): EditorSnapshot? =
+            current.takeIf { alreadyOpen == projectId }
+
+        override suspend fun openProject(projectId: Long): EditorSnapshot = current.also { opens++ }
 
         override suspend fun moveWidget(
             styleName: String,

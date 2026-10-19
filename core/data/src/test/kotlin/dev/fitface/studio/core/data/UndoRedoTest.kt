@@ -254,6 +254,19 @@ class UndoRedoTest {
         assertArrayEquals("the current state is untouched", edited, bytes())
     }
 
+    /** The editor takes the session the library opened, and only that project's. */
+    @Test fun theOpenedProjectIsHandedOverOnlyForItsOwnId() = runBlocking {
+        var s = repository.openPackage(face("00106"))
+        val widget = s.widgets.first { it.type == 5 && it.canEditPosition }
+        s = move(s, widget)
+        val opened = requireNotNull(repository.openedProject(s.projectId))
+        assertEquals(s.projectId, opened.projectId)
+        assertEquals(s.widgets, opened.widgets)
+        assertEquals("history is the session's, not a reopen's", EditKind.MOVE, opened.undoKind)
+        assertNull(repository.openedProject(s.projectId + 1))
+        assertNull(repository().openedProject(s.projectId))
+    }
+
     @Test fun aDuplicateCopiesOnlyTheCurrentStateAndOpeningAnotherProjectDropsHistory() = runBlocking {
         var s = repository.openPackage(face("00106"))
         val widget = s.widgets.first { it.type == 5 && it.canEditPosition }

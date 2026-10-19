@@ -179,6 +179,9 @@ and previews. Clear `localApkPath`/`editedBinPath` until its new directory exist
 - `openPackage` always creates a project; `openProject` resumes one. The face sheet
   explicitly selects an existing project or creates another. Opening a store update
   creates a new project and leaves the previous version untouched.
+- Every route into the editor opens the project first, so the editor takes that session
+  (`openedProject`) and opens the project itself only when none is open for it, as after
+  the process was killed. Opening it again doubled every open's load.
 - A name is stored, never derived from a current package label. `ProjectNaming`
   re-stems only a name already taken, avoiding `Aurora 2 2`; a free `Aurora 2`
   stays unchanged. Renamed/custom names persist.

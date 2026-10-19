@@ -260,10 +260,16 @@ class EditorViewModel @Inject constructor(
         refreshDirectInstallEnvironment()
     }
 
+    /**
+     * Shows [projectId]: the session the library (or a new project, template or archive)
+     * has just opened, or, with none open for it — after the process was killed, say — a
+     * fresh open. Every route here opens first, so opening again doubled the wait: two full
+     * loads of the package and checkpoint for one tap.
+     */
     fun loadProject(projectId: Long) {
         if (loadedProjectId == projectId && mutableState.value.snapshot != null) return
         loadedProjectId = projectId
-        operate { repository.openProject(projectId) }
+        operate { repository.openedProject(projectId) ?: repository.openProject(projectId) }
     }
 
     /**

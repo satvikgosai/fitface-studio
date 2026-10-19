@@ -1173,6 +1173,13 @@ interface WatchFaceRepository {
     suspend fun openPackage(download: FacePackage): EditorSnapshot
 
     /**
+     * The open session, when it is [projectId]'s. Opening a project from the library already
+     * opened it; the editor that arrives next takes that session rather than loading the
+     * project a second time. Null when another project or none is open.
+     */
+    suspend fun openedProject(projectId: Long): EditorSnapshot? = null
+
+    /**
      * Starts a custom face from [download], which has to be the template's own face
      * ([CUSTOM_FACE_TEMPLATE_FACE_ID]): stripped to its clock, given previews of what it now
      * is, and saved as a new project called [name], numbered if that is taken.
