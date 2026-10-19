@@ -93,6 +93,29 @@ class AndroidImageSource @Inject constructor(
             )
         } ?: throw IllegalArgumentException("The selected image could not be decoded")
         val source = upright(decoded, orientation)
+        try {
+            return placed(source, width, height, placement)
+        } finally {
+            source.recycle()
+        }
+    }
+
+    /**
+     * [decode] for a frame already in memory: a photo's kept, reduced original, placed again.
+     * The same drawing, so a photo placed twice the same way comes out the same.
+     */
+    fun decode(frame: PreviewFrame, width: Int, height: Int, placement: ImagePlacement): IntArray {
+        require(width > 0 && height > 0) { "Target dimensions must be positive" }
+        val source = Bitmap.createBitmap(frame.argb, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+        try {
+            return placed(source, width, height, placement)
+        } finally {
+            source.recycle()
+        }
+    }
+
+    /** [source] drawn onto a black [width] × [height] frame as [placement] says. */
+    private fun placed(source: Bitmap, width: Int, height: Int, placement: ImagePlacement): IntArray {
         var output: Bitmap? = null
         try {
             output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -126,7 +149,6 @@ class AndroidImageSource @Inject constructor(
             return pixels
         } finally {
             output?.recycle()
-            source.recycle()
         }
     }
 

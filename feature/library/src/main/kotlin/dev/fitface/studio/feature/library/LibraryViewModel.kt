@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
+import dev.fitface.studio.core.model.PHOTO_ALBUM_FACE_ID
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.CatalogSort
@@ -139,6 +140,16 @@ data class LibraryUiState(
      */
     val customFaceSource: CatalogFace?
         get() = faces.firstOrNull { it.faceId == CUSTOM_FACE_TEMPLATE_FACE_ID }
+
+    /**
+     * The watch's Photos face, which has no container to edit but takes the user's photos;
+     * null while the catalogue has none. Whether its package really declares a photo album is
+     * read when its page opens.
+     */
+    val photosFace: CatalogFace?
+        get() = faces.firstOrNull { it.faceId == PHOTO_ALBUM_FACE_ID.toString().padStart(5, '0') }
+
+    fun takesPhotos(face: CatalogFace): Boolean = face.productId == photosFace?.productId
 
     val isOpeningProject: Boolean
         get() = openingProjectId != null
@@ -454,7 +465,10 @@ class LibraryViewModel @Inject constructor(
                 selectedFace = face,
                 selectedStyleId = face.styles.firstOrNull()?.id,
                 selectedFaceCached = false,
-                sheetError = uneditableMessage.takeIf { _ -> face.appId in it.uneditableAppIds },
+                // The Photos face is not a dead end: its sheet sends photos instead.
+                sheetError = uneditableMessage.takeIf { _ ->
+                    face.appId in it.uneditableAppIds && !it.takesPhotos(face)
+                },
             )
         }
         viewModelScope.launch {

@@ -71,6 +71,12 @@
     <!-- name, face id, style count -->
     <string name="library_face_card_a11y">%1$s, face %2$s, %3$s</string>
     <string name="library_face_card_a11y_not_editable">%1$s, face %2$s, %3$s, not editable</string>
+    <string name="library_face_card_a11y_photos">%1$s, face %2$s, %3$s, takes your photos</string>
+    <string name="library_photos_badge">PHOTOS</string>
+    <string name="library_send_photos">Send photos to it</string>
+    <string name="library_send_photos_note">This face has nothing to edit. It shows your own photos, which this app can send to it.</string>
+    <string name="library_photos_title">Send photos to the Photos face</string>
+    <string name="library_photos_detail">Your own photos on the watch’s Photos face, up to 7.</string>
     <plurals name="library_face_card_projects">
         <item quantity="one">%1$d project</item>
         <item quantity="other">%1$d projects</item>

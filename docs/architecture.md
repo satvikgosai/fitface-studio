@@ -44,8 +44,10 @@ its own state machine and freezes a copy of the validated bytes before transfer.
    import origins and removed widgets when snapshot/persistence fails. Reset is a
    separate path with its own persistence handling, not a bypass of validation.
 2. Structural edits reparse and revalidate before acceptance.
-3. `Session.validatedBytes()` is the only path to the watch: size, magic, errors,
-   blocking warnings, exact round trip and every style/AOD entry must pass.
+3. `Session.validatedBytes()` is the only path to the watch for a face: size, magic, errors,
+   blocking warnings, exact round trip and every style/AOD entry must pass. Photos for the
+   Photos face go only through `PhotoAlbumRequest` and `AlbumPhoto`, which check every PNG
+   and name before anything is sent; a container never travels that way, nor a photo this one.
 4. Downloads have distinct allowlists and ceilings: face packages 32 MiB, app APKs
    64 MiB. Verify declared size and HTTPS host before request and after redirects.
 5. Writes stay private except optional archive export to a user-chosen document.
@@ -117,6 +119,18 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state and original widget identities; the row names the committed file, and the open session's undo and redo steps name the others |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
+| `filesDir/photo-album/<face>/album.json` | The photos this app has sent the Photos face and not removed, in order, where each was placed and in what colour, and the one shown |
+| `filesDir/photo-album/<face>/<md5>.png`, `<md5>.source.jpg` | Each sent photo exactly as sent, and the reduced original (at most 1,024 px a side) it was drawn from; deleted when the photo is removed or replaced |
+| `filesDir/photo-album/<face>/draft/` | Photos picked or being changed and not sent yet: `draft.json` (order, placement, colour, the sent photo each replaces) and each one's reduced original, `<key>.jpg`; saved once changes settle and when the page closes, written on the repository's own scope so a closing page still gets its last change, cleared when they are sent or taken out |
+| `filesDir/datastore/photo_album.preferences_pb` | The same photos' names alone: the only record before copies were kept, still written so an older build sees the same album |
+
+The Photos face is not a project. `PhotoAlbumRepository` reads it from its catalogue
+package, encodes each placed photo, and keeps the files above, written atomically, copies before
+the list that names them, and only once a request has been handed over; `PhotoAlbumViewModel` owns
+the picks and their placement, and the shared `Fit3DirectInstaller.sendAlbum` sends a
+`PhotoAlbumRequest` (see [Direct install](direct-install.md#photos-for-the-photos-face)).
+The installer is one per process, so a face install and a Photos request never overlap, and
+each page clears the other kind's finished result when it opens.
 
 ### Commits and file ownership
 

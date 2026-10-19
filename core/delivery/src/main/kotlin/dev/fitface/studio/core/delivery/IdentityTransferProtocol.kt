@@ -1,6 +1,9 @@
 package dev.fitface.studio.core.delivery
 
+import dev.fitface.studio.core.model.AlbumPhoto
 import dev.fitface.studio.core.model.DirectInstallPayload
+import dev.fitface.studio.core.model.WatchFile
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
@@ -77,6 +80,39 @@ internal object IdentityTransferProtocol {
 
     fun descriptor(fileName: String, fileSize: Int): ByteArray =
         "33bin,/user/wf/$fileName,$fileSize".toByteArray(StandardCharsets.US_ASCII)
+
+    /**
+     * The SPP descriptor for [file]: `33<extension>,<directory><name>,<size>`, as the stock
+     * plugin's sender builds it. A container goes to `/user/wf/`; a `.png` goes to
+     * `/user/wf/album/`, which is where the plugin sends the Photos face's photos.
+     */
+    fun descriptor(file: WatchFile): ByteArray = when (file) {
+        is DirectInstallPayload -> descriptor(file.fileName, file.size)
+        is AlbumPhoto -> "33png,/user/wf/album/${file.fileName},${file.size}"
+            .toByteArray(StandardCharsets.US_ASCII)
+    }
+
+    /**
+     * The file-info message sent to the OTA peer before the channel opens:
+     * `01 03 06 04 <length> <name> 05 <size, little-endian>`. One layout for both kinds of
+     * file: the plugin sends a photo's name exactly where it sends a face's.
+     */
+    fun fileInfo(file: WatchFile): ByteArray {
+        val name = file.fileName.toByteArray(StandardCharsets.UTF_8)
+        return ByteArrayOutputStream(10 + name.size).apply {
+            write(0x01)
+            write(0x03)
+            write(0x06)
+            write(0x04)
+            write(name.size)
+            write(name)
+            write(0x05)
+            write(file.size and 0xff)
+            write((file.size ushr 8) and 0xff)
+            write((file.size ushr 16) and 0xff)
+            write((file.size ushr 24) and 0xff)
+        }.toByteArray()
+    }
 
     fun windowCount(payloadSize: Int): Int =
         (payloadSize + WINDOW_BYTES - 1) / WINDOW_BYTES

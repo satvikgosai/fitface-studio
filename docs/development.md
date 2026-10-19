@@ -46,8 +46,8 @@ credentials are deliberately not stored in this repository.
   :app:lintDebug
 ```
 
-Last recorded corpus-backed verification (2026-10-19, pictures as widgets):
-**866 tests collected, 865 passed, 1 skipped,
+Last recorded corpus-backed verification (2026-10-19, photos for the Photos face and
+per-style backgrounds): **915 tests collected, 914 passed, 1 skipped,
 0 failures, 0 lint errors, 23 lint warnings.**
 Those warnings were dependency/SDK notices. These are recorded results, not an
 assertion that a later checkout has already passed; run the command above.

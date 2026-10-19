@@ -967,7 +967,7 @@ private fun EditorRail(
 }
 
 @Composable
-private fun RailItem(
+internal fun RailItem(
     glyph: String,
     label: String,
     selected: Boolean,
@@ -4991,11 +4991,11 @@ private fun DeviceStatusRow(
  * meant for somebody else's. So the split is made once, here, and both halves are gated on
  * it. See `docs/direct-install.md`.
  */
-private val hasPluginNearbySwitch: Boolean
+internal val hasPluginNearbySwitch: Boolean
     get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
 @Composable
-private fun SetupChecklist(
+internal fun SetupChecklist(
     state: DirectInstallState,
     enabled: Boolean,
     onOpenCompanion: () -> Unit,
@@ -5396,7 +5396,7 @@ private fun TransferPanel(
 }
 
 @Composable
-private fun PhaseRow(
+internal fun PhaseRow(
     label: String,
     detail: String?,
     done: Boolean,
@@ -5679,10 +5679,10 @@ internal fun stepDragAxis(
 }
 
 /** This frame recoloured by [tintedColor], as the commit will recolour it. */
-private fun PreviewFrame.tintedTo(tint: Int) = PreviewFrame(width, height, tinted(argb, tint))
+internal fun PreviewFrame.tintedTo(tint: Int) = PreviewFrame(width, height, tinted(argb, tint))
 
 @Composable
-private fun PreviewFrame.rememberBitmap(): ImageBitmap {
+internal fun PreviewFrame.rememberBitmap(): ImageBitmap {
     val bitmap = remember(argb) {
         Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888)
     }
@@ -5814,7 +5814,7 @@ private fun EditorSnapshot.rememberWidgetDragLayer(globalIndex: Int): WidgetDrag
         )
     }
 
-private fun fittedRect(
+internal fun fittedRect(
     sourceWidth: Int,
     sourceHeight: Int,
     targetWidth: Float,
@@ -5919,7 +5919,7 @@ private fun DeleteProjectDialog(
 }
 
 /** The phases in which bytes or the install command are on their way to the watch. */
-private val SendingPhases = setOf(
+internal val SendingPhases = setOf(
     DirectInstallPhase.VERIFYING,
     DirectInstallPhase.TRANSFERRING,
     DirectInstallPhase.INSTALLING,
@@ -5927,7 +5927,7 @@ private val SendingPhases = setOf(
 
 /** Keeps this window's screen on while [active], and lets it go when that ends or on exit. */
 @Composable
-private fun KeepScreenOn(active: Boolean) {
+internal fun KeepScreenOn(active: Boolean) {
     val view = LocalView.current
     DisposableEffect(view, active) {
         view.keepScreenOn = active

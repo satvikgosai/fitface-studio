@@ -17,6 +17,7 @@ import androidx.navigation3.ui.NavDisplay
 import dagger.hilt.android.AndroidEntryPoint
 import dev.fitface.studio.core.ui.FitFaceTheme
 import dev.fitface.studio.feature.editor.EditorRoute
+import dev.fitface.studio.feature.editor.PhotoAlbumRoute
 import dev.fitface.studio.feature.library.LibraryRoute
 import kotlinx.serialization.Serializable
 
@@ -25,6 +26,9 @@ private data object LibraryDestination : NavKey
 
 @Serializable
 private data class EditorDestination(val projectId: Long) : NavKey
+
+@Serializable
+private data object PhotosDestination : NavKey
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -64,6 +68,7 @@ class MainActivity : ComponentActivity() {
                                 onOpenEditor = { projectId ->
                                     backStack.add(EditorDestination(projectId))
                                 },
+                                onOpenPhotos = { backStack.add(PhotosDestination) },
                                 onAbout = { menuRequest = AppMenuRequest.About },
                                 onCheckForUpdate = { menuRequest = AppMenuRequest.Update },
                             )
@@ -75,6 +80,9 @@ class MainActivity : ComponentActivity() {
                                 onAbout = { menuRequest = AppMenuRequest.About },
                                 onCheckForUpdate = { menuRequest = AppMenuRequest.Update },
                             )
+                        }
+                        entry<PhotosDestination> {
+                            PhotoAlbumRoute(onBack = { popSafely(1) })
                         }
                     },
                 )

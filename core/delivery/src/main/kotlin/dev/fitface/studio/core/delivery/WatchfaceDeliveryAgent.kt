@@ -1,6 +1,8 @@
 package dev.fitface.studio.core.delivery
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import com.samsung.android.sdk.accessory.SAMessage
 import com.samsung.android.sdk.accessory.SAPeerAgent
 import dev.fitface.studio.core.model.DirectInstallPayload
@@ -21,12 +23,31 @@ internal interface InstallListener {
     fun onWatchReply(data: ByteArray) {}
 }
 
+/** What a run of album commands reports; see [WatchfaceDeliveryAgent.sendCommands]. */
+internal interface CommandListener {
+    /** Every command of [batch] has been handed to the watch. */
+    fun onCommandsDelivered(batch: Int)
+
+    /** [sent] of [total] commands of [batch] are out, and the next follows after a pause. */
+    fun onCommandProgress(batch: Int, sent: Int, total: Int)
+
+    fun onCommandsFailed(message: String, peerLost: Boolean = false)
+
+    /** A reply that says the watch refused an album command, if one ever reaches this app. */
+    fun onCommandRefused(reason: String)
+}
+
 class WatchfaceDeliveryAgent(context: Context) :
     DiscoveryAgent("WatchfaceSerevice", context, PROFILE) {
     @Volatile
     internal var installListener: InstallListener? = null
 
+    @Volatile
+    internal var commandListener: CommandListener? = null
+
     private val pendingInstall = PendingInstallSlot()
+    private val commands = CommandSequence()
+    private val handler = Handler(Looper.getMainLooper())
 
     private val installMessage = object : SAMessage(this) {
         override fun onReceive(peerAgent: SAPeerAgent, data: ByteArray) {
@@ -36,6 +57,10 @@ class WatchfaceDeliveryAgent(context: Context) :
             // the pending face and style settles the request, and only success counts as
             // delivered. Anything else stays pending for `onSent` or the watchdog.
             installListener?.onWatchReply(data)
+            PhotoAlbumProtocol.refusal(data)?.let { reason ->
+                commandListener?.onCommandRefused(reason)
+                return
+            }
             val reply = WatchfaceInstallProtocol.decodeReply(data) ?: return
             val refusal = if (reply.accepted) null else reply.refusal ?: return
             val payload = pendingInstall.claimIf {
@@ -49,6 +74,10 @@ class WatchfaceDeliveryAgent(context: Context) :
         }
 
         override fun onSent(peerAgent: SAPeerAgent, transactionId: Int) {
+            if (commands.active) {
+                advanceCommands(peerAgent)
+                return
+            }
             val payload = claimPendingInstall() ?: return
             installListener?.onInstallDelivered(payload)
         }
@@ -57,6 +86,10 @@ class WatchfaceDeliveryAgent(context: Context) :
             // Guarded like the two above it. This used to report unconditionally, so an
             // error arriving for an install the watchdog had already given up on
             // overwrote whatever the reader was being shown instead.
+            if (commands.fail() != null) {
+                commandListener?.onCommandsFailed("Photos message failed with code $errorCode")
+                return
+            }
             claimPendingInstall() ?: return
             installListener?.onInstallFailed("Install message failed with code $errorCode")
         }
@@ -78,7 +111,60 @@ class WatchfaceDeliveryAgent(context: Context) :
      * The one-shot command is already gone by the time this can be called — there is no
      * unsending it — so this only says that its answer is no longer wanted.
      */
-    internal fun cancelInstall() = pendingInstall.abandon()
+    internal fun cancelInstall() {
+        pendingInstall.abandon()
+        commands.abandon()
+    }
+
+    /**
+     * Sends [batch] one command at a time: each waits for the framework's `onSent` for the one
+     * before it, then [COMMAND_GAP_MS]. The plugin never sends these back to back either — a
+     * person tapping through its screens spaces them — and the watch's handling of a burst is
+     * unknown.
+     */
+    internal fun sendCommands(batch: Int, list: List<ByteArray>) {
+        val peer = discoveredPeer
+        if (peer == null) {
+            commandListener?.onCommandsFailed(
+                "The cached watch-face peer is gone — the watch has to be connected and " +
+                    "discovered again.",
+                peerLost = true,
+            )
+            return
+        }
+        val step = commands.start(batch, list)
+        if (step == null) {
+            commandListener?.onCommandsFailed("A Photos request is already in flight")
+            return
+        }
+        sendStep(peer, step)
+    }
+
+    /** One command with nothing waiting on it: the cancel sent after a Photos request fails. */
+    internal fun sendQuietly(command: ByteArray) {
+        val peer = discoveredPeer ?: return
+        runCatching { installMessage.send(peer, command) }
+    }
+
+    private fun sendStep(peer: SAPeerAgent, step: CommandSequence.Step) {
+        try {
+            installMessage.send(peer, step.command)
+        } catch (error: Exception) {
+            if (commands.fail() == null) return
+            commandListener?.onCommandsFailed(error.message ?: "Photos message send failed", peerLost = true)
+        }
+    }
+
+    private fun advanceCommands(peer: SAPeerAgent) {
+        when (val next = commands.advance()) {
+            is CommandSequence.Advance.Finished -> commandListener?.onCommandsDelivered(next.batch)
+            is CommandSequence.Advance.Next -> {
+                commandListener?.onCommandProgress(next.step.batch, next.step.index, next.step.commands.size)
+                handler.postDelayed({ if (commands.isCurrent(next.step)) sendStep(peer, next.step) }, COMMAND_GAP_MS)
+            }
+            CommandSequence.Advance.Stale -> Unit
+        }
+    }
 
     internal fun install(payload: DirectInstallPayload) {
         val peer = discoveredPeer
@@ -116,6 +202,59 @@ class WatchfaceDeliveryAgent(context: Context) :
 
     companion object {
         const val PROFILE: String = "/system/WatchfaceSerevice"
+
+        /** Between one album command being handed over and the next being sent. */
+        internal const val COMMAND_GAP_MS = 1_000L
+    }
+}
+
+/**
+ * The album commands in flight, one at a time, claimable exactly once at each step.
+ *
+ * Kept out of the agent for the reason [PendingInstallSlot] is: the agent needs the accessory
+ * SDK, so only a class without it can be asserted on. Every step is a fresh object, so a
+ * delayed send or a framework callback for a step that has been passed, failed or abandoned
+ * finds it is no longer current and does nothing.
+ */
+internal class CommandSequence {
+    class Step(val batch: Int, val commands: List<ByteArray>, val index: Int) {
+        val command: ByteArray get() = commands[index]
+    }
+
+    sealed interface Advance {
+        data class Next(val step: Step) : Advance
+        data class Finished(val batch: Int) : Advance
+        data object Stale : Advance
+    }
+
+    private val current = AtomicReference<Step?>(null)
+
+    val active: Boolean get() = current.get() != null
+
+    /** The first step, or null if a run is already in flight. */
+    fun start(batch: Int, list: List<ByteArray>): Step? {
+        require(list.isNotEmpty()) { "No command to send" }
+        return Step(batch, list, 0).takeIf { current.compareAndSet(null, it) }
+    }
+
+    /** The current step has been handed to the watch: move on to the next, or finish. */
+    fun advance(): Advance {
+        val step = current.get() ?: return Advance.Stale
+        return if (step.index == step.commands.lastIndex) {
+            if (current.compareAndSet(step, null)) Advance.Finished(step.batch) else Advance.Stale
+        } else {
+            val next = Step(step.batch, step.commands, step.index + 1)
+            if (current.compareAndSet(step, next)) Advance.Next(next) else Advance.Stale
+        }
+    }
+
+    fun isCurrent(step: Step): Boolean = current.get() === step
+
+    /** The step that failed, to exactly one caller; null if none was in flight. */
+    fun fail(): Step? = current.getAndSet(null)
+
+    fun abandon() {
+        current.set(null)
     }
 }
 

@@ -271,6 +271,8 @@ class EditorViewModel @Inject constructor(
     private var moveWorkerDraining = false
 
     init {
+        // A Photos request's result is not this page's to show.
+        directInstaller.clearOtherResult(album = false)
         viewModelScope.launch {
             repository.observeImageFit().collect { fit ->
                 mutableState.value = mutableState.value.copy(fit = fit)

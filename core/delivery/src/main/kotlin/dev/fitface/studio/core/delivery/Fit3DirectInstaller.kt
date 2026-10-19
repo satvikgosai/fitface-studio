@@ -11,7 +11,10 @@ import android.provider.Settings
 import com.samsung.android.sdk.accessory.SAAgentV2
 import com.samsung.android.sdk.accessory.SAPeerAgent
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.fitface.studio.core.model.AlbumPhoto
 import dev.fitface.studio.core.model.DirectInstallPayload
+import dev.fitface.studio.core.model.PhotoAlbumRequest
+import dev.fitface.studio.core.model.WatchFile
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +47,17 @@ class Fit3DirectInstaller @Inject constructor(
     private val generation = AtomicInteger()
     @Volatile
     private var watchdog: Job? = null
+
+    /** The Photos request in flight, or null for a face install or nothing. */
+    @Volatile
+    private var albumRequest: PhotoAlbumRequest? = null
+
+    /**
+     * Whether the watch has been sent the opening edit-info request and not yet the closing
+     * one, so a request that stops in between owes it the plugin's cancel.
+     */
+    @Volatile
+    private var albumOpen = false
 
     private val discoveryListener = DiscoveryListener {
             profile,
@@ -81,7 +95,37 @@ class Fit3DirectInstaller @Inject constructor(
     }
 
     private val transferListener = object : TransferListener {
-        override fun onPayloadVerified(payload: DirectInstallPayload, windows: Int) {
+        override fun onPayloadVerified(payload: WatchFile, windows: Int) {
+            when (payload) {
+                is DirectInstallPayload -> faceVerified(payload, windows)
+                is AlbumPhoto -> photoVerified(payload, windows)
+            }
+        }
+
+        private fun photoVerified(photo: AlbumPhoto, windows: Int) {
+            val progress = state.value.album ?: return
+            val event = if (progress.photosSent == 0) {
+                DeliveryEvent.PAYLOAD_VERIFIED
+            } else {
+                DeliveryEvent.NEXT_FILE_VERIFIED
+            }
+            if (!advance(event) {
+                    it.copy(
+                        phase = DirectInstallPhase.TRANSFERRING,
+                        fileName = photo.fileName,
+                        sha256 = photo.sha256,
+                        acknowledgedWindows = 0,
+                        totalWindows = windows,
+                        message = "Sending photo ${progress.photosSent + 1} of ${progress.photos}.",
+                    )
+                }
+            ) {
+                return
+            }
+            armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
+        }
+
+        private fun faceVerified(payload: DirectInstallPayload, windows: Int) {
             if (!advance(DeliveryEvent.PAYLOAD_VERIFIED) {
                     it.copy(
                         phase = DirectInstallPhase.TRANSFERRING,
@@ -119,14 +163,27 @@ class Fit3DirectInstaller @Inject constructor(
             totalWindows: Int,
         ) {
             if (!advance(DeliveryEvent.TRANSFER_PROGRESS) {
-                    it.copy(
-                        phase = DirectInstallPhase.TRANSFERRING,
-                        acknowledgedBytes = acknowledgedBytes,
-                        totalBytes = totalBytes,
-                        acknowledgedWindows = acknowledgedWindows,
-                        totalWindows = totalWindows,
-                        message = "Fit3 accepted window $acknowledgedWindows of $totalWindows.",
-                    )
+                    val album = it.album
+                    if (album != null) {
+                        // Across the whole album, so the bar does not empty between photos.
+                        it.copy(
+                            phase = DirectInstallPhase.TRANSFERRING,
+                            acknowledgedBytes = album.bytesSent + acknowledgedBytes,
+                            acknowledgedWindows = acknowledgedWindows,
+                            totalWindows = totalWindows,
+                            message = "Photo ${album.photosSent + 1} of ${album.photos}: window " +
+                                "$acknowledgedWindows of $totalWindows accepted.",
+                        )
+                    } else {
+                        it.copy(
+                            phase = DirectInstallPhase.TRANSFERRING,
+                            acknowledgedBytes = acknowledgedBytes,
+                            totalBytes = totalBytes,
+                            acknowledgedWindows = acknowledgedWindows,
+                            totalWindows = totalWindows,
+                            message = "Fit3 accepted window $acknowledgedWindows of $totalWindows.",
+                        )
+                    }
                 }
             ) {
                 return
@@ -149,10 +206,45 @@ class Fit3DirectInstaller @Inject constructor(
             }
         }
 
-        override fun onTransferComplete(payload: DirectInstallPayload) {
+        override fun onTransferComplete(payload: WatchFile) {
             if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.TRANSFER_COMPLETE)) {
                 return
             }
+            when (payload) {
+                is DirectInstallPayload -> faceTransferred(payload)
+                is AlbumPhoto -> photoTransferred(payload)
+            }
+        }
+
+        private fun photoTransferred(photo: AlbumPhoto) {
+            val request = albumRequest ?: return
+            var next: AlbumPhoto? = null
+            if (!advance(DeliveryEvent.TRANSFER_COMPLETE) { current ->
+                    val album = current.album ?: return@advance current
+                    val sent = album.copy(
+                        photosSent = album.photosSent + 1,
+                        bytesSent = album.bytesSent + photo.size,
+                    )
+                    next = request.photos.getOrNull(sent.photosSent)
+                    current.copy(
+                        album = sent,
+                        acknowledgedBytes = sent.bytesSent,
+                        message = "Photo ${sent.photosSent} of ${sent.photos} sent.",
+                    )
+                }
+            ) {
+                return
+            }
+            val following = next
+            if (following == null) {
+                startClosingCommands(request)
+            } else {
+                armWatchdog(DirectInstallPhase.TRANSFERRING, TRANSFER_WATCHDOG_MS)
+                otaAgent?.runPayload(following) ?: fail("OTA agent is unavailable")
+            }
+        }
+
+        private fun faceTransferred(payload: DirectInstallPayload) {
             val agent = watchfaceAgent
             if (agent == null) {
                 fail("Watch-face agent disappeared after transfer")
@@ -209,6 +301,87 @@ class Fit3DirectInstaller @Inject constructor(
         override fun onWatchReply(data: ByteArray) {
             mutableState.update { withWatchReply(it, "watchface", data) }
         }
+    }
+
+    private val commandListener = object : CommandListener {
+        override fun onCommandsDelivered(batch: Int) {
+            val request = albumRequest ?: return
+            when (batch) {
+                OPENING_BATCH -> {
+                    if (!advance(DeliveryEvent.ALBUM_OPENED) { it }) return
+                    albumOpen = true
+                    if (request.photos.isEmpty()) {
+                        startClosingCommands(request)
+                    } else {
+                        otaAgent?.runPayload(request.photos.first()) ?: fail("OTA agent is unavailable")
+                    }
+                }
+                CLOSING_BATCH -> {
+                    if (!advance(DeliveryEvent.INSTALL_DELIVERED) {
+                            it.copy(
+                                phase = DirectInstallPhase.COMPLETE,
+                                message = if (request.isRemoval) {
+                                    "Remove request sent. Check the Photos face on the watch, " +
+                                        "then reconnect it in the companion app. $restorePlugin."
+                                } else if (request.isSelection) {
+                                    "Request sent to show that photo. Check the Photos face on " +
+                                        "the watch, then reconnect it in the companion app. $restorePlugin."
+                                } else {
+                                    "Photos request sent. Check the Photos face on the watch, " +
+                                        "then reconnect it in the companion app. $restorePlugin."
+                                },
+                            )
+                        }
+                    ) {
+                        return
+                    }
+                    albumOpen = false
+                    cancelWatchdog()
+                }
+            }
+        }
+
+        override fun onCommandProgress(batch: Int, sent: Int, total: Int) {
+            if (!advance(DeliveryEvent.COMMAND_PROGRESS) {
+                    it.copy(message = "Sent request $sent of $total to the Photos face.")
+                }
+            ) {
+                return
+            }
+            armWatchdog(state.value.phase, PHASE_WATCHDOG_MS)
+        }
+
+        override fun onCommandsFailed(message: String, peerLost: Boolean) {
+            if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.FAILURE)) return
+            if (peerLost) restartDiscovery(message) else fail(message)
+        }
+
+        override fun onCommandRefused(reason: String) {
+            if (!DeliveryProgress.accepts(state.value.phase, DeliveryEvent.FAILURE)) return
+            fail(reason)
+        }
+    }
+
+    /** After the last photo, or at once for a removal: the album change and the face's settings. */
+    private fun startClosingCommands(request: PhotoAlbumRequest) {
+        if (!advance(DeliveryEvent.ALBUM_COMMANDS_REQUESTED) {
+                it.copy(
+                    phase = DirectInstallPhase.INSTALLING,
+                    message = if (request.isRemoval) {
+                        "Asking the watch to remove the photos."
+                    } else if (request.isSelection) {
+                        "Asking the watch to show the photo."
+                    } else {
+                        "Photos transferred. Adding them to the Photos face."
+                    },
+                )
+            }
+        ) {
+            return
+        }
+        armWatchdog(DirectInstallPhase.INSTALLING, PHASE_WATCHDOG_MS)
+        watchfaceAgent?.sendCommands(CLOSING_BATCH, PhotoAlbumProtocol.closing(request))
+            ?: fail("Watch-face agent is unavailable")
     }
 
     /**
@@ -315,16 +488,18 @@ class Fit3DirectInstaller @Inject constructor(
         requestOtaAgent(requestGeneration)
     }
 
-    fun install(payload: DirectInstallPayload) {
-        if (state.value.isActive) return
+    /**
+     * Whether a send may start. Neither refusal is a failed transfer: each is setup that has
+     * come undone, with a checklist step that says how to put it back. Failing here used to make
+     * a recoverable state terminal.
+     */
+    private fun readyToSend(): Boolean {
+        if (state.value.isActive) return false
         refreshEnvironment()
         val current = state.value
-        // Neither of these is a failed transfer: they are setup that has come undone,
-        // and each one has a checklist step that says how to put it back. Failing
-        // here used to make a recoverable state terminal.
         if (!current.peersCached) {
             restartDiscovery("Discover both Fit3 peers before sending.")
-            return
+            return false
         }
         if (!current.pluginChannelReleased) {
             mutableState.update {
@@ -334,8 +509,14 @@ class Fit3DirectInstaller @Inject constructor(
                         "accessory channel before sending.",
                 )
             }
-            return
+            return false
         }
+        return true
+    }
+
+    fun install(payload: DirectInstallPayload) {
+        if (!readyToSend()) return
+        albumRequest = null
         mutableState.update {
             it.copy(
                 phase = DirectInstallPhase.VERIFYING,
@@ -345,11 +526,47 @@ class Fit3DirectInstaller @Inject constructor(
                 fileName = payload.fileName,
                 sha256 = payload.sha256,
                 totalBytes = payload.size,
+                album = null,
                 message = "Checking the face file…",
             )
         }
         armWatchdog(DirectInstallPhase.VERIFYING, PHASE_WATCHDOG_MS)
         otaAgent?.runPayload(payload) ?: fail("OTA agent is unavailable")
+    }
+
+    /**
+     * Sends a Photos request: the plugin's opening edit-info request, then each photo over the
+     * same transfer a face uses (one channel per photo, as for a face), then the album change
+     * and the face's settings. A request with no photo, a removal or a change of the shown one,
+     * skips the transfer.
+     *
+     * Like an install, nothing the watch decides comes back here, so the most this can report
+     * is that every request was handed over.
+     */
+    fun sendAlbum(request: PhotoAlbumRequest) {
+        if (!readyToSend()) return
+        albumRequest = request
+        albumOpen = false
+        mutableState.update {
+            it.copy(
+                phase = DirectInstallPhase.VERIFYING,
+                failure = null,
+                faceId = request.faceId,
+                samplerId = null,
+                fileName = null,
+                sha256 = null,
+                acknowledgedBytes = 0,
+                totalBytes = request.photos.sumOf { photo -> photo.size },
+                acknowledgedWindows = 0,
+                totalWindows = 0,
+                album = AlbumProgress(photos = request.photos.size, removing = request.isRemoval,
+                    showing = request.isSelection),
+                message = "Opening the Photos face's settings on the watch…",
+            )
+        }
+        armWatchdog(DirectInstallPhase.VERIFYING, PHASE_WATCHDOG_MS)
+        watchfaceAgent?.sendCommands(OPENING_BATCH, PhotoAlbumProtocol.opening(request))
+            ?: fail("Watch-face agent is unavailable")
     }
 
     /**
@@ -416,12 +633,42 @@ class Fit3DirectInstaller @Inject constructor(
                 totalBytes = 0,
                 acknowledgedWindows = 0,
                 totalWindows = 0,
+                album = null,
                 failure = null,
                 message = if (current.setupComplete) {
                     "Edit applied. Ready to send the updated face."
                 } else {
                     "Edit applied. Set up direct install again to send it."
                 },
+            )
+        }
+    }
+
+    /**
+     * Clears a finished or failed send of the other kind, so the page that opens next does not
+     * report a Photos request as a face install or the other way round. Setup survives, as it
+     * does for [payloadChanged].
+     *
+     * @param album which kind the opening page sends; a result of that kind is left alone.
+     */
+    fun clearOtherResult(album: Boolean) {
+        mutableState.update { current ->
+            if (!current.isTerminal || (current.album != null) == album) return@update current
+            current.copy(
+                phase = if (current.setupComplete) DirectInstallPhase.READY else DirectInstallPhase.IDLE,
+                faceId = null,
+                samplerId = null,
+                fileName = null,
+                sha256 = null,
+                acknowledgedBytes = 0,
+                totalBytes = 0,
+                acknowledgedWindows = 0,
+                totalWindows = 0,
+                album = null,
+                failure = null,
+                message = if (current.setupComplete) "Ready to send." else environmentMessage(
+                    DirectInstallPhase.IDLE, current.environment, current,
+                ),
             )
         }
     }
@@ -532,6 +779,7 @@ class Fit3DirectInstaller @Inject constructor(
         abandonInFlight()
         watchfaceAgent?.discoveryListener = null
         watchfaceAgent?.installListener = null
+        watchfaceAgent?.commandListener = null
         otaAgent?.discoveryListener = null
         otaAgent?.transferListener = null
         runCatching { watchfaceAgent?.releaseAgent() }
@@ -562,6 +810,7 @@ class Fit3DirectInstaller @Inject constructor(
                     }
                     typed.discoveryListener = discoveryListener
                     typed.installListener = installListener
+                    typed.commandListener = commandListener
                     synchronized(this@Fit3DirectInstaller) {
                         watchfaceAgent = typed
                     }
@@ -760,7 +1009,23 @@ class Fit3DirectInstaller @Inject constructor(
 
     private fun fail(message: String) {
         cancelWatchdog()
+        abandonAlbum()
         mutableState.update { it.failed(message) }
+    }
+
+    /**
+     * A Photos request that stopped between its opening and closing commands sends the
+     * plugin's cancel, best effort: the watch may be showing its settings as being edited.
+     * Sent before the peer handles are dropped, since it needs one.
+     */
+    private fun abandonAlbum() {
+        val request = albumRequest ?: return
+        albumRequest = null
+        if (albumOpen) {
+            albumOpen = false
+            watchfaceAgent?.cancelInstall()
+            watchfaceAgent?.sendQuietly(PhotoAlbumProtocol.abandon(request))
+        }
     }
 
     /**
@@ -832,6 +1097,7 @@ class Fit3DirectInstaller @Inject constructor(
      */
     private fun abandonInFlight() {
         otaAgent?.cancelTransfer()
+        abandonAlbum()
         watchfaceAgent?.cancelInstall()
     }
 
@@ -879,6 +1145,8 @@ class Fit3DirectInstaller @Inject constructor(
         const val ACCESSORY_FRAMEWORK_PACKAGE = "com.samsung.accessory"
         const val ACCESSORY_REGISTER_AGENT_ACTION = "com.samsung.accessory.action.REGISTER_AGENT"
         const val VENDOR_PACKAGE_PREFIX = "com.samsung."
+        const val OPENING_BATCH = 1
+        const val CLOSING_BATCH = 2
         val ACTIVE_PHASES = DirectInstallState.ActivePhases
         // PHASE_WATCHDOG_MS and TRANSFER_WATCHDOG_MS live in DirectInstallState.kt, beside
         // `transferProgressRearmsWatchdog`, because the budget and the rule that keeps a

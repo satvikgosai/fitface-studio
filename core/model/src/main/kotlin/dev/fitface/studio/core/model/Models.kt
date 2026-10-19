@@ -1117,13 +1117,13 @@ data class EditorSnapshot(
 class DirectInstallPayload(
     val faceId: Int,
     val samplerId: Int,
-    val fileName: String,
-    val sha256: String,
+    override val fileName: String,
+    override val sha256: String,
     bytes: ByteArray,
-) {
+) : WatchFile {
     private val payload = bytes.copyOf()
 
-    val size: Int
+    override val size: Int
         get() = payload.size
 
     init {
@@ -1148,7 +1148,7 @@ class DirectInstallPayload(
         }
     }
 
-    fun copyBytes(): ByteArray = payload.copyOf()
+    override fun copyBytes(): ByteArray = payload.copyOf()
 
     /**
      * Whether this payload ends exactly on a transfer window boundary.
@@ -1161,7 +1161,7 @@ class DirectInstallPayload(
      * the risk — but it is worth having in a bug report if a transfer ever stalls right
      * at the end.
      */
-    val endsOnWindowBoundary: Boolean
+    override val endsOnWindowBoundary: Boolean
         get() = payload.size % TRANSFER_WINDOW_BYTES == 0
 
     companion object {

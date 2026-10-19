@@ -99,6 +99,7 @@ import java.io.File
 @Composable
 fun LibraryRoute(
     onOpenEditor: (Long) -> Unit,
+    onOpenPhotos: () -> Unit,
     onAbout: () -> Unit,
     onCheckForUpdate: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
@@ -224,6 +225,11 @@ fun LibraryRoute(
         onDeleteProject = viewModel::startDelete,
         onImportProject = { importPicker.launch(ProjectArchiveNaming.ImportMimeTypes) },
         onStartCustomFace = viewModel::startCustomFace,
+        onOpenPhotos = onOpenPhotos,
+        onSendPhotos = {
+            viewModel.dismissFace()
+            onOpenPhotos()
+        },
     )
 }
 
@@ -263,6 +269,8 @@ private fun LibraryScreen(
     onDeleteProject: (ProjectSummary) -> Unit,
     onImportProject: () -> Unit,
     onStartCustomFace: (String) -> Unit,
+    onOpenPhotos: () -> Unit,
+    onSendPhotos: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
     Scaffold(
@@ -311,6 +319,7 @@ private fun LibraryScreen(
                     onExport = onExportProject,
                     onRemove = onDeleteProject,
                     onStartCustomFace = onStartCustomFace,
+                    onOpenPhotos = onOpenPhotos,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -325,6 +334,7 @@ private fun LibraryScreen(
             downloading = state.downloadingProductId == face.productId,
             downloadFraction = state.downloadFraction,
             uneditable = face.appId in state.uneditableAppIds,
+            takesPhotos = state.takesPhotos(face),
             packageOnDevice = state.selectedFaceCached,
             projectsEnabled = !state.isWorking,
             openingProjectId = state.openingProjectId,
@@ -332,6 +342,7 @@ private fun LibraryScreen(
             onDismiss = onDismissFace,
             onStyle = onStyle,
             onDownload = onDownload,
+            onSendPhotos = onSendPhotos,
             onOpenProject = onProjectClick,
         )
     }
@@ -587,6 +598,7 @@ private fun WatchFaceGrid(
                     // tap there is the silence that predicate was added to end.
                     enabled = state.canSelectFace,
                     uneditable = face.appId in state.uneditableAppIds,
+                    takesPhotos = state.takesPhotos(face),
                     projectCount = projectCounts[face.faceId] ?: 0,
                     onClick = { onFace(face) },
                 )
@@ -653,6 +665,7 @@ private fun WatchFaceCard(
     face: CatalogFace,
     enabled: Boolean,
     uneditable: Boolean,
+    takesPhotos: Boolean,
     projectCount: Int,
     onClick: () -> Unit,
 ) {
@@ -666,7 +679,9 @@ private fun WatchFaceCard(
         styleCount
     }
     val cardDescription = stringResource(
-        if (uneditable) {
+        if (takesPhotos) {
+            R.string.library_face_card_a11y_photos
+        } else if (uneditable) {
             R.string.library_face_card_a11y_not_editable
         } else {
             R.string.library_face_card_a11y
@@ -697,9 +712,11 @@ private fun WatchFaceCard(
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 contentScale = ContentScale.Fit,
             )
-            if (uneditable) {
+            if (uneditable || takesPhotos) {
                 Text(
-                    stringResource(R.string.library_not_editable_badge),
+                    stringResource(
+                        if (takesPhotos) R.string.library_photos_badge else R.string.library_not_editable_badge,
+                    ),
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(6.dp)
@@ -761,6 +778,8 @@ private fun FaceDetailsSheet(
     downloading: Boolean,
     downloadFraction: Float,
     uneditable: Boolean,
+    /** The Photos face: no container to edit, so its one action sends photos to it. */
+    takesPhotos: Boolean,
     packageOnDevice: Boolean,
     projectsEnabled: Boolean,
     openingProjectId: Long?,
@@ -768,6 +787,7 @@ private fun FaceDetailsSheet(
     onDismiss: () -> Unit,
     onStyle: (Int) -> Unit,
     onDownload: () -> Unit,
+    onSendPhotos: () -> Unit,
     onOpenProject: (ProjectSummary) -> Unit,
 ) {
     val selected = face.styles.singleOrNull { it.id == selectedStyleId } ?: face.styles.first()
@@ -925,7 +945,20 @@ private fun FaceDetailsSheet(
                         ),
                     )
                 }
-                FitButton(
+                if (takesPhotos) {
+                    FitButton(
+                        text = stringResource(R.string.library_send_photos),
+                        onClick = onSendPhotos,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = openingProjectId == null,
+                    )
+                    Text(
+                        stringResource(R.string.library_send_photos_note),
+                        modifier = Modifier.padding(top = 10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.fitText.secondary,
+                    )
+                } else FitButton(
                     // UPDATE and NEW_PROJECT run the same code — `onDownload` always fetches
                     // the version the catalogue is serving now, which *is* the newest. They
                     // differ only in what the button says, and that was the part that was
@@ -952,13 +985,14 @@ private fun FaceDetailsSheet(
                 )
                 // Only while bytes are actually arriving. A determinate bar over a cached
                 // package would jump straight to full and say nothing true on the way.
-                if (action == FaceAction.DOWNLOADING) {
+                if (action == FaceAction.DOWNLOADING && !takesPhotos) {
                     LinearProgressIndicator(
                         progress = { downloadFraction },
                         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     )
                 }
                 val actionNote = when {
+                    takesPhotos -> null
                     action == FaceAction.UPDATE -> R.string.library_update_note
                     packageOnDevice && action != FaceAction.NOT_EDITABLE -> R.string.library_new_project_note
                     else -> null
@@ -1046,6 +1080,7 @@ private fun ProjectsList(
     onExport: (ProjectSummary) -> Unit,
     onRemove: (ProjectSummary) -> Unit,
     onStartCustomFace: (String) -> Unit,
+    onOpenPhotos: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val projects = state.visibleProjects
@@ -1079,6 +1114,7 @@ private fun ProjectsList(
         if (state.projects.isEmpty()) {
             item { ProjectsEmptyState(onBrowse) }
             item { CustomFaceCard(state, startCustomFace) }
+            item { PhotosCard(state, onOpenPhotos) }
             return@LazyColumn
         }
         // The same controls the catalogue has, in the same place, scrolling with the list.
@@ -1116,6 +1152,7 @@ private fun ProjectsList(
         // same place so the search field does not move when the tab changes, and a card
         // above them on this page alone would move it by its own height.
         item { CustomFaceCard(state, startCustomFace) }
+        item { PhotosCard(state, onOpenPhotos) }
         if (projects.isEmpty()) {
             item {
                 Column(
@@ -1246,6 +1283,48 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
             )
         }
         Text(slot, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+    }
+}
+
+/**
+ * Opens the Photos face's page. Shown only while the catalogue has that face, because its
+ * package is what says the face takes photos and which backgrounds it already has.
+ */
+@Composable
+private fun PhotosCard(state: LibraryUiState, onOpen: () -> Unit) {
+    if (state.photosFace == null) return
+    val title = stringResource(R.string.library_photos_title)
+    val detail = stringResource(R.string.library_photos_detail)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .clickable(enabled = !state.isOpeningProject, role = Role.Button, onClick = onOpen)
+            .semantics(mergeDescendants = true) { contentDescription = "$title. $detail" }
+            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(13.dp),
+    ) {
+        Box(
+            Modifier
+                .size(44.dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), MaterialTheme.shapes.medium)
+                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), MaterialTheme.shapes.medium),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("▣", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                detail,
+                modifier = Modifier.padding(top = 3.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
     }
 }
 

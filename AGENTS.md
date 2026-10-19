@@ -54,8 +54,9 @@ baseline live only in [Development](docs/development.md#test).
   Keep parsing and persistence out of composables.
 - Edits must reparse and validate before acceptance, with complete session rollback
   on failure. Imported artwork and its provenance must commit atomically.
-- `Session.validatedBytes()` is the only route to the watch: size, magic, errors,
-  blocking warnings, byte-identical round trip and every style/AOD are checked.
+- `Session.validatedBytes()` is the only route to the watch for a face: size, magic, errors,
+  blocking warnings, byte-identical round trip and every style/AOD are checked. Photos for
+  the Photos face go only through `PhotoAlbumRequest`'s checks; neither takes the other's bytes.
 - Downloads remain bounded and use allowlisted HTTPS hosts before and after
   redirects. Cancellation must stop blocking I/O and suppress late callbacks.
 - Ordinary storage is private. Optional archive export writes only to the document

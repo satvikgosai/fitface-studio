@@ -10,12 +10,11 @@ import android.os.Looper
 import android.os.SystemClock
 import com.samsung.android.sdk.accessory.SAMessage
 import com.samsung.android.sdk.accessory.SAPeerAgent
-import dev.fitface.studio.core.model.DirectInstallPayload
-import java.io.ByteArrayOutputStream
+import dev.fitface.studio.core.model.AlbumPhoto
+import dev.fitface.studio.core.model.WatchFile
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -24,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 internal interface TransferListener {
-    fun onPayloadVerified(payload: DirectInstallPayload, windows: Int)
+    fun onPayloadVerified(payload: WatchFile, windows: Int)
     fun onWindowAcknowledged(
         acknowledgedBytes: Int,
         totalBytes: Int,
@@ -36,7 +35,7 @@ internal interface TransferListener {
 
     /** Raw bytes the watch addressed to this agent, recorded for the diagnostics report. */
     fun onWatchReply(data: ByteArray) {}
-    fun onTransferComplete(payload: DirectInstallPayload)
+    fun onTransferComplete(payload: WatchFile)
 
     /**
      * @param peerLost the cached accessory peer is gone, so re-sending cannot work
@@ -96,7 +95,8 @@ class OtaTransferDeliveryAgent(context: Context) :
         }
     }
 
-    internal fun runPayload(payload: DirectInstallPayload) {
+    /** Sends one file, a face's container or a photo; the descriptor says which. */
+    internal fun runPayload(payload: WatchFile) {
         if (!transferRunning.compareAndSet(false, true)) {
             transferListener?.onTransferFailed("A transfer is already running")
             return
@@ -125,7 +125,7 @@ class OtaTransferDeliveryAgent(context: Context) :
         val identity = payload.copyBytes()
         if (identity.size != payload.size || identity.sha256() != payload.sha256) {
             transferRunning.set(false)
-            report(token) { it.onTransferFailed("Frozen BIN size or SHA-256 changed") }
+            report(token) { it.onTransferFailed("Frozen file size or SHA-256 changed") }
             return
         }
         val windowCount = IdentityTransferProtocol.windowCount(identity.size)
@@ -134,7 +134,7 @@ class OtaTransferDeliveryAgent(context: Context) :
         // An accessory send that throws means the peer is no longer reachable, not
         // that the payload is wrong: retrying against the same handle repeats it.
         try {
-            message.send(peer, buildFileInfoRequest(payload))
+            message.send(peer, IdentityTransferProtocol.fileInfo(payload))
         } catch (error: Exception) {
             transferRunning.set(false)
             report(token) {
@@ -182,10 +182,10 @@ class OtaTransferDeliveryAgent(context: Context) :
         token: Int,
         band: BluetoothDevice,
         peer: SAPeerAgent,
-        payload: DirectInstallPayload,
+        payload: WatchFile,
         identity: ByteArray,
     ) {
-        transferThread = thread(name = "Fit3Direct-${payload.faceId}") {
+        transferThread = thread(name = "Fit3Direct-${payload.fileName}") {
             var socket: BluetoothSocket? = null
             var transferComplete = false
             try {
@@ -197,7 +197,7 @@ class OtaTransferDeliveryAgent(context: Context) :
                     token,
                     socket.inputStream,
                     socket.outputStream,
-                    payload.fileName,
+                    payload,
                     identity,
                 )
                 transferComplete = true
@@ -259,7 +259,7 @@ class OtaTransferDeliveryAgent(context: Context) :
         token: Int,
         input: InputStream,
         output: OutputStream,
-        fileName: String,
+        file: WatchFile,
         identity: ByteArray,
     ) {
         // Each handshake reports as soon as it lands. Not for the reader's benefit — for
@@ -272,13 +272,7 @@ class OtaTransferDeliveryAgent(context: Context) :
         requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_NEGOTIATION_RESPONSE)
         report(token) { it.onTransferStatus("Fit3 accepted the transfer negotiation") }
 
-        writeFixed(
-            output,
-            IdentityTransferProtocol.descriptor(
-                fileName = fileName,
-                fileSize = identity.size,
-            ),
-        )
+        writeFixed(output, IdentityTransferProtocol.descriptor(file))
         requireToken(token, input, COMMAND_TIMEOUT_MS, SPP_DESCRIPTOR_RESPONSE)
         report(token) { it.onTransferStatus("Fit3 accepted the file descriptor") }
 
@@ -338,7 +332,11 @@ class OtaTransferDeliveryAgent(context: Context) :
 
         writeFixed(output, SPP_RESULT_REQUEST)
         requireToken(token, input, RESULT_TIMEOUT_MS, SPP_RESULT_RESPONSE)
-        report(token) { it.onTransferStatus("Fit3 verified the complete BIN") }
+        report(token) {
+            it.onTransferStatus(
+                if (file is AlbumPhoto) "Fit3 verified the photo" else "Fit3 verified the complete BIN",
+            )
+        }
 
         SystemClock.sleep(RESULT_TO_CLOSE_PAUSE_MS)
         writeFixed(output, SPP_CLOSE_REQUEST)
@@ -442,23 +440,6 @@ class OtaTransferDeliveryAgent(context: Context) :
         if (btClose.claim(token, attempt.get())) {
             runCatching { message.send(peer, BT_CLOSE_REQUEST) }
         }
-    }
-
-    private fun buildFileInfoRequest(payload: DirectInstallPayload): ByteArray {
-        val name = payload.fileName.toByteArray(StandardCharsets.UTF_8)
-        return ByteArrayOutputStream(10 + name.size).apply {
-            write(0x01)
-            write(0x03)
-            write(0x06)
-            write(0x04)
-            write(name.size)
-            write(name)
-            write(0x05)
-            write(payload.size and 0xff)
-            write((payload.size ushr 8) and 0xff)
-            write((payload.size ushr 16) and 0xff)
-            write((payload.size ushr 24) and 0xff)
-        }.toByteArray()
     }
 
     companion object {
