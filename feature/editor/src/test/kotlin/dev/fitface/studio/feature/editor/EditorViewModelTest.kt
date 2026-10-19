@@ -6,6 +6,11 @@ import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
+import dev.fitface.studio.core.model.ImagePlacement
+import dev.fitface.studio.core.model.PreparedPicture
+import dev.fitface.studio.core.model.ReplacementImage
+import dev.fitface.studio.core.model.pictureAddedBytes
+import dev.fitface.studio.core.model.pictureSizes
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WatchFaceRepository
@@ -80,6 +85,90 @@ class EditorViewModelTest {
      * than a commit completes, so committing every tick would queue dozens of reparses to
      * arrive at one position.
      */
+    /** A 200 × 100 picture: kept whole, so Medium is the 60% rung, 120 × 60. */
+    private fun picture() = PreparedPicture("p", 200, 100, opaque = false,
+        sizes = pictureSizes(200, 100, PanelWidth, PanelHeight, kept = true),
+        preview = PreviewFrame(200, 100, IntArray(200 * 100)))
+
+    /**
+     * Placing a picture is placing a background: it starts centred at its default size, a
+     * drag moves it, the size buttons step its own ladder, and Add takes it where it is in
+     * the colour chosen.
+     */
+    @Test
+    fun aPictureIsPlacedLikeABackgroundAndAddedWhereItIs() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply { prepared = picture() }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.preparePicture("content://picture")
+        settle()
+        var pending = requireNotNull(viewModel.state.value.pendingPicture)
+        assertEquals(60, pending.size.percentOfOriginal)
+        assertEquals((PanelWidth - 120) / 2 to (PanelHeight - 60) / 2, pending.left to pending.top)
+        assertEquals(pictureAddedBytes(120, 60, opaque = false), pending.addedBytes)
+
+        viewModel.transformPicture(1f, 10f / PanelWidth, 0f)
+        viewModel.stepPictureSize(grow = true)
+        viewModel.setPictureTint(0xFFFF0000.toInt())
+        pending = requireNotNull(viewModel.state.value.pendingPicture)
+        assertEquals(65, pending.size.percentOfOriginal)
+        assertEquals(130 to 65, pending.size.width to pending.size.height)
+
+        viewModel.addPicture()
+        settle()
+        assertEquals(listOf(listOf<Any?>("p", 65, pending.left, pending.top, 0xFFFF0000.toInt())), repository.addedPictures)
+        val state = viewModel.state.value
+        assertNull(state.pendingPicture)
+        assertEquals("the picture is selected, as an import is", 9, state.selectedWidgetIndex)
+        assertNotNull("the screen moves to the face to show it", state.pictureAdded)
+        viewModel.clearPictureAdded(requireNotNull(state.pictureAdded).id)
+        assertNull(viewModel.state.value.pictureAdded)
+    }
+
+    /** A pinch lands on a rung; a drag past the edge stops where a widget drag would. */
+    @Test
+    fun aPinchSnapsToTheLadderAndADragKeepsPartOfThePictureOnTheFace() {
+        val repository = FakeRepository(snapshot(widgets)).apply { prepared = picture() }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.preparePicture("content://picture")
+        settle()
+        viewModel.transformPicture(1.49f, 0f, 0f)
+        assertEquals(90, viewModel.state.value.pendingPicture?.size?.percentOfOriginal)
+        viewModel.transformPicture(1f, -5f, 5f)
+        val pending = requireNotNull(viewModel.state.value.pendingPicture)
+        assertEquals(offFaceKeepVisible(pending.size.width) - pending.size.width, pending.left)
+        assertEquals(PanelHeight - offFaceKeepVisible(pending.size.height), pending.top)
+        viewModel.resetPicturePlacement()
+        assertEquals(60, viewModel.state.value.pendingPicture?.size?.percentOfOriginal)
+
+        viewModel.discardPicture()
+        settle()
+        assertNull(viewModel.state.value.pendingPicture)
+        assertEquals(listOf("p"), repository.released)
+    }
+
+    /** The background has the same colour control, and Use applies what the face shows. */
+    @Test
+    fun aBackgroundsColourGoesWithItsPlacement() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareBackground("content://background")
+        settle()
+        viewModel.setBackgroundTint(0xFF0000FF.toInt())
+        // Found on the emulator: Reset placement and a new fit used to drop the colour.
+        viewModel.resetImagePlacement()
+        viewModel.selectFit(ImageFit.CONTAIN)
+        assertEquals(0xFF0000FF.toInt(), viewModel.state.value.placement.tint)
+        viewModel.applyBackground()
+        settle()
+        assertEquals(0xFF0000FF.toInt(), repository.backgroundPlacement?.tint)
+    }
+
     /** The library has opened it already; the editor takes that session, not a second load. */
     @Test
     fun theEditorTakesTheProjectTheLibraryOpenedInsteadOfOpeningItAgain() {
@@ -573,6 +662,31 @@ class EditorViewModelTest {
             current.takeIf { alreadyOpen == projectId }
 
         override suspend fun openProject(projectId: Long): EditorSnapshot = current.also { opens++ }
+
+        var prepared: PreparedPicture? = null
+        /** Each picture added: its handle, percent, top-left and colour. */
+        val addedPictures = mutableListOf<List<Any?>>()
+        val released = mutableListOf<String>()
+        var backgroundPlacement: ImagePlacement? = null
+
+        override suspend fun preparePicture(imageUri: String, projectId: Long, targetVariant: String) =
+            requireNotNull(prepared)
+
+        override suspend fun addPicture(handle: String, projectId: Long, targetVariant: String, percent: Int,
+            x: Int, y: Int, tint: Int?, group: Long?): EditorSnapshot {
+            addedPictures += listOf(handle, percent, x, y, tint)
+            current = current.copy(widgets = current.widgets + widget(globalIndex = 9, x = x, y = y))
+            return current
+        }
+
+        override suspend fun releasePicture(handle: String) { released += handle }
+
+        override suspend fun prepareReplacementImage(imageUri: String) = ReplacementImage(imageUri, frame())
+
+        override suspend fun replaceBackground(imageUri: String, placement: ImagePlacement): EditorSnapshot {
+            backgroundPlacement = placement
+            return current
+        }
 
         override suspend fun moveWidget(
             styleName: String,

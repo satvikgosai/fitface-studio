@@ -16,7 +16,10 @@ import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
+import dev.fitface.studio.core.model.PreparedPicture
 import dev.fitface.studio.core.model.ReplacementImage
+import dev.fitface.studio.core.model.WidgetSize
+import dev.fitface.studio.core.model.pictureAddedBytes
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.DiagnosticsLog
@@ -81,6 +84,41 @@ internal object EditGroups {
 /** "Undid move", shown once after an undo or a redo. */
 data class HistoryNotice(val id: Long, val undone: Boolean, val kind: EditKind)
 
+/**
+ * A picked picture being placed on the face before it is added: the Widgets page's
+ * counterpart of a pending background, placed with the same controls.
+ *
+ * [zoom] runs continuously under a pinch, as a background's does; the size it adds at is the
+ * rung of the picture's own resize ladder nearest to it ([size]), so what is added is a size
+ * Smaller and Larger can come back to.
+ */
+data class PendingPicture(
+    val prepared: PreparedPicture,
+    val zoom: Float,
+    /** Its centre, in panel pixels. */
+    val centreX: Float,
+    val centreY: Float,
+    /** The colour it is recoloured to ([tintedColor]), or null for its own. */
+    val tint: Int? = null,
+) {
+    val size: WidgetSize get() = prepared.ladder.minBy { abs(it.percentOfOriginal - zoom * 100) }
+    val left: Int get() = (centreX - size.width / 2f).roundToInt()
+    val top: Int get() = (centreY - size.height / 2f).roundToInt()
+    /** What it adds to the face, exactly: [pictureAddedBytes] at [size]. */
+    val addedBytes: Int get() = pictureAddedBytes(size.width, size.height, prepared.opaque)
+
+    /** The placement the shared controls read: its rung, and its centre's offset from the panel's. */
+    fun placement(panelWidth: Int, panelHeight: Int) = ImagePlacement(
+        zoom = size.percentOfOriginal / 100f,
+        offsetX = (centreX - panelWidth / 2f) / panelWidth.coerceAtLeast(1),
+        offsetY = (centreY - panelHeight / 2f) / panelHeight.coerceAtLeast(1),
+        tint = tint,
+    )
+}
+
+/** A picture was just added: the screen moves to the face to show it, once. */
+data class PictureAdded(val id: Long)
+
 /** Which variant's widget a queued move targets — see [PendingWidgetTarget]. */
 private data class PendingMoveKey(val variantBasename: String, val globalIndex: Int)
 
@@ -122,6 +160,9 @@ data class EditorUiState(
     val fit: ImageFit = ImageFit.COVER,
     val pendingImage: ReplacementImage? = null,
     val placement: ImagePlacement = ImagePlacement(),
+    /** A picture being placed from the Widgets page; see [PendingPicture]. */
+    val pendingPicture: PendingPicture? = null,
+    val pictureAdded: PictureAdded? = null,
     val selectedWidgetIndex: Int? = null,
     /**
      * Selection mode, in pick order: one or more items, or empty when inactive.
@@ -387,7 +428,7 @@ class EditorViewModel @Inject constructor(
             return
         }
         val imported = mutableState.value.snapshot?.widgets?.singleOrNull { it.globalIndex == globalIndex }
-            ?.importedFromFaceId != null
+            ?.addedKind != null
         mutableState.value = mutableState.value.copy(selectedWidgetIndex = globalIndex,
             applyWidgetEditsToAllStyles = !imported && mutableState.value.applyWidgetEditsToAllStyles)
     }
@@ -616,7 +657,7 @@ class EditorViewModel @Inject constructor(
     fun setApplyWidgetEditsToAllStyles(value: Boolean) {
         if (value && mutableState.value.snapshot?.widgets?.singleOrNull {
             it.globalIndex == mutableState.value.selectedWidgetIndex
-        }?.importedFromFaceId != null) return
+        }?.addedKind != null) return
         mutableState.value = mutableState.value.copy(applyWidgetEditsToAllStyles = value)
     }
 
@@ -630,9 +671,10 @@ class EditorViewModel @Inject constructor(
     }
 
     fun selectFit(value: ImageFit) {
+        // A new fit re-centres the image; its colour is not placement and stays.
         mutableState.value = mutableState.value.copy(
             fit = value,
-            placement = centeredPlacement(value),
+            placement = centeredPlacement(value).copy(tint = mutableState.value.placement.tint),
         )
         viewModelScope.launch {
             repository.setImageFit(value)
@@ -676,14 +718,126 @@ class EditorViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(placement = placement.copy(zoom = zoom))
     }
 
+    /** Back to centred and unzoomed; the colour chosen is not placement and stays. */
     fun resetImagePlacement() {
         mutableState.value = mutableState.value.copy(
-            placement = ImagePlacement(fit = mutableState.value.fit),
+            placement = ImagePlacement(fit = mutableState.value.fit, tint = mutableState.value.placement.tint),
         )
     }
 
     fun cancelBackground() {
         mutableState.value = mutableState.value.copy(pendingImage = null)
+    }
+
+    /** The pending background's colour, or null for the picture's own; drawn now, applied on Use. */
+    fun setBackgroundTint(tint: Int?) {
+        val state = mutableState.value
+        mutableState.value = state.copy(placement = state.placement.copy(tint = tint))
+    }
+
+    /** Decodes a picked picture and starts placing it, centred, at its default size. */
+    fun preparePicture(uri: String) {
+        val snapshot = mutableState.value.snapshot ?: return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isWorking = true, error = null)
+            runCatching { repository.preparePicture(uri, snapshot.projectId, snapshot.selectedVariant.basename) }
+                .onSuccess { prepared ->
+                    val start = prepared.defaultSize
+                    if (start == null) {
+                        repository.releasePicture(prepared.handle)
+                        showFailure(WatchFaceException("This picture is too small to add."))
+                        return@onSuccess
+                    }
+                    mutableState.value.pendingPicture?.let { previous ->
+                        if (previous.prepared.handle != prepared.handle) repository.releasePicture(previous.prepared.handle)
+                    }
+                    mutableState.value = mutableState.value.copy(
+                        pendingPicture = PendingPicture(prepared, start.percent / 100f,
+                            snapshot.preview.width / 2f, snapshot.preview.height / 2f),
+                        isWorking = false,
+                    )
+                }
+                .onFailure(::showFailure)
+        }
+    }
+
+    /** A pinch or drag on the face, in the canvas's units: the same gesture that places a background. */
+    fun transformPicture(zoomChange: Float, panX: Float, panY: Float) {
+        val pending = mutableState.value.pendingPicture ?: return
+        val panel = mutableState.value.snapshot?.preview ?: return
+        val ladder = pending.prepared.ladder
+        updatePicture(pending.copy(
+            zoom = (pending.zoom * zoomChange).coerceIn(ladder.first().percentOfOriginal / 100f,
+                ladder.last().percentOfOriginal / 100f),
+            centreX = pending.centreX + panX * panel.width,
+            centreY = pending.centreY + panY * panel.height,
+        ))
+    }
+
+    /** One rung of the picture's ladder smaller or larger, as Smaller and Larger step once it is added. */
+    fun stepPictureSize(grow: Boolean) {
+        val pending = mutableState.value.pendingPicture ?: return
+        val current = pending.size.percentOfOriginal
+        val next = pending.prepared.ladder.map { it.percentOfOriginal }
+            .let { rungs -> if (grow) rungs.firstOrNull { it > current } else rungs.lastOrNull { it < current } } ?: return
+        updatePicture(pending.copy(zoom = next / 100f))
+    }
+
+    fun resetPicturePlacement() {
+        val pending = mutableState.value.pendingPicture ?: return
+        val panel = mutableState.value.snapshot?.preview ?: return
+        val start = pending.prepared.defaultSize ?: return
+        updatePicture(pending.copy(zoom = start.percent / 100f, centreX = panel.width / 2f, centreY = panel.height / 2f))
+    }
+
+    fun setPictureTint(tint: Int?) {
+        val pending = mutableState.value.pendingPicture ?: return
+        mutableState.value = mutableState.value.copy(pendingPicture = pending.copy(tint = tint))
+    }
+
+    fun discardPicture() {
+        val pending = mutableState.value.pendingPicture ?: return
+        mutableState.value = mutableState.value.copy(pendingPicture = null)
+        viewModelScope.launch { repository.releasePicture(pending.prepared.handle) }
+    }
+
+    /**
+     * Adds the pending picture where it was placed. Like any widget it can be pushed partly
+     * off the face, but no further than [offFaceKeepVisible] leaves on it, the drag's rule.
+     */
+    fun addPicture() {
+        val pending = mutableState.value.pendingPicture ?: return
+        val snapshot = mutableState.value.snapshot ?: return
+        operate(onSuccess = { state ->
+            state.copy(
+                pendingPicture = null,
+                selectedWidgetIndex = state.snapshot?.widgets?.lastOrNull()?.globalIndex,
+                multiSelection = emptyList(),
+                applyWidgetEditsToAllStyles = false,
+                pictureAdded = PictureAdded(messageIds.incrementAndGet()),
+            )
+        }) {
+            repository.addPicture(pending.prepared.handle, snapshot.projectId, snapshot.selectedVariant.basename,
+                pending.size.percentOfOriginal, pending.left, pending.top, pending.tint)
+        }
+    }
+
+    fun clearPictureAdded(id: Long) {
+        if (mutableState.value.pictureAdded?.id == id) mutableState.value = mutableState.value.copy(pictureAdded = null)
+    }
+
+    /** Keeps the picture's rectangle on the face by at least what a drag would leave there. */
+    private fun updatePicture(next: PendingPicture) {
+        val panel = mutableState.value.snapshot?.preview ?: return
+        val size = next.size
+        fun keep(centre: Float, extent: Int, panelExtent: Int): Float {
+            val visible = offFaceKeepVisible(extent)
+            return centre.coerceIn(visible - extent / 2f, panelExtent - visible + extent / 2f)
+        }
+        mutableState.value = mutableState.value.copy(pendingPicture = next.copy(
+            centreX = keep(next.centreX, size.width, panel.width),
+            centreY = keep(next.centreY, size.height, panel.height),
+        ))
     }
 
     /**

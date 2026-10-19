@@ -165,6 +165,8 @@ data class ImagePlacement(
     val zoom: Float = 1f,
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
+    /** The colour the image is recoloured to by brightness ([tintedColor]), or null for its own. */
+    val tint: Int? = null,
 )
 
 data class ReplacementImage(
@@ -667,8 +669,13 @@ data class WidgetGuide(
      */
     val opaqueArtwork: Boolean = false,
     val duplicateSourceGlobalIndex: Int? = null,
-    /** Imports are edited only in the variant where they were added. */
+    /** The face an imported widget came from; null for a picture, which has none. */
     val importedFromFaceId: String? = null,
+    /**
+     * How the editor added this widget, or null for one the face shipped. Every added widget
+     * is edited only in the variant it was added to, and deleted outright with its artwork.
+     */
+    val addedKind: AddedWidgetKind? = null,
     val supportMessage: String,
 ) {
     /** Whether the editor may offer to resize this widget at all. */
@@ -824,7 +831,7 @@ data class EditAuditSummary(
  */
 enum class EditKind {
     MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, RESTORE, DUPLICATE, IMPORT, BACKGROUND,
-    STYLES, THUMBNAIL, TEXT,
+    STYLES, THUMBNAIL, TEXT, PICTURE,
 }
 
 data class EditorSnapshot(
@@ -1159,6 +1166,19 @@ interface WatchFaceRepository {
         projectId: Long, targetVariant: String): WidgetImportPreview = throw UnsupportedOperationException()
     suspend fun importWidget(ticket: String, group: Long? = null): EditorSnapshot = throw UnsupportedOperationException()
     suspend fun releaseWidgetDonor(handle: String) {}
+    /**
+     * Decodes a picked picture, fitted within the selected variant's panel, to be placed on
+     * the canvas and then added with [addPicture]. Kept until another replaces it.
+     */
+    suspend fun preparePicture(imageUri: String, projectId: Long, targetVariant: String): PreparedPicture =
+        throw UnsupportedOperationException()
+    /**
+     * Adds the prepared picture to [targetVariant] at [percent] of its baseline, with its
+     * top-left at panel coordinates [x], [y], recoloured to [tint] when there is one.
+     */
+    suspend fun addPicture(handle: String, projectId: Long, targetVariant: String, percent: Int, x: Int, y: Int,
+        tint: Int? = null, group: Long? = null): EditorSnapshot = throw UnsupportedOperationException()
+    suspend fun releasePicture(handle: String) {}
     suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
         throw UnsupportedOperationException()
     suspend fun previewBackgroundImport(handle: String, donorVariant: String,

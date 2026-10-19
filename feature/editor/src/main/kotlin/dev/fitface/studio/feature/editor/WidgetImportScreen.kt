@@ -878,7 +878,7 @@ private fun ImportPickChip(order: Int, name: String, enabled: Boolean, onClick: 
  * worth knowing about while there is still another one to pick.
  */
 @Composable
-private fun ImportRoomMeter(
+internal fun ImportRoomMeter(
     snapshot: EditorSnapshot,
     added: Int?,
     set: Boolean = false,
@@ -1392,7 +1392,7 @@ private fun ImportReviewLayout(
 }
 
 @Composable
-private fun ImportFactCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun ImportFactCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
@@ -1484,7 +1484,7 @@ private fun ImportReviewFace(
 }
 
 @Composable
-private fun ImportFactRow(label: String, value: String, emphasised: Boolean = false) {
+internal fun ImportFactRow(label: String, value: String, emphasised: Boolean = false) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically) {
         MicroLabel(label)
@@ -1586,7 +1586,7 @@ private fun PreviewFrame.rememberImportBitmap(): ImageBitmap {
 
 /** `29.2 KB`, `2.31 MB` — the unit a reader thinks in, not a nine-digit byte count. */
 @Composable
-private fun importBytes(bytes: Long): String = if (bytes >= 1L shl 20) {
+internal fun importBytes(bytes: Long): String = if (bytes >= 1L shl 20) {
     stringResource(R.string.widget_import_megabytes, bytes / 1_048_576f)
 } else {
     stringResource(R.string.widget_import_kilobytes, bytes / 1024f)

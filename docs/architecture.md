@@ -276,6 +276,17 @@ exists and returns to 3 when every turn is reset, because readers decode with
 `ignoreUnknownKeys` and an older build would otherwise drop the turn and straighten the
 artwork on its next resize. See [format: rotating widgets](bin-format.md#rotating-widgets).
 
+Schema 5 is schema 3 or 4 plus an added picture: a `WidgetImportOrigin` whose `kind` is
+`PICTURE`, with an empty donor face and a baseline that is one Static placed on the panel.
+It is written exactly while one exists, for the same reason: a build that reads 4 would
+keep the widget, drop `kind` on its next save and call it an import from no face. Readers require schema 5 if and only if a picture origin is present
+(`StoredSessionState.isConsistent`), and refuse anything newer. Deleting the last picture
+drops a table that holds nothing else, returning the project to 3 or 4; Reset removes
+pictures with every import. The session state declares `lineage` second and the
+container last, so the projects list finds the style map before any import baseline
+(a picture's can be hundreds of kilobytes). See
+[format: adding a picture](bin-format.md#adding-a-picture).
+
 The same checkpoint commits survivor identities, filtered/remapped removed records
 and active-style fallback with the edited BIN. Packaged PNG files retain pristine
 names; the editor and library resolve them through the survivor map. The library
@@ -304,7 +315,7 @@ those names earlier, but neither behaviour is the containment mechanism.
 | Unopenable pristine container | Same validation/error funnel as package download |
 | Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
 | Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions; schema 3: declared ordered style survivors and validated shared-resource closure |
-| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities, the original digest and valid saved removals; schema 4 also requires saved artwork turns naming existing original artwork or imports |
+| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities, the original digest and valid saved removals; schema 4 also requires saved artwork turns naming existing original artwork or imports; schema 5 requires a picture origin, and any other schema refuses one |
 
 Clamp manifest strings; an invalid selected-style name becomes no saved selection.
 After validation, creation uses the row/files cleanup contract above. Failed import

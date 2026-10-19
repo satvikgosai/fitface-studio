@@ -48,6 +48,7 @@ import dev.fitface.studio.core.model.hsvOf
 import dev.fitface.studio.core.model.parseColorHex
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
+import dev.fitface.studio.core.ui.FitChip
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.fitText
 
@@ -97,7 +98,7 @@ internal fun ColorControls(
         MicroLabel(stringResource(R.string.editor_color))
         Text(stringResource(R.string.editor_color_current, colorHex(current), colorHex(original)))
         Text(
-            if (!snapshot.isAodSelected && allStyles && widget.importedFromFaceId == null) {
+            if (!snapshot.isAodSelected && allStyles && widget.addedKind == null) {
                 stringResource(R.string.editor_rotation_scope_all)
             } else {
                 stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename))
@@ -246,7 +247,7 @@ private fun ColorSliders(hsv: Hsv, enabled: Boolean, onChange: (Hsv) -> Unit) {
 
 /** One preset: a filled circle in a 48dp target, ringed when it is the current colour. */
 @Composable
-private fun ColorSwatch(color: Int, @StringRes label: Int, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+internal fun ColorSwatch(color: Int, @StringRes label: Int, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val name = stringResource(label)
     Box(
         Modifier.size(48.dp)
@@ -263,6 +264,57 @@ private fun ColorSwatch(color: Int, @StringRes label: Int, selected: Boolean, en
             Modifier.size(34.dp)
                 .background(Color(color), CircleShape)
                 .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+        )
+    }
+}
+
+/**
+ * Colour for an image being placed — a background on the Background page, a picture on the
+ * Widgets page, the one control on both: its own colours, or one colour by brightness
+ * ([dev.fitface.studio.core.model.tintedColor]). White takes the colour, the shades between
+ * keep their steps, and black and transparent parts stay as they are, so a shape drawn white
+ * anywhere can be any colour here.
+ *
+ * Drawn on the face as soon as it is chosen; nothing is saved until Use or Add, so a preset
+ * applies on the tap, unlike a widget colour, which commits.
+ */
+@Composable
+internal fun ImageColourControls(tint: Int?, enabled: Boolean, onTint: (Int?) -> Unit) {
+    var hex by rememberSaveable(tint) { mutableStateOf(tint?.let(::colorHex).orEmpty()) }
+    Column(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        MicroLabel(stringResource(R.string.editor_image_colour))
+        Text(
+            stringResource(R.string.editor_image_colour_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.fitText.secondary,
+        )
+        FitChip(
+            stringResource(R.string.editor_image_colour_original),
+            selected = tint == null,
+            onClick = { onTint(null) },
+            enabled = enabled,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            WidgetColorPresets.forEach { (label, color) ->
+                ColorSwatch(color, label, selected = color == tint, enabled = enabled) { onTint(color) }
+            }
+        }
+        OutlinedTextField(
+            value = hex,
+            onValueChange = { text ->
+                hex = text
+                parseColorHex(text)?.let(onTint)
+            },
+            label = { Text(stringResource(R.string.editor_image_colour_hex)) },
+            singleLine = true,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

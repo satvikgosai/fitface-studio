@@ -1,10 +1,17 @@
 package dev.fitface.studio.core.format
 
+import dev.fitface.studio.core.model.AddedWidgetKind
 import java.security.MessageDigest
 import java.util.Base64
 import kotlinx.serialization.Serializable
 
-/** Immutable imported artwork, independent of both donor cache and the vendor original. */
+/**
+ * Immutable added artwork, independent of both donor cache and the vendor original.
+ *
+ * [kind] says where it came from. A picture has no donor, so its [faceId] is empty,
+ * and its baseline is one Static positioned against the panel. Donors leave [kind] at its
+ * default, which is not written, so a checkpoint without pictures reads exactly as before.
+ */
 @Serializable
 data class WidgetImportOrigin(
     val id: String,
@@ -12,6 +19,7 @@ data class WidgetImportOrigin(
     val variant: String,
     val baseline: String,
     val indices: List<Int>,
+    val kind: AddedWidgetKind = AddedWidgetKind.DONOR,
 ) {
     fun entry(template: ContainerEntry): ContainerEntry {
         val bytes = Base64.getDecoder().decode(baseline)
@@ -26,6 +34,9 @@ data class WidgetImportOrigins(
     val widgets: List<WidgetImportOrigin>,
 ) {
     fun indices(variant: String) = widgets.filter { it.variant == variant }.flatMap { it.indices }.toSet()
+
+    /** Whether any of this artwork was made by the editor, which needs checkpoint schema 5. */
+    val hasPictures: Boolean get() = widgets.any { it.kind != AddedWidgetKind.DONOR }
     fun find(variant: String, index: Int) = widgets.singleOrNull { it.variant == variant && index in it.indices }
     fun renumber(variant: String, mapping: (Int) -> Int?) = copy(widgets = widgets.map { origin ->
         if (origin.variant != variant) origin else origin.copy(indices = origin.indices.mapNotNull(mapping))
@@ -38,14 +49,19 @@ data class WidgetImportOrigins(
      * Drops the artwork no live widget and no saved removal ([referenced]) still needs —
      * what is left once an imported widget, and every duplicate of it, has been deleted.
      *
-     * One is always kept. A table is what lets a container carry what an import added
+     * One donor is always kept. A table is what lets a container carry what an import added
      * beside the widget — its font resources, its dictionary entries — and an empty one is
      * refused: without it, reopening the project would find entries the original face
-     * never had and refuse the edit.
+     * never had and refuse the edit. A picture adds nothing beside its widget, so a table
+     * of nothing but deleted pictures goes entirely (null), and the project returns to the
+     * checkpoint schema older builds read.
      */
-    fun pruned(referenced: Set<String>): WidgetImportOrigins {
+    fun pruned(referenced: Set<String>): WidgetImportOrigins? {
         val needed = widgets.filter { it.indices.isNotEmpty() || it.id in referenced }
-        return copy(widgets = needed.ifEmpty { listOfNotNull(widgets.minByOrNull { it.baseline.length }) })
+        val kept = needed.ifEmpty {
+            listOfNotNull(widgets.filter { it.kind == AddedWidgetKind.DONOR }.minByOrNull { it.baseline.length })
+        }
+        return copy(widgets = kept).takeIf { kept.isNotEmpty() }
     }
 
     /** Fail closed before opening an archive or committing provenance-dependent bytes. */
@@ -61,7 +77,12 @@ data class WidgetImportOrigins(
         validateResources(original, current, expectedPaths)
         val claimed = mutableSetOf<Pair<String, Int>>()
         widgets.forEach { origin ->
-            require(origin.id.length in 1..64 && origin.faceId.matches(Regex("\\d{5}"))) { "Invalid donor identity." }
+            require(origin.id.length in 1..64) { "Invalid imported artwork identity." }
+            if (origin.kind == AddedWidgetKind.DONOR) {
+                require(origin.faceId.matches(Regex("\\d{5}"))) { "Invalid donor identity." }
+            } else {
+                require(origin.faceId.isEmpty()) { "An added picture names a donor face." }
+            }
             val variant = StyleWidgetMatch.requireVariantEntry(current.entryByBasename(origin.variant))
             val baseline = origin.entry(variant)
             val header = StyleHeader.parse(baseline)
@@ -71,6 +92,13 @@ data class WidgetImportOrigins(
             require(record.globalIndex == 0 && record.widgetType in WidgetImporter.stockTypes) { "Invalid imported widget type." }
             require(record.liveAlignment?.targetGlobalIndex?.let { it != WidgetImporter.ROOT_TARGET } != true) {
                 "Imported placement is not independent of the donor."
+            }
+            if (origin.kind != AddedWidgetKind.DONOR) {
+                val placed = record.liveAlignment
+                require(record.widgetType == WIDGET_STATIC && placed?.code == 0 &&
+                    placed.targetGlobalIndex == WidgetImporter.ROOT_TARGET) {
+                    "An added picture is not one Static placed on the panel."
+                }
             }
             FaceRecordParser.imagePointerFields(record, FaceRecordParser.imagesByRelativeOffset(baseline))
             val currentRecords = FaceRecordParser.scanWidgets(variant).associateBy { it.globalIndex }

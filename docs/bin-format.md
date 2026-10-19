@@ -927,7 +927,7 @@ Imports and raster growth can also cross the ceiling.
 | Contract | Evidence / implementation |
 | --- | --- |
 | Panel geometry comes from the declared entry path, not image 0 | `panelSize`; `00022` starts with a 37×28 icon; `00108` styles 0–3 with a 204×204 dial |
-| Backgrounds are exactly widgets drawing panel-sized rasters | Multiple layers are legal (`00076`, `00089`); `backgroundImage` may be null |
+| Backgrounds are exactly widgets drawing panel-sized rasters | Multiple layers are legal (`00076`, `00089`); `backgroundImage` may be null. A raster widget is classed as a background layer by size only when its artwork is **exactly** the panel: all 388 such layers in the catalogue are exactly 256 × 402, and artwork larger than the panel is a widget turned or added past the edges (a 200 × 400 picture turned to 45° is 424 × 424) that must stay selectable |
 | Position is `origin + stored` | `WidgetLayout`, `drawLeft/drawTop`; write-back subtracts origin, never guesses from the sign |
 | A widget may hang past the panel edge | Vendor faces ship it: a 2026-10 census of the 99 containers found 44 rasters on five faces (`00002`, `00016`, `00023`, `00024`, `00096`) drawn up to 11 px past an edge, plus 159 text boxes; none is wholly off. The editor's one clamp, `constrainDragCoordinate` with `offFaceKeepVisible`, keeps a tenth of the drawn outline per axis (at least 10 px, at most all of it) on the panel for drag, nudge, set nudge and typed positions, and admits a starting position already further out. Write-back and the signed 16-bit range are unchanged. On a watch (2026-10-14), a Static, a Sprite, a Value and a turned Composite each placed half off a different edge were clipped cleanly at the panel, with nothing wrapped or moved |
 | Hand selection differs from rendering | `WidgetPlacement.HIDDEN` suppresses a false axis-aligned outline; hands still render and can be selected from the list |
@@ -1251,7 +1251,8 @@ All 1,320 of these colour words in the 99-face catalogue are opaque. A recolour 
 same-size patch: the colour word, plus each copy that still equals it before the edit, so a
 record that broke the convention keeps its own bytes. The requested colour must be opaque;
 the selected record must carry an opaque colour word, and a sibling style that does not is
-skipped. Picture widgets have no colour field; tinting their pixels is not offered.
+skipped. Image widgets have no colour field. A picture added as a widget takes a colour only
+while it is placed, baked into its pixels ([Adding a picture](#adding-a-picture)).
 
 Colour is not identity: `payloadKey` masks colour words as it masks angles. Reset returns
 **each style in scope to its own original** — the import baseline, or the original (or
@@ -1270,7 +1271,10 @@ Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in som
 Replacement/tint edits styles that have a background, skipping others and failing
 only if none does. `FaceEditor.tintBackgrounds` maps each current sample to the tint colour
 scaled by its luminance, so tints compound and darken with every application; the app does
-not offer it. A tint control must tint from the untinted background and save its colour. `backgroundStyles` describes actual targets before image selection.
+not offer it. Colour is offered only while a new image is placed (`ImagePlacement.tint`):
+the picked picture's decoded pixels are recoloured once by the same rule (`tintedColor`)
+before encoding, so nothing compounds; a picture added as a widget takes the same control.
+`backgroundStyles` describes actual targets before image selection.
 RGB565+A replacement changes colour only: preserve the rounded-corner mask (656 of
 102,912 pixels on `00003`). Indexed replacement requantizes colour and opacity;
 `00002` style0 is the sole indexed raster in the 99-container catalogue.
@@ -1342,6 +1346,30 @@ Costs for a set are lower-bound estimates, not a fit guarantee. Stop on first fa
 prior successful commits remain saved and the UI reports partial results. A review
 set composes donor layers in pick order; copied pixels and checked donor-position
 invariance make its z-order/placement match the successive commits.
+
+### Adding a picture
+
+`PictureWidget.insert` adds a picked picture as an import in every way the rest of the
+editor sees: one 40-byte Static appended to the
+selected variant's table (alignment code 0, target `0xFFFF`, source and interaction flag
+zero) and its raster appended after every existing image. The insert checks that every
+earlier record and image is byte-identical afterwards, and that the new widget is a
+canvas widget at the expected place and size.
+
+| Rule | Contract |
+| --- | --- |
+| Raster | `IMAGE_RGB565` when every pixel is opaque, otherwise `IMAGE_RGB565_ALPHA`; a fully transparent pixel stores black; 4-byte zero trailer. Appended RGB565+A pictures with soft edges blend on the watch (probe T7, 2026-10-14) |
+| Baseline | The picture fitted within the panel width and one pixel less than its height, never enlarged. It is saved as a one-record entry, like an import's, and every resize and turn is drawn from it. A colour chosen while placing it (`tintedColor`: by brightness, alpha and near-black kept) is baked into the baseline, so resizes and turns keep it |
+| Size and place | A rung of the baseline's resize ladder, sampled with `RasterResampler` exactly as a resize to that rung would be (`PictureWidgetTest` compares the bytes), with its top-left where it was placed |
+| Never a background | Covering the whole panel both ways is refused; the baseline rule makes it impossible. With the exact-size rule above, turning or enlarging past the panel keeps it a widget |
+| Cost | `PictureWidget.addedBytes`: 40 + 12 + w × h × (2 or 3) + 4, equal to the container's growth (tested). Growth past the 4 MiB ceiling is refused by `rebuild` |
+| Provenance | `WidgetImportOrigin.kind` `PICTURE` with an empty face ID, validated as exactly one Static placed on the panel. Donor origins omit `kind`, so their JSON is unchanged |
+
+Deleting a picture uses the imported deletion below and gives back the face it was;
+deleting the last one drops a table of nothing but pictures, so the project returns to
+checkpoint schema 3 or 4. The checkpoint and archive schema rules are in
+[Architecture](architecture.md#the-project-archive). An added picture on a watch is
+covered by T7's mechanics, not yet by a session adding one through the app.
 
 ### Removing imported widgets
 

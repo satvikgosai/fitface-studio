@@ -130,6 +130,52 @@ class AndroidImageSource @Inject constructor(
         }
     }
 
+    /** The picture's size as it is meant to be seen, with its EXIF quarter turn applied. */
+    fun uprightSize(uri: String): Pair<Int, Int> {
+        val parsed = Uri.parse(uri)
+        val bounds = readBounds(parsed)
+        return if (orientation(parsed).swapsAxes) bounds.outHeight to bounds.outWidth
+        else bounds.outWidth to bounds.outHeight
+    }
+
+    /**
+     * The whole picture scaled to exactly [width] × [height], upright, with its transparency
+     * kept: a picture added as a widget is drawn over the face, where a background is
+     * flattened onto black by [decode]. Decoded at the coarsest power-of-two sample still at
+     * least that size, then filtered down to it.
+     */
+    fun decodeScaled(uri: String, width: Int, height: Int): IntArray {
+        require(width > 0 && height > 0) { "Target dimensions must be positive" }
+        val parsed = Uri.parse(uri)
+        val orientation = orientation(parsed)
+        val stored = readBounds(parsed)
+        val (storedWidth, storedHeight) = if (orientation.swapsAxes) height to width else width to height
+        var sample = 1
+        while (stored.outWidth / (sample * 2) >= storedWidth && stored.outHeight / (sample * 2) >= storedHeight) {
+            sample *= 2
+        }
+        val decoded = contentResolver.openInputStream(parsed)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: throw IllegalArgumentException("The selected image could not be decoded")
+        val source = upright(decoded, orientation)
+        var output: Bitmap? = null
+        try {
+            output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            Canvas(output).drawBitmap(
+                source,
+                Rect(0, 0, source.width, source.height),
+                RectF(0f, 0f, width.toFloat(), height.toFloat()),
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+            )
+            val pixels = IntArray(width * height)
+            output.getPixels(pixels, 0, width, 0, 0, width, height)
+            return pixels
+        } finally {
+            output?.recycle()
+            source.recycle()
+        }
+    }
+
     /**
      * The EXIF orientation of the picked file, or [ExifInterface.ORIENTATION_NORMAL].
      *

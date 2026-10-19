@@ -949,9 +949,14 @@ object FaceRecordParser {
                 // one-way door: the resize ladder tops out at 512 px a side, so growing a
                 // 400x400 vector arc used to relabel it as the background, after which it
                 // could be neither selected nor resized back.
+                //
+                // Exactly the panel, not "at least": all 388 background layers in the
+                // catalogue are exactly 256 × 402. Larger artwork is a widget turned or
+                // added past the edges — a 200 × 400 picture turned to 45° is 424 × 424 —
+                // and calling it the background was the same one-way door again.
                 referencedImages.isNotEmpty() && panel.width > 0 &&
-                    visualWidth >= panel.width &&
-                    visualHeight >= panel.height -> WidgetPlacement.BACKGROUND
+                    visualWidth == panel.width &&
+                    visualHeight == panel.height -> WidgetPlacement.BACKGROUND
                 else -> WidgetPlacement.CANVAS
             }
             // Plain RGB565 frames carry no alpha, so the watch paints the whole

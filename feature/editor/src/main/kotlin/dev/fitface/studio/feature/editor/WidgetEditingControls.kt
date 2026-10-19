@@ -112,7 +112,7 @@ internal fun RotationControls(
             ),
         )
         Text(
-            if (!snapshot.isAodSelected && allStyles && widget.importedFromFaceId == null) {
+            if (!snapshot.isAodSelected && allStyles && widget.addedKind == null) {
                 stringResource(R.string.editor_rotation_scope_all)
             } else {
                 stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename))

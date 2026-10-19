@@ -1044,6 +1044,15 @@
     <li>Variant changes keep the previous face visible until the replacement is ready; reject picks during that interval but leave variant chips usable. Show delayed loading after 300ms, not a flash per tap. Cancellation restores the shown variant label. Errors persist; preparation/download can cancel/retry; saving is single-flight.</li>
   </ul>
 
+  <h3 id="pictures">Pictures</h3>
+  <ul>
+    <li>Widgets offers <strong>Add a picture</strong> under Add widgets from another face. It opens the system picker; the picked picture is then placed on the Widgets page the way a background is placed on the Background page, and the header says so. There is no shape tool: a shape is a picture made elsewhere, white for any colour.</li>
+    <li>Placing a picture and placing a background share their controls, in the same order: the face drawing it live (drag to move, pinch to resize), <code>PlacementControls</code> (move arrows, size −/+, readout, Reset placement), <code>ImageColourControls</code>, then Discard and the commit. A picture has no fit — it keeps its proportions — and its size steps its own resize ladder (5% rungs, its limits), so the size added is one Smaller and Larger step back to. The background keeps its 2% zoom.</li>
+    <li>Colour is one rule on both pages (<code>tintedColor</code>): Original colours, the five presets or any <code>#RRGGBB</code>; white takes the colour, near-black and transparency stay. It is drawn as soon as it is chosen and applied by Add or Use. Reset placement and a new fit re-centre the image and keep its colour.</li>
+    <li>Shown cost is actual cost: Picture size, Adds and the face-size meter; Add is disabled past the 4 MiB the watch accepts. A dragged picture keeps <code>offFaceKeepVisible</code> on the face, the widget drag's rule. Adding moves to the Canvas with the picture selected, as an import does.</li>
+    <li>An added picture is edited in its variant only, like an import. Its delete dialog, scope line and full-size label say picture and never name a donor face; the undo label is “new picture”.</li>
+  </ul>
+
   <h3 id="library-interaction">Library</h3>
   <ul>
     <li>Sort by reversing the primary comparator only; keep stable tie-breakers. Opposite direction labels use equal-length monospace text, at most eight characters, to fit the 288dp content width of a 320dp phone (<code>SortChipLayoutTest</code>).</li>

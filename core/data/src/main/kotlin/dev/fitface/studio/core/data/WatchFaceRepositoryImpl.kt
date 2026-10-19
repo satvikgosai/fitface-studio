@@ -49,10 +49,17 @@ import dev.fitface.studio.core.format.WidgetImportEdit
 import dev.fitface.studio.core.format.WidgetImportOrigin
 import dev.fitface.studio.core.format.WidgetImportOrigins
 import dev.fitface.studio.core.format.WidgetImporter
+import dev.fitface.studio.core.format.PictureWidget
+import dev.fitface.studio.core.format.PanelSize
 import dev.fitface.studio.core.format.WidgetPristine
 import dev.fitface.studio.core.format.WidgetRecord
 import dev.fitface.studio.core.format.pack
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
+import dev.fitface.studio.core.model.AddedWidgetKind
+import dev.fitface.studio.core.model.PreparedPicture
+import dev.fitface.studio.core.model.pictureBaselineSize
+import dev.fitface.studio.core.model.pictureSizes
+import dev.fitface.studio.core.model.tinted
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.DirectInstallPayload
@@ -136,6 +143,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
     private data class PendingBackground(val ticket: String, val donor: Donor, val session: Session,
         val before: Fit3Container, val variant: String, val result: BackgroundImportEdit)
     private var pendingBackground: PendingBackground? = null
+    /** A picked picture at its baseline size, kept while it is placed on the canvas. */
+    private class Picture(val handle: String, val width: Int, val height: Int, val argb: IntArray)
+    private var picture: Picture? = null
 
     override suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = withContext(Dispatchers.Default) {
         // This must not call openPackage: inspecting a donor never replaces the active project.
@@ -270,6 +280,66 @@ class WatchFaceRepositoryImpl @Inject constructor(
             pendingBackground = null
             snapshot
         }
+    }
+
+    override suspend fun preparePicture(imageUri: String, projectId: Long, targetVariant: String): PreparedPicture =
+        withContext(Dispatchers.IO) {
+            val panel = mutex.withLock { pictureTarget(projectId, targetVariant) }
+            val (sourceWidth, sourceHeight) = try {
+                imageSource.uprightSize(imageUri)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                throw WatchFaceException("This picture could not be read. Choose a PNG or JPEG.",
+                    "picture: bounds unreadable", error)
+            }
+            val (width, height) = pictureBaselineSize(sourceWidth, sourceHeight, panel.width, panel.height)
+            val pixels = try {
+                imageSource.decodeScaled(imageUri, width, height)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                throw WatchFaceException("This picture could not be read. Choose a PNG or JPEG.",
+                    "picture: decode failed ${sourceWidth}x$sourceHeight", error)
+            }
+            mutex.withLock {
+                currentCoroutineContext().ensureActive()
+                val kept = Picture(UUID.randomUUID().toString(), width, height, pixels)
+                picture = kept
+                PreparedPicture(kept.handle, width, height, pixels.all { it ushr 24 == 0xFF },
+                    pictureSizes(width, height, panel.width, panel.height,
+                        kept = width == sourceWidth && height == sourceHeight),
+                    PreviewFrame(width, height, pixels))
+            }
+        }
+
+    /** The selected variant's panel, refusing a project or variant the caller no longer has open. */
+    private fun pictureTarget(projectId: Long, targetVariant: String): PanelSize {
+        val current = requireSession()
+        if (current.projectId != projectId || current.selectedVariantName != targetVariant)
+            throw WatchFaceException("The project changed. Choose the picture again.")
+        return FaceRecordParser.panelSize(current.currentContainer.entryByBasename(targetVariant))
+    }
+
+    override suspend fun addPicture(handle: String, projectId: Long, targetVariant: String, percent: Int,
+        x: Int, y: Int, tint: Int?, group: Long?): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            pictureTarget(projectId, targetVariant)
+            val current = requireSession()
+            val source = picture?.takeIf { it.handle == handle }
+                ?: throw WatchFaceException("Choose the picture again.")
+            // The colour is baked into the baseline, so every later resize and turn keeps it.
+            val pixels = tint?.let { tinted(source.argb, it) } ?: source.argb
+            val result = PictureWidget.insert(current.currentContainer, targetVariant, source.width, source.height,
+                pixels, percent, x, y)
+            val origins = current.originsWith("", targetVariant, result, AddedWidgetKind.PICTURE)
+            current.identities().withResources(current.originalContainer, result.edit.container)
+                .validate(current.originalContainer, result.edit.container, origins)
+            commit(current, result.edit.container, result.edit.audit("Picture added to $targetVariant"),
+                targetVariant, origins, kind = EditKind.PICTURE, group = group)
+        }
+    }
+
+    override suspend fun releasePicture(handle: String) = mutex.withLock {
+        if (picture?.handle == handle) picture = null
     }
 
     override suspend fun releaseWidgetDonor(handle: String) = mutex.withLock {
@@ -879,9 +949,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 val storedImports = if (contents.manifest.schema >= 2) {
                     val state = contents.sessionState ?: throw WatchFaceException("This project's saved edit metadata is missing.")
                     json.decodeFromString<StoredSessionState>(state.decodeToString()).also {
-                        require(it.schema == contents.manifest.schema && (it.schema != 2 || it.importOrigins != null) &&
-                            (it.schema < 3 || it.lineage != null) &&
-                            (it.schema != 4 || it.lineage?.artworkTurns != null) && it.editedContainer == null) {
+                        require(it.schema == contents.manifest.schema && it.isConsistent() && it.editedContainer == null) {
                             "Invalid saved edit metadata."
                         }
                     }
@@ -1135,7 +1203,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 prepared.width,
                 prepared.height,
                 placement,
-            )
+            ).let { pixels -> placement.tint?.let { tinted(pixels, it) } ?: pixels }
         }
         val snapshot = withContext(Dispatchers.Default) {
             mutex.withLock {
@@ -1219,6 +1287,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
         val pixels = withContext(Dispatchers.IO) {
             imageSource.decode(imageUri, prepared.width, prepared.height, placement)
+                .let { pixels -> placement.tint?.let { tinted(pixels, it) } ?: pixels }
         }
         val snapshot = withContext(Dispatchers.Default) {
             mutex.withLock {
@@ -1696,7 +1765,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 return@withLock commit(
                     current,
                     edit.container,
-                    edit.audit("Imported widget deleted with its artwork from $styleName"),
+                    edit.audit("${if (imported.kind == AddedWidgetKind.PICTURE) "Picture" else "Imported widget"} " +
+                        "deleted with its artwork from $styleName"),
                     styleName,
                     importOrigins = renumbered?.pruned(
                         current.removedWidgets.mapNotNull { it.importOriginId }.toSet(),
@@ -2353,7 +2423,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
     // older build would drop the turn without a word and then straighten the artwork on its
     // next resize; at 4 it refuses the project instead. Untouched projects stay at 3.
     private fun storedState(current: Session) = StoredSessionState(
-        schema = if (current.identities().artworkTurns.isNullOrEmpty()) 3 else 4,
+        schema = when {
+            current.importOrigins?.hasPictures == true -> 5
+            current.identities().artworkTurns.isNullOrEmpty() -> 3
+            else -> 4
+        },
         thumbnailRefreshed = current.thumbnailRefreshed,
         removed = current.removedWidgets.map(::StoredRemovedWidget),
         importOrigins = current.importOrigins,
@@ -2406,9 +2480,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     private fun readCheckpoint(file: File): StoredSessionState {
         require(file.isFile && file.length() in 1..MAX_CHECKPOINT_BYTES.toLong()) { "The project's saved edit data is missing or too large." }
         val stored = json.decodeFromString<StoredSessionState>(file.readText())
-        require(stored.schema in 2..4 && (stored.schema != 2 || stored.importOrigins != null) &&
-            (stored.schema < 3 || stored.lineage != null) &&
-            (stored.schema != 4 || stored.lineage?.artworkTurns != null) && stored.editedContainer != null) {
+        require(stored.schema in 2..StoredSessionState.NEWEST && stored.isConsistent() && stored.editedContainer != null) {
             "The project's saved edit metadata cannot be read."
         }
         require(stored.editedContainer.length <= (WATCH_CONTAINER_BYTE_CEILING + 2) / 3 * 4) { "The saved edit is too large." }
@@ -2416,9 +2488,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
     }
 
     private fun applyStoredState(stored: StoredSessionState, current: Session) {
-        require(stored.schema in 1..4 && (stored.schema != 2 || stored.importOrigins != null) &&
-            (stored.schema < 3 || stored.lineage != null) && (stored.schema >= 3 || stored.lineage == null) &&
-            (stored.schema != 4 || stored.lineage?.artworkTurns != null)) {
+        require(stored.schema in 1..StoredSessionState.NEWEST && stored.isConsistent() &&
+            (stored.schema >= 3 || stored.lineage == null)) {
             "This project's saved edit needs a newer app or is incomplete."
         }
         stored.lineage?.validate(current.originalContainer, current.currentContainer, stored.importOrigins)
@@ -2771,11 +2842,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 duplicateSourceVariants = sources.filterValues { it.duplicate }.keys)
         }
 
-        fun originsWith(faceId: String, variant: String, result: WidgetImportEdit): WidgetImportOrigins {
+        fun originsWith(faceId: String, variant: String, result: WidgetImportEdit,
+            kind: AddedWidgetKind = AddedWidgetKind.DONOR): WidgetImportOrigins {
             val previous = importOrigins ?: WidgetImportOrigins(WidgetImportOrigins.digest(originalContainer.toByteArray()), emptyList())
             return previous.copy(widgets = previous.widgets + WidgetImportOrigin(
                 UUID.randomUUID().toString(), faceId, variant,
-                Base64.getEncoder().encodeToString(result.baseline.data), listOf(result.globalIndex)))
+                Base64.getEncoder().encodeToString(result.baseline.data), listOf(result.globalIndex), kind))
         }
 
         /**
@@ -3310,7 +3382,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     originalRotationTenths = line?.originalDirectionTenths
                         ?: original?.rotationTenths ?: widget.rotationTenths,
                     duplicateSourceGlobalIndex = duplicateSource,
-                    importedFromFaceId = imported?.faceId,
+                    importedFromFaceId = imported?.faceId?.takeIf { imported.kind == AddedWidgetKind.DONOR },
+                    addedKind = imported?.kind,
                 )
             }
             // Every variant is reconstructed from its current records, in record order.
@@ -3456,7 +3529,23 @@ private data class StoredSessionState(
     val importOrigins: WidgetImportOrigins? = null,
     /** Present only in the app-private atomic checkpoint, never in exported session.json. */
     val editedContainer: String? = null,
-)
+) {
+    /**
+     * Whether what each schema adds is there, and only there: 2 an import table, 3 the
+     * lineage, 4 an artwork turn, 5 an added picture. Pictures exist exactly at 5, so a
+     * build that predates them refuses the project instead of saving it back without them.
+     */
+    fun isConsistent(): Boolean =
+        (schema != 2 || importOrigins != null) &&
+            (schema < 3 || lineage != null) &&
+            (schema != 4 || lineage?.artworkTurns != null) &&
+            (schema >= 5) == (importOrigins?.hasPictures == true)
+
+    companion object {
+        /** The newest session schema this build writes and reads. */
+        const val NEWEST = 5
+    }
+}
 
 /**
  * One removed record on disk.

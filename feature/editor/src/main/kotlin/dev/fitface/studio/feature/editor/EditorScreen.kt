@@ -125,6 +125,8 @@ import dev.fitface.studio.core.delivery.EnvironmentAdvisory
 import dev.fitface.studio.core.delivery.SetupStep
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.AddedWidgetKind
+import dev.fitface.studio.core.model.tinted
 import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
@@ -188,6 +190,11 @@ fun EditorRoute(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) viewModel.prepareBackground(uri.toString())
+    }
+    val picturePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) viewModel.preparePicture(uri.toString())
     }
     val nearbyPermissionRequester = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -328,6 +335,17 @@ fun EditorRoute(
         onResetImagePlacement = viewModel::resetImagePlacement,
         onDiscardImage = viewModel::cancelBackground,
         onApplyImage = viewModel::applyBackground,
+        onImageTint = viewModel::setBackgroundTint,
+        pictures = PictureActions(
+            onChoose = { picturePicker.launch(arrayOf("image/*")) },
+            onTransform = viewModel::transformPicture,
+            onStepSize = viewModel::stepPictureSize,
+            onReset = viewModel::resetPicturePlacement,
+            onTint = viewModel::setPictureTint,
+            onDiscard = viewModel::discardPicture,
+            onAdd = viewModel::addPicture,
+            onAddedShown = viewModel::clearPictureAdded,
+        ),
         onReset = viewModel::reset,
         onRename = viewModel::renameProject,
         onDelete = viewModel::deleteProject,
@@ -434,6 +452,8 @@ private fun EditorScreen(
     onResetImagePlacement: () -> Unit,
     onDiscardImage: () -> Unit,
     onApplyImage: () -> Unit,
+    onImageTint: (Int?) -> Unit,
+    pictures: PictureActions,
     onReset: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
@@ -478,6 +498,13 @@ private fun EditorScreen(
             importingBackground = false
             page = EditorPage.Canvas
         })
+    // An added picture is shown where it landed, selected, as an import is.
+    LaunchedEffect(state.pictureAdded?.id) {
+        state.pictureAdded?.let { added ->
+            page = EditorPage.Canvas
+            pictures.onAddedShown(added.id)
+        }
+    }
     val selected = snapshot?.widgets?.singleOrNull {
         it.globalIndex == state.selectedWidgetIndex
     }
@@ -536,6 +563,7 @@ private fun EditorScreen(
                     page = page,
                     snapshot = snapshot,
                     pendingImage = state.pendingImage != null,
+                    placingPicture = state.pendingPicture != null,
                     selected = selected,
                     onBack = goBack,
                     onProject = { navigate(EditorPage.Project) },
@@ -582,6 +610,8 @@ private fun EditorScreen(
                         onDuplicateWidget = onDuplicateWidget,
                         onRestoreWidget = onRestoreWidget,
                         onImportWidget = { importing = true },
+                        pictures = pictures,
+                        onImageTint = onImageTint,
                         onImportBackground = { importingBackground = true },
                         onManageStyles = { managingStyles = true },
                         onDeleteStyle = { deletingStyle = it },
@@ -751,6 +781,7 @@ private fun EditorHeader(
     page: EditorPage,
     snapshot: EditorSnapshot,
     pendingImage: Boolean,
+    placingPicture: Boolean,
     selected: WidgetGuide?,
     onBack: () -> Unit,
     onProject: () -> Unit,
@@ -781,11 +812,15 @@ private fun EditorHeader(
             snapshot.faceId,
             snapshot.selectedVariantLabel(),
         )
-        EditorPage.Widgets -> stringResource(
-            R.string.editor_subtitle_widgets,
-            snapshot.canvasWidgets.size,
-            snapshot.widgets.size,
-        )
+        EditorPage.Widgets -> if (placingPicture) {
+            stringResource(R.string.editor_subtitle_picture_positioning)
+        } else {
+            stringResource(
+                R.string.editor_subtitle_widgets,
+                snapshot.canvasWidgets.size,
+                snapshot.widgets.size,
+            )
+        }
         EditorPage.Inspector -> selected?.let {
             stringResource(
                 R.string.editor_subtitle_inspector,
@@ -1064,6 +1099,8 @@ private fun EditorPageContent(
     onDuplicateWidget: () -> Unit,
     onRestoreWidget: (Long) -> Unit,
     onImportWidget: () -> Unit,
+    pictures: PictureActions,
+    onImageTint: (Int?) -> Unit,
     onImportBackground: () -> Unit,
     onManageStyles: () -> Unit,
     onDeleteStyle: (String) -> Unit,
@@ -1123,6 +1160,8 @@ private fun EditorPageContent(
             onEditSet = { onNavigate(EditorPage.Canvas) },
             onRestore = onRestoreWidget,
             onImport = onImportWidget,
+            state = state,
+            pictures = pictures,
             modifier = modifier,
         )
         EditorPage.Inspector -> InspectorWorkspace(
@@ -1132,7 +1171,7 @@ private fun EditorPageContent(
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
             onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage,
-            onManageStyles, modifier,
+            onManageStyles, onImageTint, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(
             snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, onDeleteStyle, modifier,
@@ -1345,6 +1384,7 @@ internal fun editKindLabel(kind: EditKind): String = stringResource(
         EditKind.STYLES -> R.string.editor_edit_kind_styles
         EditKind.THUMBNAIL -> R.string.editor_edit_kind_thumbnail
         EditKind.TEXT -> R.string.editor_edit_kind_text
+        EditKind.PICTURE -> R.string.editor_edit_kind_picture
     },
 )
 
@@ -1679,8 +1719,8 @@ private fun RemoveWidgetDialog(
 ) {
     val importedFrom = widget.importedFromFaceId
     // A copy of a stock widget is deleted outright as well; its original stays to copy again.
-    val copy = importedFrom == null && widget.duplicateSourceGlobalIndex != null
-    val deletes = importedFrom != null || copy
+    val copy = widget.addedKind == null && widget.duplicateSourceGlobalIndex != null
+    val deletes = widget.addedKind != null || copy
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1697,6 +1737,8 @@ private fun RemoveWidgetDialog(
                     // It is not coming back from a list, so the dialog says so, and says
                     // where it can be had again.
                     stringResource(R.string.editor_delete_body_imported, importedFrom)
+                } else if (widget.addedKind != null) {
+                    stringResource(R.string.editor_delete_body_picture)
                 } else if (copy) {
                     stringResource(R.string.editor_delete_body_duplicate)
                 } else if (state.editsReachOtherStyles) {
@@ -1807,7 +1849,7 @@ private fun SelectionSetBar(
                         overflow = TextOverflow.Ellipsis,
                     )
                     // Stock members follow the switch; an all-imported set cannot.
-                    TrayScopeLabel(state, snapshot, imported = picks.all { it.importedFromFaceId != null })
+                    TrayScopeLabel(state, snapshot, imported = picks.all { it.addedKind != null })
                 }
             }
             Text(
@@ -1905,8 +1947,9 @@ private fun RemoveSetDialog(
     onDismiss: () -> Unit,
 ) {
     val imported = picks.count { it.importedFromFaceId != null }
-    val copies = picks.count { it.importedFromFaceId == null && it.duplicateSourceGlobalIndex != null }
-    val stock = picks.size - imported - copies
+    val added = picks.count { it.addedKind != null && it.importedFromFaceId == null }
+    val copies = picks.count { it.addedKind == null && it.duplicateSourceGlobalIndex != null }
+    val stock = picks.size - imported - added - copies
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (picks.size == 1) stringResource(R.string.editor_remove_title, picks.single().globalIndex)
@@ -1928,6 +1971,9 @@ private fun RemoveSetDialog(
                 }
                 if (imported > 0) {
                     Text(pluralStringResource(R.plurals.editor_remove_set_imported, imported, imported))
+                }
+                if (added > 0) {
+                    Text(pluralStringResource(R.plurals.editor_remove_set_added, added, added))
                 }
             }
         },
@@ -2180,8 +2226,15 @@ private fun WidgetsWorkspace(
     onEditSet: () -> Unit,
     onRestore: (Long) -> Unit,
     onImport: () -> Unit,
+    state: EditorUiState,
+    pictures: PictureActions,
     modifier: Modifier = Modifier,
 ) {
+    // Placing a picture takes the page, as placing a background takes the Background page.
+    state.pendingPicture?.let { pending ->
+        PictureWorkspace(state, snapshot, pending, pictures, modifier)
+        return
+    }
     val onCanvas = snapshot.canvasWidgets
     val offCanvas = snapshot.offCanvasWidgets
     val picks = multiSelection.mapNotNull { index -> snapshot.widgets.firstOrNull { it.globalIndex == index } }
@@ -2198,8 +2251,12 @@ private fun WidgetsWorkspace(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item {
-                FitButton(stringResource(R.string.widget_import_open), onImport, Modifier.fillMaxWidth(),
-                    enabled = enabled, style = FitButtonStyle.Secondary)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FitButton(stringResource(R.string.widget_import_open), onImport, Modifier.fillMaxWidth(),
+                        enabled = enabled, style = FitButtonStyle.Secondary)
+                    FitButton(stringResource(R.string.editor_picture_open), pictures.onChoose,
+                        Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
+                }
             }
             if (snapshot.removedWidgets.isNotEmpty()) {
                 item {
@@ -2864,8 +2921,10 @@ private fun InspectorWorkspace(
         // The scope sits directly above Duplicate and Remove, where it was before 0.2.0's
         // reordering: it governs those two as much as the edits above, and rotation and
         // colour each repeat it in their own "Applies to" line.
-        if (widget.importedFromFaceId != null) {
-            Text(stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
+        if (widget.addedKind != null) {
+            Text(
+                if (widget.addedKind == AddedWidgetKind.PICTURE) stringResource(R.string.editor_picture_scope)
+                else stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
         } else if (snapshot.isAodSelected) {
             Text(
@@ -2985,6 +3044,9 @@ private fun WidgetSizeControls(
                 when {
                     shipped && widget.importedFromFaceId != null -> stringResource(
                         R.string.widget_import_original_size, WidgetResizeStepPercent,
+                    )
+                    shipped && widget.addedKind != null -> stringResource(
+                        R.string.editor_picture_full_size, WidgetResizeStepPercent,
                     )
                     shipped -> stringResource(
                         R.string.editor_size_shipped,
@@ -3209,6 +3271,7 @@ private fun BackgroundWorkspace(
     onDiscard: () -> Unit,
     onApply: () -> Unit,
     onManageStyles: () -> Unit,
+    onTint: (Int?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -3305,6 +3368,7 @@ private fun BackgroundWorkspace(
                 onStepZoom = onStepImageZoom,
                 onResetPlacement = onResetPlacement,
             )
+            ImageColourControls(state.placement.tint, enabled = !state.isWorking, onTint = onTint)
             PartialBackgroundNotice(snapshot)
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 FitButton(
@@ -3458,7 +3522,7 @@ private fun PartialBackgroundNotice(snapshot: EditorSnapshot) {
  * `offsetX 0.05` says nothing, `x +13 px` says where the image is.
  */
 @Composable
-private fun PlacementControls(
+internal fun PlacementControls(
     placement: ImagePlacement,
     panelWidth: Int,
     panelHeight: Int,
@@ -3466,6 +3530,10 @@ private fun PlacementControls(
     onTransformImage: (Float, Float, Float) -> Unit,
     onStepZoom: (Boolean) -> Unit,
     onResetPlacement: () -> Unit,
+    /** A picture's size is its resize ladder: 5% rungs within its own limits. */
+    minZoomPercent: Int = MinZoomPercent,
+    maxZoomPercent: Int = MaxZoomPercent,
+    stepPercent: Int = ZoomStepPercent,
 ) {
     val horizontalStep = 1f / panelWidth.coerceAtLeast(1)
     val verticalStep = 1f / panelHeight.coerceAtLeast(1)
@@ -3515,17 +3583,17 @@ private fun PlacementControls(
             // percentages, so a wider step would skip rungs rather than move faster.
             RepeatingNudgeButton(
                 "−",
-                enabled && (placement.zoom * 100).roundToInt() > MinZoomPercent,
+                enabled && (placement.zoom * 100).roundToInt() > minZoomPercent,
                 Modifier.weight(1f),
             ) { onStepZoom(false) }
             RepeatingNudgeButton(
                 "+",
-                enabled && (placement.zoom * 100).roundToInt() < MaxZoomPercent,
+                enabled && (placement.zoom * 100).roundToInt() < maxZoomPercent,
                 Modifier.weight(1f),
             ) { onStepZoom(true) }
         }
         MicroLabel(
-            stringResource(R.string.editor_placement_hint, ZoomStepPercent),
+            stringResource(R.string.editor_placement_hint, stepPercent),
             Modifier.padding(top = 10.dp),
         )
         TextButton(onClick = onResetPlacement, enabled = enabled) {
@@ -4240,7 +4308,7 @@ private fun ProjectWorkspace(
 }
 
 @Composable
-private fun DirectWatchCanvas(
+internal fun DirectWatchCanvas(
     snapshot: EditorSnapshot,
     editing: Boolean,
     selectedGlobalIndex: Int?,
@@ -4261,10 +4329,25 @@ private fun DirectWatchCanvas(
      * build sets — only the Canvas page does, because only its tray acts on one.
      */
     onHoldWidget: ((Int) -> Unit)? = null,
+    /**
+     * A picture being placed: drawn on top of the face at its size and place, in its colour,
+     * and moved and sized by the same pinch and drag that place a background.
+     */
+    pendingPicture: PendingPicture? = null,
 ) {
     val composedBitmap = snapshot.composedPreview.rememberBitmap()
     val overlayBitmap = snapshot.widgetOverlay.rememberBitmap()
-    val pendingBitmap = pendingImage?.preview?.rememberBitmap()
+    // The colour is drawn here as it will be applied: the same rule, before anything commits.
+    val pendingFrame = remember(pendingImage?.preview, placement.tint) {
+        pendingImage?.preview?.let { frame -> placement.tint?.let { frame.tintedTo(it) } ?: frame }
+    }
+    val pendingBitmap = pendingFrame?.rememberBitmap()
+    val pictureFrame = remember(pendingPicture?.prepared?.preview, pendingPicture?.tint) {
+        pendingPicture?.let { picture ->
+            picture.tint?.let { picture.prepared.preview.tintedTo(it) } ?: picture.prepared.preview
+        }
+    }
+    val pictureBitmap = pictureFrame?.rememberBitmap()
     var draggingIndex by remember(snapshot.selectedVariant.basename) { mutableIntStateOf(-1) }
     var draggingPosition by remember(snapshot.selectedVariant.basename) { mutableStateOf(Offset.Zero) }
     // Where the finger has actually taken the widget, before the panel clamp.
@@ -4331,8 +4414,8 @@ private fun DirectWatchCanvas(
             .semantics {
                 contentDescription = canvasDescription
             }
-            .pointerInput(pendingImage?.uri, enabled) {
-                if (pendingImage != null && enabled) {
+            .pointerInput(pendingImage?.uri, pendingPicture?.prepared?.handle, enabled) {
+                if ((pendingImage != null || pendingPicture != null) && enabled) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         onTransformImage(
                             zoom,
@@ -4568,6 +4651,23 @@ private fun DirectWatchCanvas(
                     dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
                     filterQuality = FilterQuality.Low,
                 )
+            }
+        }
+
+        if (pendingPicture != null && pictureBitmap != null) {
+            val scaleX = size.width / snapshot.preview.width
+            val scaleY = size.height / snapshot.preview.height
+            val placed = pendingPicture.size
+            val topLeft = Offset(pendingPicture.left * scaleX, pendingPicture.top * scaleY)
+            val drawn = Size(placed.width * scaleX, placed.height * scaleY)
+            clipRect {
+                drawImage(
+                    image = pictureBitmap,
+                    dstOffset = IntOffset(topLeft.x.roundToInt(), topLeft.y.roundToInt()),
+                    dstSize = IntSize(drawn.width.roundToInt().coerceAtLeast(1), drawn.height.roundToInt().coerceAtLeast(1)),
+                    filterQuality = FilterQuality.High,
+                )
+                drawRect(selectedGuideColor, topLeft, drawn, style = Stroke(2.dp.toPx()))
             }
         }
 
@@ -5533,6 +5633,9 @@ internal fun stepDragAxis(
         position = constrainDragCoordinate(moved, starting, extent, canvasExtent, drawOffset, keepVisible),
     )
 }
+
+/** This frame recoloured by [tintedColor], as the commit will recolour it. */
+private fun PreviewFrame.tintedTo(tint: Int) = PreviewFrame(width, height, tinted(argb, tint))
 
 @Composable
 private fun PreviewFrame.rememberBitmap(): ImageBitmap {
