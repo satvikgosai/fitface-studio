@@ -148,8 +148,9 @@
     <string name="library_custom_face_waiting">Waiting for the catalogue</string>
     <string name="library_custom_face_unavailable">Not in the catalogue right now</string>
     <string name="library_custom_face_source_fallback">Info_4</string>
-    <!-- The one fact about the watch this cannot change: it is built on another face's slot. -->
-    <string name="library_custom_face_slot">Uses %1$s’s slot on your watch. Installing a custom face replaces %1$s or the last custom face installed.</string>
+    <!-- Where it goes on the watch: each custom face gets a face number of its own (CUSTOM_FACE_NUMBERS),
+         and Galaxy Wearable has no picture for a number outside its catalogue (T3). -->
+    <string name="library_custom_face_slot">Installs as its own face, numbered 201 to 250, beside your other faces. Galaxy Wearable shows it as a blank tile.</string>
     <string name="library_custom_face_downloading">Downloading %1$s… %2$d%%</string>
     <string name="library_custom_face_building">Building your custom face…</string>
     <string name="library_projects_shared_face_note">Projects based on the same face share a watch slot. Installing one replaces the other on your watch.</string>

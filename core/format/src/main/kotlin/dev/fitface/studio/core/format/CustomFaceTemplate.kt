@@ -31,9 +31,10 @@ object CustomFaceTemplate {
 
     /**
      * Bumped whenever the recipe changes, so a project records which one made it. `1` kept
-     * all four styles; `2` keeps one.
+     * all four styles; `2` keeps one; `3` also gives the face a number of its own
+     * ([FaceIdentity.renumber]), where `1` and `2` kept Info_4's.
      */
-    const val VERSION = 2
+    const val VERSION = 3
 
     /**
      * The nine records every numbered style carries, by index: four digit sprites, the two
@@ -97,6 +98,11 @@ object CustomFaceTemplate {
  * preview with no entry in [previews] is **dropped**: it belongs to a style the template no
  * longer has, and a package preview for a missing style is a picture of nothing.
  *
+ * [faceId] is the number [container] was renumbered to. The container and the previews are
+ * filed under it, because the parser takes a project's face ID from the container's member
+ * name. The metadata keeps Info_4's name and sampler: the watch is never sent it, and T3's
+ * renumbered faces carried it unchanged.
+ *
  * The same three member shapes a project archive holds, for the same reason: this becomes the
  * project's `source.apk`, and a package that holds exactly what the parser reads is one that
  * opening, duplicating, exporting and installing all accept without knowing where it came
@@ -106,7 +112,9 @@ fun CustomFaceTemplate.pack(
     storePackage: ByteArray,
     container: ByteArray,
     previews: Map<Int, ByteArray>,
+    faceId: String = FACE_ID,
 ): ByteArray {
+    val renamed = { name: String -> name.replace("SM-R390_${FACE_ID}_", "SM-R390_${faceId}_") }
     val output = java.io.ByteArrayOutputStream()
     var containers = 0
     java.util.zip.ZipOutputStream(output).use { out ->
@@ -128,7 +136,9 @@ fun CustomFaceTemplate.pack(
                     input.closeEntry()
                     continue
                 }
-                out.putNextEntry(java.util.zip.ZipEntry(entry.name))
+                // The container and the previews go under the new number; the metadata keeps its name.
+                val numbered = Fit3Apk.isFaceBinary(entry.name) || preview != null
+                out.putNextEntry(java.util.zip.ZipEntry(if (numbered) renamed(entry.name) else entry.name))
                 out.write(payload)
                 out.closeEntry()
                 input.closeEntry()
@@ -140,7 +150,7 @@ fun CustomFaceTemplate.pack(
     }
     val packed = output.toByteArray()
     val reparsed = Fit3Apk.parse(packed, retainMembers = false)
-    check(reparsed.faceId == FACE_ID && reparsed.binary.contentEquals(container) &&
+    check(reparsed.faceId == faceId && reparsed.binary.contentEquals(container) &&
         previews.keys.containsAll(reparsed.stylePreviews.keys)) {
         "the template package does not read back as the template"
     }

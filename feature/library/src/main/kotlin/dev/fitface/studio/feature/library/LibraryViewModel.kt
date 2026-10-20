@@ -3,6 +3,7 @@ package dev.fitface.studio.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.fitface.studio.core.model.CUSTOM_FACE_NUMBERS_FULL
 import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
 import dev.fitface.studio.core.model.PHOTO_ALBUM_FACE_ID
 import dev.fitface.studio.core.model.CatalogFace
@@ -14,6 +15,7 @@ import dev.fitface.studio.core.model.FaceCatalogRepository
 import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.model.isOutdated
+import dev.fitface.studio.core.model.nextCustomFaceId
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.WatchFaceException
@@ -357,8 +359,8 @@ class LibraryViewModel @Inject constructor(
 
     /**
      * Makes a custom face and opens it: the face it is built from is downloaded — or read
-     * from the phone if it is already there — stripped to its clock, and saved as a new
-     * project called [name].
+     * from the phone if it is already there — stripped to its clock, given a face number of
+     * its own, and saved as a new project called [name].
      *
      * The download happens here, on the reader's tap, because that is the only way this app
      * obtains watch-face content: nothing is bundled. It refuses while anything else holds
@@ -369,11 +371,19 @@ class LibraryViewModel @Inject constructor(
         val source = current.customFaceSource ?: return
         if (current.customFaceProgress != null || current.downloadingProductId != null) return
         if (current.isOpeningProject) return
+        // The catalogue's own numbers are never given out, in case it grows into the range.
+        val catalogueFaceIds = current.faces.mapTo(mutableSetOf(), CatalogFace::faceId)
         viewModelScope.launch {
             mutableState.update {
                 it.copy(customFaceProgress = CustomFaceProgress(0f, building = false), error = null)
             }
             runCatching {
+                // Refused before downloading anything when the list already shows every number
+                // in use. The repository asks again, under its lock, before it saves.
+                val used = current.projects.mapTo(mutableSetOf(), ProjectSummary::faceId)
+                if (current.projectsLoaded && nextCustomFaceId(used + catalogueFaceIds) == null) {
+                    throw WatchFaceException(CUSTOM_FACE_NUMBERS_FULL)
+                }
                 val downloaded = catalog.downloadPackage(source, source.styles.firstOrNull()?.id ?: 0) { progress ->
                     mutableState.update {
                         it.copy(customFaceProgress = CustomFaceProgress(progress.fraction, building = false))
@@ -382,7 +392,7 @@ class LibraryViewModel @Inject constructor(
                 mutableState.update {
                     it.copy(customFaceProgress = CustomFaceProgress(1f, building = true), customFaceCached = true)
                 }
-                repository.openTemplate(downloaded, name)
+                repository.openTemplate(downloaded, name, catalogueFaceIds)
             }.onSuccess { snapshot ->
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
                 mutableState.update { it.copy(customFaceProgress = null) }

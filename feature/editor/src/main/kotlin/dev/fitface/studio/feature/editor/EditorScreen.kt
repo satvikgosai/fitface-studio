@@ -145,6 +145,7 @@ import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.WidgetResizeStepPercent
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.drawTop
+import dev.fitface.studio.core.model.isCustomFaceNumber
 import dev.fitface.studio.core.model.mebibytes
 import dev.fitface.studio.core.model.nextWidgetSize
 import dev.fitface.studio.core.model.widgetSizePercent
@@ -4953,13 +4954,14 @@ private fun DeviceStatusRow(
             )
             val activeStyleLabel = variantLabel(snapshot.activeStyleName)
             Text(
-                snapshot.faceName?.let {
-                    stringResource(R.string.editor_device_face_named, it, activeStyleLabel)
-                } ?: stringResource(
-                    R.string.editor_device_face_unnamed,
-                    snapshot.faceId,
-                    activeStyleLabel,
-                ),
+                when {
+                    // Its package still names Info_4, the face it was made from and no longer replaces.
+                    isCustomFaceNumber(snapshot.faceId) ->
+                        stringResource(R.string.editor_device_face_custom, snapshot.faceId.toInt(), activeStyleLabel)
+                    else -> snapshot.faceName?.let {
+                        stringResource(R.string.editor_device_face_named, it, activeStyleLabel)
+                    } ?: stringResource(R.string.editor_device_face_unnamed, snapshot.faceId, activeStyleLabel)
+                },
                 modifier = Modifier.padding(top = 6.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,

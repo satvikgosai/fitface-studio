@@ -14,9 +14,10 @@ import androidx.room.PrimaryKey
  * now carry as many projects as you start on it, and [faceId] is indexed because that is
  * the question the catalogue's face sheet asks — "which of these are mine".
  *
- * [sourceUri] stays as provenance. Nothing queries it any more; [productId],
- * [packageVersionCode] and [styleId] carry the same three facts in a form that can be
- * compared without parsing a string, and schema 5 backfilled them from it.
+ * [sourceUri] stays as provenance. Only its `fit3-template://` prefix is queried, to name
+ * custom faces against each other; [productId], [packageVersionCode] and [styleId] carry
+ * the store's three facts in a form that can be compared without parsing a string, and
+ * schema 5 backfilled them from it.
  */
 @Entity(
     tableName = "watch_face_projects",

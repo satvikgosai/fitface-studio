@@ -1197,8 +1197,9 @@ private fun ProjectsList(
  * It says two things before it is tapped, because both are costs the reader should choose
  * knowingly. **Whether it downloads**: nothing ships with this app, so the face it is built
  * from comes from the store like any other, and the card says how big that is or that the
- * package is already here. **What it replaces on the watch**: it is built on another face's
- * slot, so installing it takes that face's place, and one custom face replaces another.
+ * package is already here. **Where it goes on the watch**: each custom face gets a face
+ * number of its own, so it installs beside Info_4 and the others instead of replacing them,
+ * and Galaxy Wearable shows it as a blank tile.
  */
 @Composable
 private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
@@ -1213,7 +1214,7 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
         state.customFaceCached -> stringResource(R.string.library_custom_face_cached)
         else -> stringResource(R.string.library_custom_face_download, formatBytes(source.packageSize))
     }
-    val slot = stringResource(R.string.library_custom_face_slot, sourceName)
+    val slot = stringResource(R.string.library_custom_face_slot)
     val title = stringResource(R.string.library_custom_face_title)
     val detail = stringResource(R.string.library_custom_face_detail)
     val description = "$title. $detail $cost. $slot"

@@ -32,6 +32,18 @@ interface ProjectDao {
     @Query("SELECT * FROM watch_face_projects WHERE faceId = :faceId")
     suspend fun findByFaceId(faceId: String): List<ProjectEntity>
 
+    /** Every face ID a project uses, so a new custom face takes a number none of them has. */
+    @Query("SELECT DISTINCT faceId FROM watch_face_projects")
+    suspend fun faceIds(): List<String>
+
+    /**
+     * Every custom face, whichever number it has, by the source key its row carries (an
+     * imported one keeps it). They are named against each other rather than against their
+     * face's projects, because each has a face number of its own.
+     */
+    @Query("SELECT * FROM watch_face_projects WHERE sourceUri LIKE 'fit3-template://%'")
+    suspend fun findCustomFaces(): List<ProjectEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(project: ProjectEntity): Long
 

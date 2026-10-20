@@ -60,7 +60,8 @@ the app. The watch photo shows a real Bluetooth install.
 - Delete unused styles with an exact space-saving review, including when an edit
   needs more room under the watch's 4 MiB limit.
 - Start a custom face with a clock on an empty panel. It uses the downloaded Info_4
-  face as its base and replaces that face's slot on the watch.
+  face as its base and installs as a face of its own, numbered 201 to 250, beside your
+  other faces.
 - Review the preview and checks on **Install**, then send to a paired watch.
 
 Edits save automatically to your project. The **EDITED** chip on Canvas identifies

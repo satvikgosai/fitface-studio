@@ -372,9 +372,33 @@ private fun <T> Comparator<T>.maybeReversed(reversed: Boolean): Comparator<T> =
 /**
  * The face a custom face is built from — Info_4, whose clock carries alpha and whose other
  * widgets are anchored to nothing, so stripping them leaves a clean canvas. A custom face
- * installs into this face's slot on the watch, which the screen offering it has to say.
+ * made before [CUSTOM_FACE_NUMBERS] still carries this ID and installs into Info_4's slot.
  */
 const val CUSTOM_FACE_TEMPLATE_FACE_ID = "00006"
+
+/**
+ * The face numbers a custom face is given, one each, when it is made, so it installs as a
+ * face of its own beside every other. Clear of the catalogue's 1–124 and the Photos face's
+ * 254, and under the install command's one-byte face ID. A watch installed `00201` and
+ * `00202` beside Info_4 (T3).
+ */
+val CUSTOM_FACE_NUMBERS: IntRange = 201..250
+
+/** Whether [faceId] is one of [CUSTOM_FACE_NUMBERS]: a custom face with a number of its own. */
+fun isCustomFaceNumber(faceId: String): Boolean =
+    faceId.length == 5 && faceId.all(Char::isDigit) && faceId.toInt() in CUSTOM_FACE_NUMBERS
+
+/**
+ * The lowest of [CUSTOM_FACE_NUMBERS] not in [taken], as a five-digit face ID, or null when
+ * every one is. Deleting a custom face frees its number for the next one.
+ */
+fun nextCustomFaceId(taken: Set<String>): String? =
+    CUSTOM_FACE_NUMBERS.asSequence().map { it.toString().padStart(5, '0') }.firstOrNull { it !in taken }
+
+/** Why a custom face cannot be started: every one of [CUSTOM_FACE_NUMBERS] is in use. */
+const val CUSTOM_FACE_NUMBERS_FULL =
+    "All 50 custom face numbers (201–250) are in use. Delete a custom face you no longer " +
+        "need, then try again."
 
 class FacePackage(
     val sourceKey: String,
@@ -1233,13 +1257,18 @@ interface WatchFaceRepository {
     /**
      * Starts a custom face from [download], which has to be the template's own face
      * ([CUSTOM_FACE_TEMPLATE_FACE_ID]): stripped to its clock, given previews of what it now
-     * is, and saved as a new project called [name], numbered if that is taken.
+     * is, renumbered to the lowest of [CUSTOM_FACE_NUMBERS] that no project and none of
+     * [catalogueFaceIds] uses, and saved as a new project called [name], numbered if that is
+     * taken. Refused, with nothing saved, when every number is in use.
      *
      * Made here, from the package the store served, rather than shipped: no watch-face
      * content is bundled with this app.
      */
-    suspend fun openTemplate(download: FacePackage, name: String): EditorSnapshot =
-        throw UnsupportedOperationException()
+    suspend fun openTemplate(
+        download: FacePackage,
+        name: String,
+        catalogueFaceIds: Set<String> = emptySet(),
+    ): EditorSnapshot = throw UnsupportedOperationException()
 
     suspend fun openProject(projectId: Long): EditorSnapshot
 

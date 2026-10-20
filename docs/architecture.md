@@ -209,13 +209,14 @@ and previews. Clear `localApkPath`/`editedBinPath` until its new directory exist
 - The package cache is shared but each project owns its source copy: newer packages
   evict older cache versions without breaking saved projects. `hasPackage` checks the
   actual file before UI promises no download; a database row alone proves nothing.
-- The watch has one face per identity slot. Another project/custom face using that
-  identity replaces the slot; this code does not invent new firmware face IDs.
+- The watch has one face per identity slot; another project using that identity
+  replaces it. The only new firmware face IDs this code gives out are custom faces'
+  numbers, 201–250 ([A custom face](#a-custom-face)).
 
 ### A custom face
 
 `CustomFaceTemplate` builds on demand from the downloaded/cached Info_4 (`00006`)
-package; no template container or artwork is bundled. Recipe version 2:
+package; no template container or artwork is bundled. Recipe version 3:
 
 1. Verify the expected nine-record style shape, then `keepFirstStyles` retains one
    style and updates `styleN.bin`, `setting.bin +0x34`, and `preview.bin` together.
@@ -223,15 +224,31 @@ package; no template container or artwork is bundled. Recipe version 2:
    and AOD intact; unexpected producer shape refuses instead of stripping blindly.
 3. Redraw the remaining preview frame and package PNG from the stripped composition;
    discard removed-style previews. Pack exactly the members `Fit3Apk.parse` reads.
-4. Save as an ordinary project. Its stripped container is pristine, so Reset returns
-   to the empty panel rather than Info_4's original readings.
+4. Under the repository lock, take the lowest number in 201–250 that no project's
+   `faceId` and no cached-catalogue face uses, and renumber the container to it
+   (`FaceIdentity.renumber`, [format reference](bin-format.md#renumbering-a-face)).
+   `pack` files the container and style previews under that number, because the parser
+   reads a project's face ID from the container's member name; Info_4's metadata is
+   copied unchanged.
+5. Save as an ordinary project. Its renumbered, stripped container is pristine, so Reset
+   returns to the empty panel under its own number, not to Info_4.
 
 The source key is `fit3-template://00006/v<recipe>/<uuid>`; product/version/style
 columns stay NULL so a store update does not mark templates outdated. Archive export
-retains that provenance. Existing recipe-1 projects keep their four styles.
+retains that provenance. Existing recipe-1 projects keep their four styles, and
+recipe-1 and -2 projects keep `00006` and still install over Info_4.
 One style is absent from the vendor census (minimum three); activation names the
 remaining style, but a physical-watch test of this shape is still outstanding.
-Custom faces occupy Info_4's watch slot, replacing Info_4 or a prior custom face.
+Numbering needs no schema change: the number is the row's existing `faceId`, and
+archives already carry and check it. Deleting a custom face frees its number for the next
+one. With all fifty in use, the library refuses before downloading and the repository
+refuses again before writing anything (`CUSTOM_FACE_NUMBERS_FULL`). A duplicate or an
+imported archive keeps its number, as any copy keeps its face's, so the two replace each
+other on the watch. Custom faces are named against each other (`findCustomFaces`, by
+`fit3-template://` key), not against their number's projects. Install names the face
+"Custom face 201", because its package metadata still says Info_4. On a watch, `00201`
+and `00202` installed beside Info_4 ([recorded](direct-install.md#recorded-on-a-watch));
+reinstalling one number alone, a reboot, and more than two have not been tried.
 
 ## The project archive
 

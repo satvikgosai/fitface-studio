@@ -144,10 +144,10 @@ class WatchProbesTest {
 
         // T3: the custom face under two IDs outside the catalogue, told apart by background.
         probes += Probe("T3a-face-id-00201", "Probe T3a face 00201", infoPackage,
-            WatchProbes.reidentify(StructuralEditor.addBackgrounds(template, listOf(WatchProbes.STYLE), 256, 402,
+            FaceIdentity.renumber(StructuralEditor.addBackgrounds(template, listOf(WatchProbes.STYLE), 256, 402,
                 solid(0xFF1B5E20.toInt())).container, "00201"))
         probes += Probe("T3b-face-id-00202", "Probe T3b face 00202", infoPackage,
-            WatchProbes.reidentify(StructuralEditor.addBackgrounds(template, listOf(WatchProbes.STYLE), 256, 402,
+            FaceIdentity.renumber(StructuralEditor.addBackgrounds(template, listOf(WatchProbes.STYLE), 256, 402,
                 solid(0xFFB71C1C.toInt())).container, "00202"))
 
         // T4: two MiSans-24 Values given Roboto Bold 40 and LED Digital 32.
@@ -263,19 +263,6 @@ class WatchProbesTest {
         assertArrayEquals(before.data.copyOfRange(oldHeader.storedImageOffset, before.data.size),
             after.data.copyOfRange(newHeader.storedImageOffset, newHeader.storedImageOffset + oldHeader.imageBytes))
         assertArrayEquals(template.entryByBasename(WatchProbes.AOD).data, result.entryByBasename(WatchProbes.AOD).data)
-    }
-
-    /** The second ID reads everywhere the first did, and changing it back restores every byte. */
-    @Test
-    fun aReidentifiedFaceNamesOnlyItsNewIdAndChangesBackExactly() {
-        val original = containerOf(storePackage("00006"))
-        val moved = WatchProbes.reidentify(original, "00201")
-
-        assertTrue(moved.entries.all { it.path.contains("SM-R390_00201_") })
-        assertEquals("00201", SettingRecord.parse(requireNotNull(FaceResources.settingOrNull(moved))).faceId)
-        assertTrue(DeliveryChecks.check(moved, "00201").canSend)
-        assertEquals(original.fileSize, moved.fileSize)
-        assertArrayEquals(original.toByteArray(), WatchProbes.reidentify(moved, "00006").toByteArray())
     }
 
     /** Each rebound Value names its own new binding, which asks for exactly its family and size. */

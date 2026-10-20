@@ -971,6 +971,24 @@ RGB565 precision, or safely change the panel identity/geometry. The two referenc
 files contain no unreferenced raster or compression stage; shrinking artwork and
 bounded imported-resource deletion are separate editing mechanisms.
 
+### Renumbering a face
+
+`FaceIdentity.renumber` moves a container to another five-digit face ID at the same length.
+It rewrites the two places the watch reads the ID: each entry path's `SM-R390_<id>_256x402/`
+directory and `setting.bin +0x10`. The rebuild recomputes the entry and header CRCs. The name
+slots (`+0x39`, `+0x79` after their lead bytes) keep the old name. The watch never reads them,
+and those are exactly the bytes the T3 probes installed: `00201` and `00202`, both selectable
+beside Info_4, with slots still reading `SM-R390_00006_256x402`
+([recorded](direct-install.md#recorded-on-a-watch)).
+
+Only custom faces are renumbered, once, when they are made
+([architecture](architecture.md#a-custom-face)). `FaceIdentityTest` checks that:
+
+- the renumbered template changes only the header CRC, each directory record's path and CRC,
+  and `setting.bin`'s five ID bytes;
+- every catalogue container renumbers to `00201`, passes `DeliveryChecks` there, and
+  renumbers back byte for byte.
+
 ### Deleting numbered styles
 
 `StructuralEditor.deleteStyles` removes any chosen numbered styles, retaining at

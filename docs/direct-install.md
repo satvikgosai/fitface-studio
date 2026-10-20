@@ -328,7 +328,10 @@ One SM-R390, 2026-10-14, with probes built by `WatchProbesTest`:
 - **Face IDs outside the catalogue.** The custom-face template installed under `00201` and
   `00202` sat beside Info_4 rather than replacing it, and each could be selected on the
   watch. Galaxy Wearable listed both as blank tiles and, with one of them current, showed
-  the Photos face's picture on its main screen.
+  the Photos face's picture on its main screen. Those probes changed the entry paths and
+  `setting.bin +0x10` only; their name slots still read `SM-R390_00006_256x402`. Custom
+  faces are renumbered exactly that way. Not yet recorded: reinstalling one number alone,
+  survival across a reboot, and more than two such faces.
 - **The stock plugin did not overwrite an edit** after the plugin was given back its
   access and Galaxy Wearable reconnected. The research's re-send path (Fit3-App report
   §6.1) was not observed in that run.

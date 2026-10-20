@@ -26,6 +26,7 @@ import dev.fitface.studio.core.format.Fit3CapacityException
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.CustomFaceTemplate
 import dev.fitface.studio.core.format.DeliveryChecks
+import dev.fitface.studio.core.format.FaceIdentity
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.FaceResources
@@ -70,6 +71,8 @@ import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ExportedProject
 import dev.fitface.studio.core.model.FacePackage
+import dev.fitface.studio.core.model.CUSTOM_FACE_NUMBERS_FULL
+import dev.fitface.studio.core.model.nextCustomFaceId
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.ImportedProject
@@ -444,8 +447,17 @@ class WatchFaceRepositoryImpl @Inject constructor(
      * provenance**: the row carries a `fit3-template://` key with no product, version or
      * style, because it is not a store download — a store version would badge every custom
      * face as outdated the day Info_4 updates, and offer to replace it with the stock face.
+     *
+     * **It has a face number of its own**, the lowest of 201–250 that no project here and
+     * none of [catalogueFaceIds] uses, so it installs beside Info_4 and every other custom
+     * face rather than over them. The number is picked and the row written under one lock,
+     * so two quick starts cannot take the same one.
      */
-    override suspend fun openTemplate(download: FacePackage, name: String): EditorSnapshot =
+    override suspend fun openTemplate(
+        download: FacePackage,
+        name: String,
+        catalogueFaceIds: Set<String>,
+    ): EditorSnapshot =
         withContext(Dispatchers.IO) {
             if (download.expectedFaceId != CustomFaceTemplate.FACE_ID) {
                 throw WatchFaceException(
@@ -454,15 +466,25 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 )
             }
             val storePackage = download.copyBytes()
-            val template = withContext(Dispatchers.Default) { buildTemplatePackage(storePackage) }
+            val template = withContext(Dispatchers.Default) { buildTemplate(storePackage) }
             mutex.withLock {
+                val faceId = nextCustomFaceId(projectDao.faceIds().toSet() + catalogueFaceIds)
+                    ?: throw WatchFaceException(CUSTOM_FACE_NUMBERS_FULL, "custom face numbers exhausted")
+                val numbered = FaceIdentity.renumber(template.container, faceId)
+                val refusals = DeliveryChecks.check(numbered, faceId).refusals
+                if (refusals.isNotEmpty()) {
+                    throw WatchFaceException(
+                        "The custom face could not be given its own number. Nothing was saved.",
+                        "renumber to $faceId: ${refusals.joinToString { it.code }}",
+                    )
+                }
                 createProject(
-                    apkBytes = template,
+                    apkBytes = CustomFaceTemplate.pack(storePackage, numbered.toByteArray(), template.previews, faceId),
                     fallbackName = download.displayName,
-                    expectedFaceId = CustomFaceTemplate.FACE_ID,
+                    expectedFaceId = faceId,
                     wrongFace = "The custom face could not be built from Info_4. Nothing was saved.",
                     desiredStyle = "style0.bin",
-                    sourceUri = "fit3-template://${CustomFaceTemplate.FACE_ID}/" +
+                    sourceUri = "$TEMPLATE_SOURCE${CustomFaceTemplate.FACE_ID}/" +
                         "v${CustomFaceTemplate.VERSION}/${UUID.randomUUID()}",
                     productId = null,
                     packageVersionCode = null,
@@ -472,12 +494,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
         }
 
+    /** The stripped container, with its face-picker frames redrawn, and the style previews. */
+    private class Template(val container: Fit3Container, val previews: Map<Int, ByteArray>)
+
     /**
-     * The template's package, from the store's: the container stripped, each style's
+     * The template, from the store's package: the container stripped, each style's
      * face-picker frame re-rendered from what it now draws, and each style preview redrawn
-     * from the same composition.
+     * from the same composition. Still under Info_4's number; [openTemplate] gives it its own.
      */
-    private fun buildTemplatePackage(storePackage: ByteArray): ByteArray {
+    private fun buildTemplate(storePackage: ByteArray): Template {
         val apk = Fit3Apk.parse(storePackage, retainMembers = false)
         val stripped = try {
             CustomFaceTemplate.strip(Fit3Container.parse(apk.binary))
@@ -504,7 +529,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // Keyed as the package keys its previews: by the style's own number.
             previews[FaceResources.styleNumber(entry.basename)] = composed.toPng()
         }
-        return CustomFaceTemplate.pack(storePackage, container.toByteArray(), previews)
+        return Template(container, previews)
     }
 
     private fun PreviewFrame.toPng(): ByteArray {
@@ -515,6 +540,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
             bitmap.recycle()
         }
     }
+
+    /**
+     * The names a new project of [faceId] is numbered against: its face's other projects, or,
+     * for a custom face ([sourceUri] a template key), every custom face. Those have a number
+     * each, so their face's projects would be none and every one would be plain "Custom face".
+     */
+    private suspend fun takenNames(faceId: String, sourceUri: String?): List<String> =
+        (if (sourceUri?.startsWith(TEMPLATE_SOURCE) == true) projectDao.findCustomFaces()
+        else projectDao.findByFaceId(faceId)).map(ProjectEntity::resolvedName)
 
     /**
      * A new project from [apkBytes]: the session loaded and checked, then the row, then its
@@ -553,7 +587,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         // not a second row reading exactly like the first. The face's own names are
         // identical across every project started on it, which is why the name is stored
         // rather than derived on the way to the screen.
-        val siblings = projectDao.findByFaceId(loaded.apk.faceId)
+        val taken = takenNames(loaded.apk.faceId, sourceUri)
         val project = ProjectEntity(
             id = 0,
             displayName = loaded.sourceName,
@@ -564,10 +598,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             localApkPath = null,
             editedBinPath = null,
             selectedStyle = desiredStyle,
-            projectName = ProjectNaming.defaultName(
-                base = nameBase(loaded),
-                taken = siblings.map(ProjectEntity::resolvedName),
-            ),
+            projectName = ProjectNaming.defaultName(base = nameBase(loaded), taken = taken),
             productId = productId,
             packageVersionCode = packageVersionCode,
             styleId = styleId,
@@ -713,8 +744,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     id = 0,
                     projectName = ProjectNaming.defaultName(
                         base = source.resolvedName,
-                        taken = projectDao.findByFaceId(source.faceId)
-                            .map(ProjectEntity::resolvedName),
+                        taken = takenNames(source.faceId, source.sourceUri),
                     ),
                     importedAtEpochMillis = now,
                     updatedAtEpochMillis = now,
@@ -969,7 +999,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     }
                 }
                 val now = System.currentTimeMillis()
-                val siblings = projectDao.findByFaceId(loaded.apk.faceId)
+                val taken = takenNames(loaded.apk.faceId, contents.manifest.sourceUri)
                 val project = ProjectEntity(
                     id = 0,
                     displayName = contents.manifest.displayName,
@@ -991,7 +1021,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         base = contents.manifest.projectName.ifBlank {
                             loaded.apk.faceName ?: contents.manifest.displayName
                         },
-                        taken = siblings.map(ProjectEntity::resolvedName),
+                        taken = taken,
                     ),
                     productId = contents.manifest.productId,
                     packageVersionCode = contents.manifest.packageVersionCode,
@@ -3527,6 +3557,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
      */
     private companion object {
         const val TAG = "Editor"
+
+        /** The source key a custom face's row carries, whichever number it has. */
+        const val TEMPLATE_SOURCE = "fit3-template://"
         val CHECKPOINT_NAME = Regex("edit-[a-f0-9-]{36}\\.checkpoint")
 
         /** How many lines of [Session.editHistory] a report carries. */

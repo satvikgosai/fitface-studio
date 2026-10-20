@@ -2,6 +2,7 @@ package dev.fitface.studio.feature.library
 
 import android.os.Looper
 import dev.fitface.studio.core.data.DiagnosticsReporter
+import dev.fitface.studio.core.model.CUSTOM_FACE_NUMBERS_FULL
 import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.model.DiagnosticsLog
@@ -11,6 +12,7 @@ import dev.fitface.studio.core.model.FaceCatalog
 import dev.fitface.studio.core.model.FaceCatalogRepository
 import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.FaceStyleOption
+import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WatchFaceRepository
 import io.mockk.coEvery
@@ -21,6 +23,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import org.junit.Assert.*
 import org.junit.Test
@@ -53,7 +56,7 @@ class CustomFaceLibraryTest {
     fun theCustomFaceIsBuiltFromTheTemplateFaceAndOpensInTheEditor() {
         val catalog = FakeCatalog(listOf(other, template))
         val built = mockk<EditorSnapshot>(relaxed = true) { every { projectId } returns 42 }
-        coEvery { repository.openTemplate(any(), "Custom face") } returns built
+        coEvery { repository.openTemplate(any(), "Custom face", any()) } returns built
         val viewModel = opened(catalog)
         assertEquals(template, viewModel.state.value.customFaceSource)
         val events = mutableListOf<LibraryEvent>()
@@ -63,7 +66,8 @@ class CustomFaceLibraryTest {
         assertEquals(listOf(template), catalog.downloaded)
         catalog.download.complete(pkg())
         settle()
-        coVerify(exactly = 1) { repository.openTemplate(any(), "Custom face") }
+        // With the catalogue's numbers, so a custom face never takes one the store uses.
+        coVerify(exactly = 1) { repository.openTemplate(any(), "Custom face", setOf("00001", "00006")) }
         assertEquals(listOf<LibraryEvent>(LibraryEvent.OpenEditor(42)), events)
         assertNull(viewModel.state.value.customFaceProgress)
     }
@@ -100,7 +104,7 @@ class CustomFaceLibraryTest {
     @Test
     fun aRefusedBuildSaysWhyAndLetsGo() {
         val catalog = FakeCatalog(listOf(template))
-        coEvery { repository.openTemplate(any(), any()) } throws
+        coEvery { repository.openTemplate(any(), any(), any()) } throws
             WatchFaceException("Info_4 has changed in the store.")
         val viewModel = opened(catalog)
         viewModel.startCustomFace("Custom face")
@@ -109,6 +113,23 @@ class CustomFaceLibraryTest {
         settle()
         assertNull(viewModel.state.value.customFaceProgress)
         assertEquals("Info_4 has changed in the store.", viewModel.state.value.error?.text)
+    }
+
+    /** With every number already in the list, it says so before downloading anything. */
+    @Test
+    fun withEveryNumberInUseNothingDownloads() {
+        every { repository.observeProjects() } returns flowOf((201..250).map { number ->
+            ProjectSummary(number.toLong(), "x", "fit3-template://00006/v3/$number",
+                number.toString().padStart(5, '0'), "Info_4", 0)
+        })
+        val catalog = FakeCatalog(listOf(template))
+        val viewModel = opened(catalog)
+        viewModel.startCustomFace("Custom face")
+        settle()
+        assertTrue(catalog.downloaded.isEmpty())
+        coVerify(exactly = 0) { repository.openTemplate(any(), any(), any()) }
+        assertNull(viewModel.state.value.customFaceProgress)
+        assertEquals(CUSTOM_FACE_NUMBERS_FULL, viewModel.state.value.error?.text)
     }
 
     /** "No download needed" is only said once the cache has been asked. */

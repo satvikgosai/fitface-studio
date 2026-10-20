@@ -435,6 +435,8 @@
     <string name="editor_device_name">Fit3 · SM-R390</string>
     <string name="editor_device_face_named">%1$s · %2$s</string>
     <string name="editor_device_face_unnamed">face %1$s · %2$s</string>
+    <!-- A custom face with a number of its own: its package still names Info_4, which it no longer replaces. -->
+    <string name="editor_device_face_custom">Custom face %1$d · %2$s</string>
     <string name="editor_device_plugin_installed">plugin installed</string>
     <string name="editor_device_plugin_missing">plugin not installed</string>
     <string name="editor_device_plugin_version">%1$s · %2$s</string>

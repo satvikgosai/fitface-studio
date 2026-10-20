@@ -169,27 +169,6 @@ internal object WatchProbes {
     // Whole-container rewrites
     // ---------------------------------------------------------------------------------------
 
-    /**
-     * [container] under another five-digit face ID, at the same length: every directory path,
-     * `setting.bin +0x10`, and the two name slots only where they hold the canonical name.
-     * Stage 8's send-time rewrite, written here first so T3 can test the idea.
-     */
-    fun reidentify(container: Fit3Container, faceId: String): Fit3Container {
-        require(faceId.matches(Regex("\\d{5}")))
-        val setting = FaceResources.settingOrNull(container) ?: error("no setting.bin")
-        val old = SettingRecord.parse(setting).faceId
-        val data = setting.data.copyOf()
-        faceId.toByteArray(Charsets.US_ASCII).copyInto(data, 0x10)
-        listOf(0x38, 0x78).forEach { slot ->
-            val canonical = "SM-R390_${old}_256x402".toByteArray(Charsets.US_ASCII)
-            if (data.copyOfRange(slot, slot + canonical.size).contentEquals(canonical)) {
-                "SM-R390_${faceId}_256x402".toByteArray(Charsets.US_ASCII).copyInto(data, slot)
-            }
-        }
-        val renamed = container.entries.associate { it.index to it.path.replace("SM-R390_${old}_", "SM-R390_${faceId}_") }
-        return StructuralEditor.rebuild(container, mapOf(setting.index to data), renamedEntries = renamed).container
-    }
-
     /** A 92-byte binding naming one family by selector byte 1, at [size] pixels. */
     fun binding(family: Int, size: Int, role: String): ByteArray = ByteArray(FontBinding.SIZE).also {
         it[1] = family.toByte()
