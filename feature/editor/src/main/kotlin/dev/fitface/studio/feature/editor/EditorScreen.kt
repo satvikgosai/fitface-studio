@@ -197,6 +197,11 @@ fun EditorRoute(
     ) { uri ->
         if (uri != null) viewModel.preparePicture(uri.toString())
     }
+    val gifPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) viewModel.prepareMovingBackground(uri.toString())
+    }
     val nearbyPermissionRequester = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
@@ -348,6 +353,11 @@ fun EditorRoute(
             onAdd = viewModel::addPicture,
             onAddedShown = viewModel::clearPictureAdded,
         ),
+        moving = MovingBackgroundActions(
+            onChoose = { gifPicker.launch(arrayOf("image/gif")) },
+            onStep = viewModel::setMovingBackgroundStep,
+            onRemove = viewModel::removeMovingBackground,
+        ),
         onReset = viewModel::reset,
         onRename = viewModel::renameProject,
         onDelete = viewModel::deleteProject,
@@ -457,6 +467,7 @@ private fun EditorScreen(
     onImageTint: (Int?) -> Unit,
     onBackgroundScope: (Boolean) -> Unit,
     pictures: PictureActions,
+    moving: MovingBackgroundActions,
     onReset: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
@@ -615,6 +626,7 @@ private fun EditorScreen(
                         onRestoreWidget = onRestoreWidget,
                         onImportWidget = { importing = true },
                         pictures = pictures,
+                        moving = moving,
                         onImageTint = onImageTint,
                         onBackgroundScope = onBackgroundScope,
                         onImportBackground = { importingBackground = true },
@@ -835,6 +847,10 @@ private fun EditorHeader(
         }
         EditorPage.Background -> when {
             pendingImage -> stringResource(R.string.editor_subtitle_background_positioning)
+            // The page is about the moving background alone while there is one.
+            snapshot.movingBackground != null -> snapshot.movingBackground?.let { moving ->
+                stringResource(R.string.editor_subtitle_background_moving, moving.frames, loopSeconds(moving.loopMs))
+            }.orEmpty()
             snapshot.canAddBackground ->
                 stringResource(R.string.editor_subtitle_background_can_add)
             snapshot.backgroundWouldNotFit -> stringResource(
@@ -1105,6 +1121,7 @@ private fun EditorPageContent(
     onRestoreWidget: (Long) -> Unit,
     onImportWidget: () -> Unit,
     pictures: PictureActions,
+    moving: MovingBackgroundActions,
     onImageTint: (Int?) -> Unit,
     onBackgroundScope: (Boolean) -> Unit,
     onImportBackground: () -> Unit,
@@ -1177,7 +1194,7 @@ private fun EditorPageContent(
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
             onChooseImage, onImportBackground, onResetImagePlacement, onDiscardImage, onApplyImage,
-            onManageStyles, onImageTint, onBackgroundScope, modifier,
+            onManageStyles, onImageTint, onBackgroundScope, moving, modifier,
         )
         EditorPage.Styles -> StylesWorkspace(
             snapshot, !state.isWorking, state.isWorking, onVariant, onSyncThumbnail, onDeleteStyle, modifier,
@@ -1391,6 +1408,7 @@ internal fun editKindLabel(kind: EditKind): String = stringResource(
         EditKind.THUMBNAIL -> R.string.editor_edit_kind_thumbnail
         EditKind.TEXT -> R.string.editor_edit_kind_text
         EditKind.PICTURE -> R.string.editor_edit_kind_picture
+        EditKind.MOVING_BACKGROUND -> R.string.editor_edit_kind_moving_background
     },
 )
 
@@ -1726,7 +1744,9 @@ private fun RemoveWidgetDialog(
     val importedFrom = widget.importedFromFaceId
     // A copy of a stock widget is deleted outright as well; its original stays to copy again.
     val copy = widget.addedKind == null && widget.duplicateSourceGlobalIndex != null
-    val deletes = widget.addedKind != null || copy
+    // So is a moving background, frames and all: it can be added again.
+    val moving = snapshot.movingBackground?.globalIndex == widget.globalIndex
+    val deletes = widget.addedKind != null || copy || moving
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1745,6 +1765,8 @@ private fun RemoveWidgetDialog(
                     stringResource(R.string.editor_delete_body_imported, importedFrom)
                 } else if (widget.addedKind != null) {
                     stringResource(R.string.editor_delete_body_picture)
+                } else if (moving) {
+                    stringResource(R.string.editor_delete_body_moving)
                 } else if (copy) {
                     stringResource(R.string.editor_delete_body_duplicate)
                 } else if (state.editsReachOtherStyles) {
@@ -1953,7 +1975,9 @@ private fun RemoveSetDialog(
     onDismiss: () -> Unit,
 ) {
     val imported = picks.count { it.importedFromFaceId != null }
-    val added = picks.count { it.addedKind != null && it.importedFromFaceId == null }
+    val added = picks.count {
+        (it.addedKind != null && it.importedFromFaceId == null) || it.globalIndex == snapshot.movingBackground?.globalIndex
+    }
     val copies = picks.count { it.addedKind == null && it.duplicateSourceGlobalIndex != null }
     val stock = picks.size - imported - added - copies
     AlertDialog(
@@ -2073,7 +2097,7 @@ private fun RepeatingNudgeButton(
 }
 
 @Composable
-private fun RepeatingNudgeButton(
+internal fun RepeatingNudgeButton(
     label: String,
     enabled: Boolean,
     modifier: Modifier = Modifier,
@@ -3279,8 +3303,14 @@ private fun BackgroundWorkspace(
     onManageStyles: () -> Unit,
     onTint: (Int?) -> Unit,
     onScope: (Boolean) -> Unit,
+    moving: MovingBackgroundActions,
     modifier: Modifier = Modifier,
 ) {
+    state.pendingAnimation?.let { pending ->
+        MovingBackgroundWorkspace(state, snapshot, pending, moving, onFit, onTransformImage, onStepImageZoom,
+            onResetPlacement, onTint, onDiscard, onApply, modifier)
+        return
+    }
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -3307,6 +3337,12 @@ private fun BackgroundWorkspace(
             onTransformImage = onTransformImage,
             modifier = Modifier.widthIn(max = 186.dp),
         )
+        // A moving background covers whatever still one is under it, so while there is one
+        // the page is about it alone.
+        snapshot.movingBackground?.let {
+            MovingBackgroundPresent(snapshot, it, !state.isWorking, moving.onRemove)
+            return@Column
+        }
         if (snapshot.offersBackgroundScope) {
             BackgroundScopeChoice(snapshot, thisStyleOnly, !state.isWorking, onScope)
         }
@@ -3344,6 +3380,10 @@ private fun BackgroundWorkspace(
             )
             FitButton(
                 stringResource(R.string.editor_bg_import_open), onImportBackground,
+                Modifier.fillMaxWidth(), !state.isWorking, style = FitButtonStyle.Secondary,
+            )
+            FitButton(
+                stringResource(R.string.editor_moving_choose), moving.onChoose,
                 Modifier.fillMaxWidth(), !state.isWorking, style = FitButtonStyle.Secondary,
             )
             FitDetails(label = stringResource(R.string.editor_image_details)) {
@@ -4966,6 +5006,15 @@ private fun DeviceStatusRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
+            // The preview beside this shows its first frame; say that it moves.
+            snapshot.activeMovingBackground?.let { moving ->
+                Text(
+                    stringResource(R.string.editor_device_moving, moving.frames, loopSeconds(moving.loopMs)),
+                    modifier = Modifier.padding(top = 3.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 stringResource(
                     if (state.environment.pluginInstalled) R.string.editor_device_plugin_installed

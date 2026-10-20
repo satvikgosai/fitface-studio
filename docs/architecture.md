@@ -307,6 +307,11 @@ exists and returns to 3 when every turn is reset, because readers decode with
 `ignoreUnknownKeys` and an older build would otherwise drop the turn and straighten the
 artwork on its next resize. See [format: rotating widgets](bin-format.md#rotating-widgets).
 
+A moving background ([format](bin-format.md#adding-a-moving-background)) needs no schema:
+its record is an added widget with no original, like an added still background, its timing
+lives in the record, and nothing about the GIF is kept. Removing it deletes it with its
+frames instead of parking it under Removed.
+
 Schema 5 is schema 3 or 4 plus an added picture: a `WidgetImportOrigin` whose `kind` is
 `PICTURE`, with an empty donor face and a baseline that is one Static placed on the panel.
 It is written exactly while one exists, for the same reason: a build that reads 4 would

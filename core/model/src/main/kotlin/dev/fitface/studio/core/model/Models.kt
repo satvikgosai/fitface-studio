@@ -855,7 +855,7 @@ data class EditAuditSummary(
  */
 enum class EditKind {
     MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, RESTORE, DUPLICATE, IMPORT, BACKGROUND,
-    STYLES, THUMBNAIL, TEXT, PICTURE,
+    STYLES, THUMBNAIL, TEXT, PICTURE, MOVING_BACKGROUND,
 }
 
 data class EditorSnapshot(
@@ -963,6 +963,10 @@ data class EditorSnapshot(
     val selectedCanTakeBackground: Boolean = false,
     /** Whether AOD has room under the ceiling to be *given* a background. */
     val aodCanTakeBackground: Boolean = false,
+    /** The selected variant's moving background, which the Background page shows and removes. */
+    val movingBackground: MovingBackground? = null,
+    /** The active style's moving background: what Install says will play on the watch. */
+    val activeMovingBackground: MovingBackground? = null,
     /** Size of the container as it stands, measured against the watch's ceiling. */
     val containerBytes: Int = 0,
     val imageCount: Int,
@@ -1271,6 +1275,24 @@ interface WatchFaceRepository {
     ): EditorSnapshot = throw UnsupportedOperationException()
 
     suspend fun openProject(projectId: Long): EditorSnapshot
+
+    /**
+     * The GIF at [imageUri], every frame composited as a viewer shows it, for the moving
+     * background's placing page. Refused with a sentence when it is not a GIF this can read.
+     */
+    suspend fun readAnimation(imageUri: String): AnimationSource = throw UnsupportedOperationException()
+
+    /**
+     * [source] as the selected variant's moving background: every [frameStep]th frame, each
+     * placed by [placement] (and coloured by its tint) the way a still background is, played
+     * as [AnimationTiming.plan] times it. Refused when the variant already has one or it would
+     * not fit under the watch's ceiling.
+     */
+    suspend fun addMovingBackground(source: AnimationSource, placement: ImagePlacement, frameStep: Int): EditorSnapshot =
+        throw UnsupportedOperationException()
+
+    /** Deletes the selected variant's moving background with its frames. Undo brings it back. */
+    suspend fun removeMovingBackground(): EditorSnapshot = throw UnsupportedOperationException()
 
     /**
      * Renames a project. A blank name is ignored rather than refused: a rename dialog is

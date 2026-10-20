@@ -27,6 +27,9 @@ import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.CustomFaceTemplate
 import dev.fitface.studio.core.format.DeliveryChecks
 import dev.fitface.studio.core.format.FaceIdentity
+import dev.fitface.studio.core.format.GifDecoder
+import dev.fitface.studio.core.format.GifFormatException
+import dev.fitface.studio.core.format.MovingBackgroundEditor
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.FaceResources
@@ -43,6 +46,7 @@ import dev.fitface.studio.core.format.ProjectArchiveException
 import dev.fitface.studio.core.format.ProjectManifest
 import dev.fitface.studio.core.format.SessionLineage
 import dev.fitface.studio.core.format.NativeWidgetOrigin
+import dev.fitface.studio.core.format.WIDGET_ANIMATION
 import dev.fitface.studio.core.format.StructuralEdit
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StyleWidgetMatch
@@ -57,6 +61,10 @@ import dev.fitface.studio.core.format.WidgetRecord
 import dev.fitface.studio.core.format.pack
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import dev.fitface.studio.core.model.AddedWidgetKind
+import dev.fitface.studio.core.model.AnimationPlan
+import dev.fitface.studio.core.model.AnimationSource
+import dev.fitface.studio.core.model.AnimationTiming
+import dev.fitface.studio.core.model.movingBackgroundAddedBytes
 import dev.fitface.studio.core.model.PreparedPicture
 import dev.fitface.studio.core.model.pictureBaselineSize
 import dev.fitface.studio.core.model.pictureSizes
@@ -1383,6 +1391,165 @@ class WatchFaceRepositoryImpl @Inject constructor(
         return snapshot
     }
 
+    override suspend fun readAnimation(imageUri: String): AnimationSource {
+        val bytes = withContext(Dispatchers.IO) { readPicked(imageUri, MAX_GIF_BYTES, "GIF") }
+        val gif = withContext(Dispatchers.Default) {
+            try {
+                GifDecoder.decode(bytes)
+            } catch (error: GifFormatException) {
+                throw WatchFaceException(error.message ?: "This GIF could not be read.", "gif: ${error.message}", error)
+            }
+        }
+        return AnimationSource(imageUri, gif.width, gif.height,
+            gif.frames.map { PreviewFrame(gif.width, gif.height, it.argb) }, gif.frames.map { it.delayMs })
+    }
+
+    /** What [addMovingBackground] checked under the lock, for the commit to check again. */
+    private class PreparedMovingBackground(
+        val session: Session,
+        val container: Fit3Container,
+        val variant: String,
+        val width: Int,
+        val height: Int,
+        val plan: AnimationPlan,
+    )
+
+    /**
+     * See [WatchFaceRepository.addMovingBackground]. Shaped like [addBackground]: checked
+     * under the lock, every frame placed off it, committed under it again only if nothing
+     * changed in between. Its record sits above the variant's still background layers, so
+     * every later index moves up one, in the lineage, the import table and any saved removal
+     * that names one; the record itself is an added widget with no original, as an added
+     * still background is, so the checkpoint needs nothing new.
+     */
+    override suspend fun addMovingBackground(
+        source: AnimationSource,
+        placement: ImagePlacement,
+        frameStep: Int,
+    ): EditorSnapshot {
+        val prepared = withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                val variant = current.selectedVariantName ?: current.styleEntries().first().basename
+                val entry = current.currentContainer.entryByBasename(variant)
+                if (MovingBackgroundEditor.read(entry) != null) {
+                    throw WatchFaceException("This style already has a moving background. Remove it first.")
+                }
+                val panel = FaceRecordParser.panelSize(entry)
+                if (panel.width <= 0 || panel.height <= 0) {
+                    throw WatchFaceException(
+                        "This face declares no panel geometry, so there is no size to add a background at.",
+                    )
+                }
+                val plan = AnimationTiming.plan(source.delaysMs, frameStep)
+                val size = current.currentContainer.fileSize
+                val proposed = size + movingBackgroundAddedBytes(plan.frames.size, plan.table.size, panel.width, panel.height)
+                if (proposed > WATCH_CONTAINER_BYTE_CEILING) throw Fit3CapacityException(size, proposed)
+                PreparedMovingBackground(current, current.currentContainer, variant, panel.width, panel.height, plan)
+            }
+        }
+        val frames = withContext(Dispatchers.Default) {
+            prepared.plan.frames.map { index ->
+                currentCoroutineContext().ensureActive()
+                imageSource.decode(source.frames[index], prepared.width, prepared.height, placement)
+                    .let { pixels -> placement.tint?.let { tinted(pixels, it) } ?: pixels }
+            }
+        }
+        return withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                if (current !== prepared.session || current.currentContainer !== prepared.container) {
+                    throw WatchFaceException("The project changed while the GIF was being prepared. Try adding it again.")
+                }
+                val variant = prepared.variant
+                val plan = prepared.plan
+                val result = MovingBackgroundEditor.insert(current.currentContainer, variant, frames, plan.table, plan.periodMs)
+                val at = result.globalIndex
+                val shift = { index: Int -> if (index >= at) index + 1 else index }
+                val existing = FaceRecordParser.scanWidgets(prepared.container.entryByBasename(variant)).map { it.globalIndex }
+                commit(
+                    current,
+                    result.edit.container,
+                    result.edit.audit("Added a moving background to $variant: ${plan.frames.size} frames, " +
+                        "${plan.table.size} steps of ${plan.periodMs} ms"),
+                    variant,
+                    importOrigins = current.importOrigins?.renumber(variant, shift),
+                    lineage = current.identities().remap(variant, shift).append(variant, at, NativeWidgetOrigin()),
+                    indexMappings = mapOf(variant to existing.associateWith(shift)),
+                    kind = EditKind.MOVING_BACKGROUND,
+                )
+            }
+        }
+    }
+
+    override suspend fun removeMovingBackground(): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val current = requireSession()
+            val variant = current.selectedVariantName ?: current.styleEntries().first().basename
+            val moving = MovingBackgroundEditor.read(current.currentContainer.entryByBasename(variant))
+                ?: throw WatchFaceException("This style has no moving background to remove.")
+            deleteMovingBackground(current, variant, moving.globalIndex, group = null)
+        }
+    }
+
+    /**
+     * Deletes [variant]'s moving background at [globalIndex] with every frame only it drew.
+     * Not parked under Removed: it was never part of the face, it can be added again, and a
+     * restorable entry would keep two or three megabytes of frames in the container, drawn by
+     * nothing — the reason imported widgets are deleted rather than removed.
+     */
+    private suspend fun deleteMovingBackground(current: Session, variant: String, globalIndex: Int, group: Long?): EditorSnapshot {
+        val entry = current.currentContainer.entryByBasename(variant)
+        val record = FaceRecordParser.scanWidgets(entry).single { it.globalIndex == globalIndex }
+        val edit = StructuralEditor.deleteWidget(
+            source = current.currentContainer,
+            entryBasename = variant,
+            globalIndex = globalIndex,
+            widgetType = record.widgetType,
+            sequenceId = record.sequenceId,
+            x = record.x,
+            y = record.y,
+            shippedImageCount = FaceRecordParser.scanImages(current.originalEntry(variant)).size,
+            retained = current.removedWidgets.mapNotNull { it.recordsByVariant[variant] },
+        )
+        val mapping = { index: Int -> if (index == globalIndex) null else if (index > globalIndex) index - 1 else index }
+        val existing = FaceRecordParser.scanWidgets(entry).map { it.globalIndex }
+        return commit(
+            current,
+            edit.container,
+            edit.audit("Moving background deleted with its frames from $variant"),
+            variant,
+            importOrigins = current.importOrigins?.renumber(variant, mapping),
+            droppedImages = edit.droppedImages,
+            lineage = current.identities().remap(variant, mapping),
+            indexMappings = mapOf(variant to existing.mapNotNull { old -> mapping(old)?.let { old to it } }.toMap()),
+            kind = EditKind.REMOVE,
+            group = group,
+        )
+    }
+
+    /** A picked file's bytes, refusing to read past [limit] whatever the provider says its length is. */
+    private fun readPicked(uri: String, limit: Int, what: String): ByteArray {
+        val stream = try {
+            contentResolver.openInputStream(Uri.parse(uri))
+        } catch (error: Exception) {
+            throw WatchFaceException("That $what could not be opened.", "picked $what: ${error.message}", error)
+        } ?: throw WatchFaceException("That $what could not be opened.", "picked $what: no input stream")
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        stream.use { input ->
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (output.size() + count > limit) {
+                    throw WatchFaceException("That $what is larger than ${limit / (1024 * 1024)} MB, too large to use.")
+                }
+                output.write(buffer, 0, count)
+            }
+        }
+        return output.toByteArray()
+    }
+
     override suspend fun tintBackground(
         red: Int,
         green: Int,
@@ -1752,6 +1919,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // Its record goes; its artwork stays, because the widget it copied draws it.
             val duplicate = imported == null &&
                 current.identities().widgets[styleName]?.get(globalIndex)?.duplicate == true
+            // A moving background this app added is deleted with its frames, as from the
+            // Background page; one a face shipped with (none in the catalogue) stays restorable.
+            val moving = MovingBackgroundEditor.read(current.currentContainer.entryByBasename(styleName))
+            if (imported == null && moving?.globalIndex == globalIndex && widgetType == WIDGET_ANIMATION &&
+                current.identities().widgets[styleName]?.get(globalIndex)?.originalIndex == null) {
+                return@withLock deleteMovingBackground(current, styleName, globalIndex, group)
+            }
             val edit = try {
                 if (imported != null) {
                     StructuralEditor.deleteWidget(
@@ -3520,6 +3694,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                             preferred = selected,
                         ).isNotEmpty()
                 },
+                movingBackground = MovingBackgroundEditor.read(selected),
+                activeMovingBackground = styles.firstOrNull { it.basename == (activeStyleName ?: styles.first().basename) }
+                    ?.let(MovingBackgroundEditor::read),
                 aodCanTakeBackground = aodEntry != null &&
                     StructuralEditor.backgroundStylesThatFit(
                         source = currentContainer,
@@ -3694,6 +3871,9 @@ private data class StoredRemovedWidget(
 /** [RemovedWidget.globalIndex] for a session that predates the field. */
 private const val UnknownGlobalIndex = -1
 private const val MAX_CHECKPOINT_BYTES = 13 * 1024 * 1024
+
+/** A GIF larger than this is refused before decoding; the decoder bounds what it decodes too. */
+private const val MAX_GIF_BYTES = 32 * 1024 * 1024
 
 /** Session history bounds: steps kept, and bytes of checkpoint files they may hold on disk. */
 private const val HISTORY_MAX_STEPS = 30

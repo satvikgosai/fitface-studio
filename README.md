@@ -59,6 +59,7 @@ the app. The watch photo shows a real Bluetooth install.
   always-on display separately.
 - Delete unused styles with an exact space-saving review, including when an edit
   needs more room under the watch's 4 MiB limit.
+- Add a moving background from a GIF: placed like a still one, with as many frames as fit.
 - Start a custom face with a clock on an empty panel. It uses the downloaded Info_4
   face as its base and installs as a face of its own, numbered 201 to 250, beside your
   other faces.

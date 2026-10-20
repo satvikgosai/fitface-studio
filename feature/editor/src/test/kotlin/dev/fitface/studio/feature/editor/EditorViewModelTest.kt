@@ -2,6 +2,8 @@ package dev.fitface.studio.feature.editor
 
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.delivery.DirectInstallState
+import dev.fitface.studio.core.model.AnimationSource
+import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
@@ -36,6 +38,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -124,6 +127,79 @@ class EditorViewModelTest {
         assertNotNull("the screen moves to the face to show it", state.pictureAdded)
         viewModel.clearPictureAdded(requireNotNull(state.pictureAdded).id)
         assertNull(viewModel.state.value.pictureAdded)
+    }
+
+    /** Twenty 100 ms frames, each a different shade so the frame shown can be told apart. */
+    private fun gif(frames: Int = 20) = AnimationSource("content://gif", 10, 10,
+        List(frames) { index -> PreviewFrame(10, 10, IntArray(100) { index }) }, List(frames) { 100 })
+
+    /**
+     * A GIF is placed as a still background is, with as many frames as fit: on a face with
+     * about 680 KB to spare, 1 in every 4 of twenty. Add takes the placement, colour and step.
+     */
+    @Test
+    fun aGifIsPlacedLikeABackgroundKeepingTheFramesThatFit() {
+        val source = gif()
+        val repository = FakeRepository(snapshot(widgets).copy(containerBytes = 3_500_000), commitImmediately = true)
+            .apply { animation = source }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingBackground("content://gif")
+        settle()
+        val pending = requireNotNull(viewModel.state.value.pendingAnimation)
+        assertEquals(4, pending.step)
+        assertEquals(4, pending.fittingStep)
+        assertEquals(listOf(0, 4, 8, 12, 16), pending.plan.frames)
+        assertSame("the face shows the first frame where the still picture would be",
+            source.frames.first(), viewModel.state.value.pendingImage?.preview)
+
+        viewModel.setMovingBackgroundStep(3)
+        assertEquals(3, viewModel.state.value.pendingAnimation?.step)
+        viewModel.setMovingBackgroundStep(0)
+        assertEquals("below every frame is not a step", 3, viewModel.state.value.pendingAnimation?.step)
+        viewModel.setMovingBackgroundStep(4)
+        viewModel.transformImage(1f, 0.1f, 0f)
+        viewModel.setBackgroundTint(0xFFFF0000.toInt())
+        viewModel.applyBackground()
+        settle()
+
+        val (placement, step) = repository.addedMoving.single()
+        assertEquals(4, step)
+        assertEquals(0.1f, placement.offsetX)
+        assertEquals(0xFFFF0000.toInt(), placement.tint)
+        assertNull(viewModel.state.value.pendingAnimation)
+        assertNull(viewModel.state.value.pendingImage)
+        assertNull("a still background was not touched", repository.backgroundPlacement)
+    }
+
+    @Test
+    fun aOneFrameGifOrAFullFaceIsRefusedAndDiscardForgetsAGif() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply { animation = gif(frames = 1) }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingBackground("content://gif")
+        settle()
+        assertEquals("This GIF has only one frame. Choose it as a still image instead.", viewModel.state.value.error?.text)
+        assertNull(viewModel.state.value.pendingAnimation)
+
+        val full = FakeRepository(snapshot(widgets).copy(containerBytes = WATCH_CONTAINER_BYTE_CEILING - 1000),
+            commitImmediately = true).apply { animation = gif() }
+        val crowded = EditorViewModel(full, installer, DiagnosticsLog(), reporter())
+        crowded.loadProject(1)
+        settle()
+        crowded.prepareMovingBackground("content://gif")
+        settle()
+        assertTrue(crowded.state.value.error!!.text.startsWith("There is no room on this face for even one frame"))
+
+        repository.animation = gif()
+        viewModel.prepareMovingBackground("content://gif")
+        settle()
+        assertNotNull(viewModel.state.value.pendingAnimation)
+        viewModel.cancelBackground()
+        assertNull(viewModel.state.value.pendingAnimation)
+        assertNull(viewModel.state.value.pendingImage)
     }
 
     /** A pinch lands on a rung; a drag past the edge stops where a widget drag would. */
@@ -705,6 +781,17 @@ class EditorViewModelTest {
         override suspend fun releasePicture(handle: String) { released += handle }
 
         override suspend fun prepareReplacementImage(imageUri: String) = ReplacementImage(imageUri, frame())
+
+        var animation: AnimationSource? = null
+        /** Each moving background added: its placement and frame step. */
+        val addedMoving = mutableListOf<Pair<ImagePlacement, Int>>()
+
+        override suspend fun readAnimation(imageUri: String) = requireNotNull(animation)
+
+        override suspend fun addMovingBackground(source: AnimationSource, placement: ImagePlacement, frameStep: Int): EditorSnapshot {
+            addedMoving += placement to frameStep
+            return current
+        }
 
         override suspend fun replaceBackground(imageUri: String, placement: ImagePlacement, thisStyleOnly: Boolean): EditorSnapshot {
             backgroundPlacement = placement

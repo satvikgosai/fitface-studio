@@ -1053,6 +1053,15 @@
     <li>An added picture is edited in its variant only, like an import. Its delete dialog, scope line and full-size label say picture and never name a donor face; the undo label is “new picture”.</li>
   </ul>
 
+  <h3 id="moving-background">Moving background</h3>
+  <ul>
+    <li>Background offers <strong>Add a moving background (GIF)</strong> under From another watch face. The picked GIF is placed on its own page, in the still background's order: the face <em>playing</em> it as the watch will (only the frames kept, at their timing, with Pause/Play), a fact card (Frames <em>n of total</em>, Loop, Adds, face-size meter), <strong>Frames kept</strong> (Fewer/More, “Every frame” or “1 in every n frames”, a one-line cost hint), Fit, <code>PlacementControls</code>, <code>ImageColourControls</code>, the loop note, then Discard and <strong>Add moving background</strong>. The header says positioning · unapplied.</li>
+    <li>It opens at the smallest step that fits the face; Add is disabled past the 4 MiB the watch accepts. A one-frame GIF is refused with a pointer to Choose image, and a face without room for one frame says so.</li>
+    <li>“It plays in a loop on the watch. A GIF’s own loop count is not kept.” is always shown. On the always-on display a warning that cannot be dismissed says it plays about three times slower and can use more battery, while placing it and while it is there.</li>
+    <li>While a variant has one, Background is about it alone: the face shows frame 0, a card says <em>n frames · s loop</em>, the subtitle reads moving · n frames · s, and the only action is <strong>Remove moving background</strong>. Remove and the widget list's Remove both confirm “deleted with its frames … Undo, or add the GIF again, to have it back”; the undo label is “moving background”.</li>
+    <li>Install shows the active style's frame 0 with a line “Moving background: n frames, s loop”. Canvas does not play it yet.</li>
+  </ul>
+
   <h3 id="background-scope">Background scope</h3>
   <ul>
     <li>With more than one style and a style on the canvas, Background shows <strong>Applies to</strong>: <strong>All styles</strong> (the default, as before) or <strong>This style only</strong>, with one line naming the style that changes. AOD and one-style faces show no choice: their edit already writes one entry.</li>

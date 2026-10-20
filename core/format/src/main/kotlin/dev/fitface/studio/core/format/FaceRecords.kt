@@ -479,13 +479,31 @@ object FaceRecordParser {
      * alpha) and the other 67 compose over black, same as all of face `00022`'s
      * styles and `00108` styles 0–3. Where an entry does carry one it is raster 0 in
      * every observed container, so this keeps the previous behaviour for those faces.
+     *
+     * A moving background's frames are panel-sized too, and none of them is *the*
+     * background: replacing or tinting one frame would leave a flicker in the loop. Rasters
+     * that only an Animation draws are skipped, so a style with nothing but a moving
+     * background reads as having no still one. No catalogue face carries an Animation.
      */
     fun backgroundImage(entry: ContainerEntry): ImageRecord? {
         val panel = panelSize(entry)
         if (panel.width <= 0 || panel.height <= 0) return null
-        return scanImages(entry).firstOrNull {
-            it.width == panel.width && it.height == panel.height
+        val images = scanImages(entry)
+        val frames = animationOnlyImages(entry, images)
+        return images.firstOrNull {
+            it.width == panel.width && it.height == panel.height && it.recordOffset !in frames
         }
+    }
+
+    /** Record offsets of the rasters an Animation draws and nothing else does. */
+    private fun animationOnlyImages(entry: ContainerEntry, images: List<ImageRecord>): Set<Int> {
+        if (images.isEmpty()) return emptySet()
+        val records = runCatching { scanWidgets(entry) }.getOrDefault(emptyList())
+        if (records.none { it.widgetType == WIDGET_ANIMATION }) return emptySet()
+        val byOffset = images.associateBy { (it.recordOffset - images.first().recordOffset).toLong() }
+        val (animations, others) = records.partition { it.widgetType == WIDGET_ANIMATION }
+        fun drawnBy(group: List<WidgetRecord>) = group.flatMap { referencedImages(it, byOffset) }.map { it.recordOffset }.toSet()
+        return drawnBy(animations) - drawnBy(others)
     }
 
     /**

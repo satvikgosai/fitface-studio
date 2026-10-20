@@ -1396,6 +1396,28 @@ checkpoint schema 3 or 4. The checkpoint and archive schema rules are in
 [Architecture](architecture.md#the-project-archive). An added picture on a watch is
 covered by T7's mechanics, not yet by a session adding one through the app.
 
+### Adding a moving background
+
+`MovingBackgroundEditor.insert` adds a GIF's frames as one type-4 Animation that plays under
+every widget of the selected variant (a numbered style or the always-on display).
+`GifDecoder` composites the frames as a viewer shows them. `AnimationTiming` turns the
+delays into the record's period and frame table, and the repository places every frame
+like a still background.
+
+| Rule | Contract |
+| --- | --- |
+| Frames | One `IMAGE_INDEXED8` raster per kept frame: the panel size, a 256-colour median-cut palette (`IndexedImage.quantize`), a byte a pixel, zero trailer. Translucent pixels are laid over black first. Appended after every existing image, so nothing moves |
+| Record | Type 4, `+0x0C` index and size, position 0,0, mode 0, `+0x24` table length (≤ 255), `+0x25` repeat `0xFF`, `+0x26` period in ms, then one pointer an entry. A frame held for several periods is several entries naming one raster |
+| Timing | Delays under 20 ms count as 100 ms; a dropped frame's time goes to the frame kept before it; the period is the delays' GCD, falling back to the average with one entry a frame past 255 entries. The watch loops it whatever `+0x25` says (T1b), and plays it about 3× slower on the always-on display (T1e) |
+| Layer | Directly above the variant's last full-panel layer, or index 0 on a bare one; every later record moves up one and named alignment targets are renumbered. The insert checks every earlier record draws identical artwork at an identical place, and that the new record names exactly its own frames in table order |
+| Not "the" background | `FaceRecordParser.backgroundImage` skips rasters only an Animation draws, so Replace, tint and import edit the still background (or report none) and never one frame. Its guide is still `BACKGROUND`, so Arrange pins it |
+| Cost | `movingBackgroundAddedBytes`: frames × (12 + 1024 + w × h + 4) + 40 + 4 × entries, equal to the growth (tested); 103,952 bytes a frame at 256 × 402. One a variant |
+| Provenance | None new: an added widget with no original (`NativeWidgetOrigin()`), as an added still background is. Removing it deletes the record and every frame only it drew; Undo restores it |
+
+`MovingBackgroundEditorTest` adds one to the first style of every catalogue face that has
+room and removes it again byte for byte. The T1 probes put appended Animations on a watch;
+one made through the app has not been sent yet.
+
 ### Removing imported widgets
 
 `deleteWidget` permanently removes an imported record and its uniquely owned appended

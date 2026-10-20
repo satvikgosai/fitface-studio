@@ -72,6 +72,7 @@
     <string name="editor_subtitle_background_no_room">%1$s · no room for one</string>
     <string name="editor_subtitle_background_none">no background</string>
     <string name="editor_subtitle_background_idle">choose an image</string>
+    <string name="editor_subtitle_background_moving">moving · %1$d frames · %2$s s</string>
     <plurals name="editor_subtitle_styles">
         <item quantity="one">%1$d style</item>
         <item quantity="other">%1$d styles</item>
@@ -117,6 +118,7 @@
     <string name="editor_edit_kind_styles">style deletion</string>
     <string name="editor_edit_kind_thumbnail">picker thumbnail update</string>
     <string name="editor_edit_kind_text">text change</string>
+    <string name="editor_edit_kind_moving_background">moving background</string>
     <string name="editor_canvas_hint_aod">Editing the always-on display only.</string>
     <string name="editor_canvas_nudge_all_styles">@string/editor_canvas_hint_all_styles</string>
     <string name="editor_canvas_nudge_this_style">@string/editor_canvas_hint_this_style</string>
@@ -210,6 +212,7 @@
     <string name="editor_delete_title">Delete widget #%1$d?</string>
     <string name="editor_delete_body_imported">It came from face %1$s, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Undo, or add it from that face again, to have it back.</string>
     <string name="editor_delete_confirm">@string/ui_delete</string>
+    <string name="editor_delete_body_moving">It is a moving background added here, so it is deleted with its frames instead of going to the Removed list, and the face gets that space back. Undo, or add the GIF again, to have it back.</string>
     <string name="editor_delete_body_duplicate">It is a copy of another widget, so it is deleted instead of going to the Removed list. Undo, or duplicate that widget again, to have it back.</string>
     <!-- Several widgets at once. Each is still its own edit, one after another. -->
     <string name="editor_widgets_hint">Tap to edit on the canvas; hold to select several.</string>
@@ -437,6 +440,8 @@
     <string name="editor_device_face_unnamed">face %1$s · %2$s</string>
     <!-- A custom face with a number of its own: its package still names Info_4, which it no longer replaces. -->
     <string name="editor_device_face_custom">Custom face %1$d · %2$s</string>
+    <!-- Install card: the preview shows the first frame, so this says the background moves. -->
+    <string name="editor_device_moving">Moving background: %1$d frames, %2$s s loop</string>
     <string name="editor_device_plugin_installed">plugin installed</string>
     <string name="editor_device_plugin_missing">plugin not installed</string>
     <string name="editor_device_plugin_version">%1$s · %2$s</string>
@@ -592,4 +597,26 @@
     <string name="editor_style_delete_warning">This removes the selected styles and their edits from this project. Undo can bring them back while the project stays open; after that only Reset project restores the original styles, and it discards all other edits too.</string>
     <string name="editor_style_delete_saved">Style deletion is saved separately. Cancelling the pending edit will not restore deleted styles.</string>
     <string name="editor_style_aod_kept">AOD is kept separately and cannot be deleted here.</string>
+    <!-- Moving background (a GIF played by the watch as the style's background). -->
+    <string name="editor_moving_choose">Add a moving background (GIF)</string>
+    <string name="editor_moving_pause">Pause</string>
+    <string name="editor_moving_play">Play</string>
+    <string name="editor_moving_fact_frames">Frames</string>
+    <string name="editor_moving_frames_of">%1$d of %2$d</string>
+    <string name="editor_moving_fact_loop">Loop</string>
+    <string name="editor_moving_seconds">%1$s s</string>
+    <string name="editor_moving_add">Add moving background</string>
+    <string name="editor_moving_frames_heading">Frames kept</string>
+    <string name="editor_moving_every_frame">Every frame</string>
+    <string name="editor_moving_every_nth">1 in every %1$d frames</string>
+    <string name="editor_moving_fewer">Fewer</string>
+    <string name="editor_moving_more">More</string>
+    <string name="editor_moving_frames_hint">Each frame takes about 100 KB. Fewer frames take less room and play less smoothly.</string>
+    <string name="editor_moving_loops">It plays in a loop on the watch. A GIF’s own loop count is not kept.</string>
+    <string name="editor_moving_aod">On the always-on display it plays about three times slower, and moving all the time can use more battery.</string>
+    <string name="editor_moving_heading">Moving background</string>
+    <string name="editor_moving_summary">%1$d frames · %2$s s loop</string>
+    <string name="editor_moving_present_detail">It plays under every widget. Remove it to add a different one or to use a still picture.</string>
+    <string name="editor_moving_remove">Remove moving background</string>
+    <string name="editor_moving_remove_title">Delete the moving background?</string>
 </resources>

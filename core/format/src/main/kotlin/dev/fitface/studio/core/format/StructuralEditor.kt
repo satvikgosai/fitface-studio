@@ -1060,7 +1060,7 @@ object StructuralEditor {
      * assertion that catches a pointer left behind: a stale offset either fails to
      * resolve or lands on different bytes, and both show up here instead of on the watch.
      */
-    private fun pointerSignatures(
+    internal fun pointerSignatures(
         entry: ContainerEntry,
         widget: WidgetRecord,
         relativeImages: Map<Long, ImageRecord>,
@@ -2245,7 +2245,7 @@ object StructuralEditor {
         }
     }
 
-    private fun remapAlignmentTarget(
+    internal fun remapAlignmentTarget(
         record: ByteArray,
         widget: WidgetRecord,
         renumber: (Int) -> Int?,
@@ -2516,7 +2516,7 @@ object StructuralEditor {
         return temporary
     }
 
-    private fun requireContiguousWidgets(
+    internal fun requireContiguousWidgets(
         entry: ContainerEntry,
         widgets: List<WidgetRecord>,
         images: List<ImageRecord>,

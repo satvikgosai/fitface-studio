@@ -11,7 +11,12 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
+import dev.fitface.studio.core.model.AnimationPlan
+import dev.fitface.studio.core.model.AnimationSource
+import dev.fitface.studio.core.model.AnimationTiming
 import dev.fitface.studio.core.model.EditKind
+import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
+import dev.fitface.studio.core.model.movingBackgroundStepThatFits
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
@@ -154,12 +159,26 @@ data class SelectionStop(
     val reason: String,
 )
 
+/**
+ * A picked GIF and the frame step chosen for it: every [step]th frame is kept, played as
+ * [plan] times it. [fittingStep] is the smallest step that fits the face when it was picked.
+ */
+data class PendingAnimation(val source: AnimationSource, val step: Int, val fittingStep: Int) {
+    val plan: AnimationPlan = AnimationTiming.plan(source.delaysMs, step)
+}
+
 data class EditorUiState(
     val snapshot: EditorSnapshot? = null,
     val isWorking: Boolean = true,
     val fit: ImageFit = ImageFit.COVER,
     val pendingImage: ReplacementImage? = null,
     val placement: ImagePlacement = ImagePlacement(),
+    /**
+     * A GIF being placed as a moving background. [pendingImage] holds its first frame at the
+     * same time, so the face, the placement controls and Discard work exactly as for a still
+     * picture; Add commits this instead.
+     */
+    val pendingAnimation: PendingAnimation? = null,
     /** A picture being placed from the Widgets page; see [PendingPicture]. */
     val pendingPicture: PendingPicture? = null,
     val pictureAdded: PictureAdded? = null,
@@ -414,6 +433,7 @@ class EditorViewModel @Inject constructor(
             multiSelection = emptyList(),
             previewReviewed = false,
             pendingImage = null,
+            pendingAnimation = null,
             // Never carried into AOD. The repository already refuses to let it reach
             // AOD, but leaving the switch on would still *read* as though it applied —
             // in the canvas hint, in the remove-confirmation body, anywhere that asks
@@ -737,8 +757,50 @@ class EditorViewModel @Inject constructor(
     }
 
     fun cancelBackground() {
-        mutableState.value = mutableState.value.copy(pendingImage = null)
+        mutableState.value = mutableState.value.copy(pendingImage = null, pendingAnimation = null)
     }
+
+    /**
+     * Reads a picked GIF and starts placing it as a moving background, keeping as many frames
+     * as fit: every frame when they do, every 2nd or 3rd when they do not.
+     */
+    fun prepareMovingBackground(uri: String) {
+        val snapshot = mutableState.value.snapshot ?: return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isWorking = true, error = null)
+            runCatching { repository.readAnimation(uri) }
+                .onSuccess { source ->
+                    if (source.frames.size < 2) {
+                        showFailure(WatchFaceException("This GIF has only one frame. Choose it as a still image instead."))
+                        return@onSuccess
+                    }
+                    val room = (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()
+                    val step = movingBackgroundStepThatFits(source.delaysMs, room, snapshot.preview.width, snapshot.preview.height)
+                    if (step == null) {
+                        showFailure(WatchFaceException("There is no room on this face for even one frame of a moving " +
+                            "background. Delete unused styles to make room."))
+                        return@onSuccess
+                    }
+                    mutableState.value = mutableState.value.copy(
+                        pendingImage = ReplacementImage(uri, source.frames.first()),
+                        pendingAnimation = PendingAnimation(source, step, step),
+                        placement = ImagePlacement(fit = mutableState.value.fit),
+                        isWorking = false,
+                    )
+                }
+                .onFailure(::showFailure)
+        }
+    }
+
+    /** Keeps every [step]th frame: fewer frames, smaller and jerkier; more, smoother and larger. */
+    fun setMovingBackgroundStep(step: Int) {
+        val pending = mutableState.value.pendingAnimation ?: return
+        val allowed = AnimationTiming.smallestStep(pending.source.frames.size)..pending.source.frames.size
+        if (step !in allowed || step == pending.step) return
+        mutableState.value = mutableState.value.copy(pendingAnimation = pending.copy(step = step))
+    }
+
+    fun removeMovingBackground() = operate { repository.removeMovingBackground() }
 
     /** The pending background's colour, or null for the picture's own; drawn now, applied on Use. */
     fun setBackgroundTint(tint: Int?) {
@@ -862,6 +924,12 @@ class EditorViewModel @Inject constructor(
         val pending = mutableState.value.pendingImage ?: return
         val placement = mutableState.value.placement
         val snapshot = mutableState.value.snapshot ?: return
+        mutableState.value.pendingAnimation?.let { animation ->
+            operate(onSuccess = { it.copy(pendingImage = null, pendingAnimation = null, previewReviewed = false) }) {
+                repository.addMovingBackground(animation.source, placement, animation.step)
+            }
+            return
+        }
         val thisStyleOnly = mutableState.value.backgroundThisStyleOnly && snapshot.offersBackgroundScope
         val adding = snapshot.backgroundAdds(thisStyleOnly)
         operate(
@@ -1333,7 +1401,7 @@ class EditorViewModel @Inject constructor(
 
     fun reset() = operate(
         onSuccess = {
-            it.copy(selectedWidgetIndex = null, multiSelection = emptyList(), pendingImage = null)
+            it.copy(selectedWidgetIndex = null, multiSelection = emptyList(), pendingImage = null, pendingAnimation = null)
         },
     ) { repository.resetEdits() }
 
