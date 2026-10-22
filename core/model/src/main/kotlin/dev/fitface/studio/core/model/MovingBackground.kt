@@ -1,8 +1,9 @@
 package dev.fitface.studio.core.model
 
 /**
- * A GIF read to become a moving background: every frame composited to the GIF's own size,
- * as a viewer shows it, and how long each one stays up, as stored.
+ * A GIF or a video clip read to become a moving background or picture: every frame at one
+ * size — a GIF's own, composited as a viewer shows it, or a video's at [VideoClip.frameSize] —
+ * and how long each one stays up.
  */
 class AnimationSource(
     val uri: String,
@@ -10,6 +11,8 @@ class AnimationSource(
     val height: Int,
     val frames: List<PreviewFrame>,
     val delaysMs: List<Int>,
+    /** The part of a video these frames were read from; null for a GIF, which is read whole. */
+    val clip: VideoClip? = null,
 ) {
     init {
         require(frames.isNotEmpty() && frames.size == delaysMs.size) { "every frame needs a delay" }
@@ -73,21 +76,26 @@ object AnimationTiming {
 }
 
 /**
- * What a moving background adds to its style: one Indexed8 raster a kept frame (12-byte
- * header, the 1 KiB palette, a byte a pixel, the 4-byte trailer) and the record, 40 bytes plus
- * four a table entry. Exactly the growth the insert produces.
+ * What an animation of [width] × [height] frames adds to its style, a moving background or a
+ * moving picture alike: one Indexed8 raster a kept frame (12-byte header, the 1 KiB palette, a
+ * byte a pixel, the 4-byte trailer) and the record, 40 bytes plus four a table entry. Exactly
+ * the growth either insert produces.
  */
-fun movingBackgroundAddedBytes(frames: Int, entries: Int, width: Int, height: Int): Int =
-    frames * (12 + 1024 + width * height + 4) + 0x28 + entries * 4
+fun animationAddedBytes(frames: Int, entries: Int, width: Int, height: Int): Int =
+    frames * animationFrameBytes(width, height) + 0x28 + entries * 4
+
+/** One kept frame's Indexed8 raster at [width] × [height]: what Fewer saves and More costs. */
+fun animationFrameBytes(width: Int, height: Int): Int = 12 + 1024 + width * height + 4
 
 /**
- * The smallest frame step whose plan fits in [availableBytes], or null when not even one frame
- * does. Most GIFs fit whole on a custom face; a long one keeps every 2nd or 3rd frame.
+ * The smallest frame step whose plan fits in [availableBytes] at [width] × [height], or null
+ * when not even one frame does. Most GIFs fit whole on a custom face; a long one keeps every
+ * 2nd or 3rd frame as a background, and nearly any fits whole as a small picture.
  */
-fun movingBackgroundStepThatFits(delaysMs: List<Int>, availableBytes: Long, width: Int, height: Int): Int? =
+fun animationStepThatFits(delaysMs: List<Int>, availableBytes: Long, width: Int, height: Int): Int? =
     (AnimationTiming.smallestStep(delaysMs.size)..delaysMs.size).firstOrNull { step ->
         val plan = AnimationTiming.plan(delaysMs, step)
-        movingBackgroundAddedBytes(plan.frames.size, plan.table.size, width, height) <= availableBytes
+        animationAddedBytes(plan.frames.size, plan.table.size, width, height) <= availableBytes
     }
 
 /** A style's moving background, read back from its record: what Install and the Background page say about it. */

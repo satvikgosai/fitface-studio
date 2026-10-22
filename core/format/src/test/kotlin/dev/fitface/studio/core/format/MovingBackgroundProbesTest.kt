@@ -14,15 +14,19 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
- * Moving backgrounds made the way the app makes them — `AnimationTiming` for the table,
- * `MovingBackgroundEditor` for the record and Indexed8 frames — packed as project archives for
- * a watch session, as [WatchProbesTest] packs Stage 0's. `-Pfit3.probeOut=<dir>` writes them.
+ * Moving backgrounds and pictures made the way the app makes them — `AnimationTiming` for the
+ * table, `MovingBackgroundEditor` and `MovingPicture` for the records and Indexed8 frames —
+ * packed as project archives for a watch session, as [WatchProbesTest] packs Stage 0's.
+ * `-Pfit3.probeOut=<dir>` writes them.
  *
  * What T1 did not cover and these do: a frame held for several periods (repeated pointers),
  * the record *under* the widgets rather than appended on top of them, full-panel Indexed8
  * frames with hundreds of colours quantised to a palette, one in a style and one in the
- * always-on display of the same face, and one slotted above a catalogue face's still
- * background with every widget renumbered above it.
+ * always-on display of the same face, one slotted above a catalogue face's still background
+ * with every widget renumbered above it (M1, M2); moving pictures with a clear palette entry
+ * over a stock face's widgets, one hanging off the panel's edge, two playing at once at
+ * different speeds (M3); and a video-rate background, 25 frames at 100 ms, under a moving
+ * picture (M4).
  */
 class MovingBackgroundProbesTest {
     private val corpus = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot")))
@@ -63,6 +67,24 @@ class MovingBackgroundProbesTest {
         return pixels
     }
 
+    /**
+     * A [size]-px moving-picture frame: clear but for a disc of [colour] [step] twelfths of the
+     * way round its orbit, with the frame's number in white in the middle.
+     */
+    private fun orbit(size: Int, colour: Int, step: Int, digit: String): IntArray {
+        val angle = Math.toRadians(step * 30.0)
+        val cx = size / 2 + (size * 0.3 * Math.cos(angle)).toInt()
+        val cy = size / 2 + (size * 0.3 * Math.sin(angle)).toInt()
+        val radius = size / 6
+        val pixels = IntArray(size * size) { index ->
+            val dx = index % size - cx
+            val dy = index / size - cy
+            if (dx * dx + dy * dy <= radius * radius) colour else 0
+        }
+        WatchProbes.drawDigits(pixels, size, size, digit, size / 24, 0xFFFFFFFF.toInt())
+        return pixels
+    }
+
     private fun probes(): List<Probe> {
         val info = storePackage("00006")
         // M1: a custom face as the app now makes one, under a number of its own, clear of the
@@ -89,9 +111,36 @@ class MovingBackgroundProbesTest {
         val m2 = MovingBackgroundEditor.insert(containerOf(stock), WatchProbes.STYLE, m2Frames, m2Plan.table, m2Plan.periodMs)
         assertEquals("directly above 00046's still background", 1, m2.globalIndex)
 
+        // M3: two moving pictures on 00112's first style, over its widgets: an orange one inside
+        // the face at 80 ms a frame, and a teal one hanging 40 px off the right edge at 250 ms.
+        val black = storePackage("00112")
+        val fast = AnimationTiming.plan(List(12) { 80 }, step = 1)
+        var m3 = MovingPicture.insert(containerOf(black), WatchProbes.STYLE, 96, 96,
+            (0 until 12).map { orbit(96, 0xFFFF6F00.toInt(), it, "${it + 1}") }, fast.table, fast.periodMs, 30, 150).edit.container
+        val slow = AnimationTiming.plan(List(6) { 250 }, step = 1)
+        m3 = MovingPicture.insert(m3, WatchProbes.STYLE, 72, 72,
+            (0 until 6).map { orbit(72, 0xFF00BFA5.toInt(), it * 2, "${it + 1}") }, slow.table, slow.periodMs, 256 - 32, 60)
+            .edit.container
+
+        // M4: a video-rate background — 25 full-panel frames at 100 ms, a bar sweeping down —
+        // under a moving picture, on a custom face numbered 211.
+        val video = AnimationTiming.plan(List(25) { 100 }, step = 1)
+        val sweep = (0 until 25).map { frame ->
+            gradient(0xFF1A237E.toInt(), 0xFF000000.toInt(), "${frame + 1}").also { pixels ->
+                val top = frame * 16
+                for (y in top until minOf(402, top + 12)) for (x in 0 until 256) pixels[y * 256 + x] = 0xFFFFD600.toInt()
+            }
+        }
+        var m4 = MovingBackgroundEditor.insert(FaceIdentity.renumber(CustomFaceTemplate.strip(containerOf(info)), "00211"),
+            WatchProbes.STYLE, sweep, video.table, video.periodMs).edit.container
+        m4 = MovingPicture.insert(m4, WatchProbes.STYLE, 64, 64,
+            (0 until 12).map { orbit(64, 0xFFE91E63.toInt(), it, "") }, fast.table, fast.periodMs, 96, 300).edit.container
+
         return listOf(
             Probe("M1-moving-custom-00210", "Probe M1 moving background", info, m1),
             Probe("M2-moving-over-still-00046", "Probe M2 moving over 00046", stock, m2.edit.container),
+            Probe("M3-moving-pictures-00112", "Probe M3 moving pictures on 00112", black, m3),
+            Probe("M4-video-rate-custom-00211", "Probe M4 video-rate background", info, m4),
         )
     }
 
@@ -108,10 +157,10 @@ class MovingBackgroundProbesTest {
             val delivery = DeliveryChecks.check(probe.container, faceId)
             assertTrue("${probe.id}: ${delivery.refusals}", delivery.canSend)
             assertTrue(probe.id, delivery.emptyVariants.isEmpty())
-            // The moving background is a full-panel layer, never the still background.
+            // A moving background is a full-panel layer, never the still background.
             val style = probe.container.entryByBasename(WatchProbes.STYLE)
-            val moving = requireNotNull(MovingBackgroundEditor.read(style))
-            assertEquals(WidgetPlacement.BACKGROUND, FaceRecordParser.widgetGuides(style)[moving.globalIndex].placement)
+            val moving = MovingBackgroundEditor.read(style)
+            moving?.let { assertEquals(WidgetPlacement.BACKGROUND, FaceRecordParser.widgetGuides(style)[it.globalIndex].placement) }
 
             val archive = WatchProbes.archive(probe.storePackage, probe.container, probe.name)
             val apk = Fit3Apk.parse(archive, retainMembers = false)

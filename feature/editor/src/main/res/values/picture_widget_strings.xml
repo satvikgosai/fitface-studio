@@ -1,10 +1,13 @@
 <resources>
     <!-- Widgets page entry, under "Add widgets from another face". -->
     <string name="editor_picture_open">Add a picture</string>
+    <string name="editor_moving_picture_open">Add a moving picture (GIF or video)</string>
     <!-- Header subtitle on the Widgets page while a picture is being placed. -->
     <string name="editor_subtitle_picture_positioning">Placing a picture: drag to move, pinch to resize</string>
     <string name="editor_picture_fact">Picture</string>
     <string name="editor_picture_detail">It is added on top of everything in %1$s. Move, resize, turn or delete it there like any widget.</string>
+    <string name="editor_moving_picture_fact">Moving picture</string>
+    <string name="editor_moving_picture_detail">It is added on top of everything in %1$s. Move or delete it there like any widget. Choose its size here: a moving picture cannot be resized once it is added.</string>
     <string name="editor_picture_aod_note">The always-on display keeps every pixel of it lit, which uses more battery.</string>
 
     <!-- One colour control for a background and a picture being placed. -->
@@ -15,6 +18,7 @@
 
     <!-- Edit widget, for a picture the editor added rather than imported. -->
     <string name="editor_picture_scope">Added picture. Edits affect this variant only.</string>
+    <string name="editor_moving_picture_scope">Added moving picture. Edits affect this variant only.</string>
     <string name="editor_picture_full_size">Full picture size · %1$d%% steps</string>
     <string name="editor_delete_body_picture">It was added here, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Undo, or add it again, to have it back.</string>
 

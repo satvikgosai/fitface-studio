@@ -7,6 +7,7 @@ import dev.fitface.studio.core.format.WidgetPreviewSample
 import dev.fitface.studio.core.format.WidgetText
 import dev.fitface.studio.core.format.WidgetTextResources
 import dev.fitface.studio.core.model.PreviewFrame
+import dev.fitface.studio.core.model.WidgetAnimation
 import dev.fitface.studio.core.model.WidgetImageLayer
 import dev.fitface.studio.core.model.WidgetLayerComposer
 import dev.fitface.studio.core.model.WidgetPlacement
@@ -26,6 +27,7 @@ internal object WidgetPreviewComposer {
         val textResources = WidgetTextResources(resources, locale)
         val decoded = mutableMapOf<Int, PreviewFrame>()
         val layers = mutableListOf<WidgetImageLayer>()
+        val animations = mutableListOf<WidgetAnimation>()
         var approximate = false
         for (record in FaceRecordParser.scanWidgets(entry)) {
             val guide = byIndex[record.globalIndex] ?: continue
@@ -42,7 +44,23 @@ internal object WidgetPreviewComposer {
             val frame: PreviewFrame? = when (record.widgetType) {
                 1 -> raster()
                 3 -> raster(WidgetPreviewSample.spriteFrame(record.sourceId, record.frameCount ?: 0))
-                4 -> if (f.byte(0x25) != 0 && f.short(0x26) != 0) raster() else null
+                4 -> if (f.byte(0x25) != 0 && f.short(0x26) != 0) {
+                    // Every frame, for the canvas to play; the layer stays frame 0, what a
+                    // still render shows.
+                    runCatching { FaceRecordParser.resourceImages(entry, record) }.getOrNull()?.let { images ->
+                        val distinct = images.distinctBy { it.recordOffset }
+                        val position = distinct.withIndex().associate { (index, image) -> image.recordOffset to index }
+                        if (distinct.size > 1) animations += WidgetAnimation(
+                            record.globalIndex,
+                            distinct.map { image ->
+                                decoded.getOrPut(image.recordOffset) { FaceRecordParser.decodeImage(entry, image) }
+                            },
+                            images.map { position.getValue(it.recordOffset) },
+                            f.short(0x26),
+                        )
+                    }
+                    raster()
+                } else null
                 2 -> {
                     val image = raster()
                     val fraction = WidgetPreviewSample.fraction(record.sourceId)
@@ -127,6 +145,7 @@ internal object WidgetPreviewComposer {
                 layers.filterNot { it.globalIndex in backgrounds }, guides, transparent = true),
             layers,
             approximate,
+            animations.filter { animation -> layers.any { it.globalIndex == animation.globalIndex } },
         )
     }
 

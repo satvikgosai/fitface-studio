@@ -4,8 +4,8 @@ import dev.fitface.studio.core.model.MovingBackground
 import dev.fitface.studio.core.model.WidgetPlacement
 import java.io.ByteArrayOutputStream
 
-/** The edit that added a moving background, and the index its record took. */
-class MovingBackgroundEdit(val edit: StructuralEdit, val globalIndex: Int)
+/** The edit that added an animation — a moving background or picture — and the index its record took. */
+class AnimationEdit(val edit: StructuralEdit, val globalIndex: Int)
 
 /**
  * A moving background: one type-4 Animation drawing full-panel frames, under every widget.
@@ -66,7 +66,7 @@ object MovingBackgroundEditor {
      * Refuses a style that already has one, a frame of the wrong size, a table naming a frame
      * that does not exist or leaving one out, and a container past the watch's ceiling.
      */
-    fun insert(target: Fit3Container, variant: String, frames: List<IntArray>, table: List<Int>, periodMs: Int): MovingBackgroundEdit {
+    fun insert(target: Fit3Container, variant: String, frames: List<IntArray>, table: List<Int>, periodMs: Int): AnimationEdit {
         StructuralEditor.requireValidAndTight(target)
         val entry = StyleWidgetMatch.requireVariantEntry(target.entryByBasename(variant))
         val panel = FaceRecordParser.panelSize(entry)
@@ -122,7 +122,7 @@ object MovingBackgroundEditor {
         val newImages = rasters.fold(oldImages) { all, raster -> all + raster }
         val data = WidgetImporter.styleBytes(entry.data, records.toByteArray(), widgets.size + 1, newImages, header.fontBindingCount)
         requireSound(entry, entry.copy(data = data, size = data.size), widgets, before, at, images.size, table.size)
-        return MovingBackgroundEdit(StructuralEditor.rebuild(target, mapOf(entry.index to data)), at)
+        return AnimationEdit(StructuralEditor.rebuild(target, mapOf(entry.index to data)), at)
     }
 
     /**

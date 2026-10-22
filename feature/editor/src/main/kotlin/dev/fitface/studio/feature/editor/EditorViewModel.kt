@@ -16,12 +16,16 @@ import dev.fitface.studio.core.model.AnimationSource
 import dev.fitface.studio.core.model.AnimationTiming
 import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
-import dev.fitface.studio.core.model.movingBackgroundStepThatFits
+import dev.fitface.studio.core.model.animationAddedBytes
+import dev.fitface.studio.core.model.animationStepThatFits
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.PreparedPicture
+import dev.fitface.studio.core.model.VideoClip
+import dev.fitface.studio.core.model.pictureBaselineSize
+import dev.fitface.studio.core.model.pictureSizes
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.WidgetSize
 import dev.fitface.studio.core.model.pictureAddedBytes
@@ -38,6 +42,7 @@ import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.drawTop
 import dev.fitface.studio.core.model.nextWidgetSize
 import dev.fitface.studio.core.model.widgetSizePercent
+import java.util.UUID
 import javax.inject.Inject
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
@@ -105,12 +110,20 @@ data class PendingPicture(
     val centreY: Float,
     /** The colour it is recoloured to ([tintedColor]), or null for its own. */
     val tint: Int? = null,
+    /**
+     * A GIF or video clip being placed as a moving picture: its frames and the step kept.
+     * [prepared] is its first frame then, so the face, the size ladder and the colour work
+     * exactly as for a still picture; Add commits the frames instead.
+     */
+    val animation: PendingAnimation? = null,
 ) {
     val size: WidgetSize get() = prepared.ladder.minBy { abs(it.percentOfOriginal - zoom * 100) }
     val left: Int get() = (centreX - size.width / 2f).roundToInt()
     val top: Int get() = (centreY - size.height / 2f).roundToInt()
-    /** What it adds to the face, exactly: [pictureAddedBytes] at [size]. */
-    val addedBytes: Int get() = pictureAddedBytes(size.width, size.height, prepared.opaque)
+    /** What it adds to the face, exactly: [pictureAddedBytes], or [animationAddedBytes] for its kept frames, at [size]. */
+    val addedBytes: Int get() = animation?.plan?.let { plan ->
+        animationAddedBytes(plan.frames.size, plan.table.size, size.width, size.height)
+    } ?: pictureAddedBytes(size.width, size.height, prepared.opaque)
 
     /** The placement the shared controls read: its rung, and its centre's offset from the panel's. */
     fun placement(panelWidth: Int, panelHeight: Int) = ImagePlacement(
@@ -179,6 +192,8 @@ data class EditorUiState(
      * picture; Add commits this instead.
      */
     val pendingAnimation: PendingAnimation? = null,
+    /** A GIF or video is being read for a moving background or picture; the page says so. */
+    val readingFrames: Boolean = false,
     /** A picture being placed from the Widgets page; see [PendingPicture]. */
     val pendingPicture: PendingPicture? = null,
     val pictureAdded: PictureAdded? = null,
@@ -761,34 +776,40 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
-     * Reads a picked GIF and starts placing it as a moving background, keeping as many frames
-     * as fit: every frame when they do, every 2nd or 3rd when they do not.
+     * Reads a picked GIF or video and starts placing it as a moving background, keeping as
+     * many frames as fit: every frame when they do, every 2nd or 3rd when they do not.
      */
     fun prepareMovingBackground(uri: String) {
         val snapshot = mutableState.value.snapshot ?: return
         viewModelScope.launch {
-            mutableState.value = mutableState.value.copy(isWorking = true, error = null)
-            runCatching { repository.readAnimation(uri) }
-                .onSuccess { source ->
-                    if (source.frames.size < 2) {
-                        showFailure(WatchFaceException("This GIF has only one frame. Choose it as a still image instead."))
-                        return@onSuccess
+            mutableState.value = mutableState.value.copy(isWorking = true, readingFrames = true, error = null)
+            try {
+                runCatching { repository.readAnimation(uri) }
+                    .onSuccess { source ->
+                        if (source.frames.size < 2) {
+                            showFailure(WatchFaceException(if (source.clip == null) {
+                                "This GIF has only one frame. Choose it as a still image instead."
+                            } else "Only one frame of this video could be read."))
+                            return@onSuccess
+                        }
+                        val room = (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()
+                        val step = animationStepThatFits(source.delaysMs, room, snapshot.preview.width, snapshot.preview.height)
+                        if (step == null) {
+                            showFailure(WatchFaceException("There is no room on this face for even one frame of a moving " +
+                                "background. Delete unused styles to make room."))
+                            return@onSuccess
+                        }
+                        mutableState.value = mutableState.value.copy(
+                            pendingImage = ReplacementImage(uri, source.frames.first()),
+                            pendingAnimation = PendingAnimation(source, step, step),
+                            placement = ImagePlacement(fit = mutableState.value.fit),
+                            isWorking = false,
+                        )
                     }
-                    val room = (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()
-                    val step = movingBackgroundStepThatFits(source.delaysMs, room, snapshot.preview.width, snapshot.preview.height)
-                    if (step == null) {
-                        showFailure(WatchFaceException("There is no room on this face for even one frame of a moving " +
-                            "background. Delete unused styles to make room."))
-                        return@onSuccess
-                    }
-                    mutableState.value = mutableState.value.copy(
-                        pendingImage = ReplacementImage(uri, source.frames.first()),
-                        pendingAnimation = PendingAnimation(source, step, step),
-                        placement = ImagePlacement(fit = mutableState.value.fit),
-                        isWorking = false,
-                    )
-                }
-                .onFailure(::showFailure)
+                    .onFailure(::showFailure)
+            } finally {
+                mutableState.value = mutableState.value.copy(readingFrames = false)
+            }
         }
     }
 
@@ -801,6 +822,120 @@ class EditorViewModel @Inject constructor(
     }
 
     fun removeMovingBackground() = operate { repository.removeMovingBackground() }
+
+    /**
+     * Reads the moving background's or picture's video again over [clip] — a start or a
+     * length nudged by half a second — keeping the frame step where it still fits and the
+     * placement as it is.
+     */
+    fun setVideoClip(clip: VideoClip) {
+        val state = mutableState.value
+        val snapshot = state.snapshot ?: return
+        val pending = state.pendingPicture?.animation ?: state.pendingAnimation ?: return
+        if (pending.source.clip == null || clip == pending.source.clip) return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isWorking = true, readingFrames = true, error = null)
+            try {
+                runCatching { repository.readAnimation(pending.source.uri, clip) }
+                    .onSuccess { source ->
+                        val current = mutableState.value
+                        val picture = current.pendingPicture
+                        val room = (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()
+                        fun retimed(width: Int, height: Int): PendingAnimation {
+                            val fitting = animationStepThatFits(source.delaysMs, room, width, height)
+                                ?: source.frames.size
+                            val smallest = AnimationTiming.smallestStep(source.frames.size)
+                            // A longer clip may no longer fit at the step it had; it opens at one that does.
+                            return PendingAnimation(source, maxOf(pending.step, fitting).coerceIn(smallest, source.frames.size), fitting)
+                        }
+                        mutableState.value = if (picture?.animation != null) {
+                            val size = picture.size
+                            current.copy(
+                                pendingPicture = picture.copy(
+                                    prepared = picture.prepared.copy(preview = source.frames.first()),
+                                    animation = retimed(size.width, size.height),
+                                ),
+                                isWorking = false,
+                            )
+                        } else if (current.pendingAnimation != null) {
+                            current.copy(
+                                pendingImage = ReplacementImage(source.uri, source.frames.first()),
+                                pendingAnimation = retimed(snapshot.preview.width, snapshot.preview.height),
+                                isWorking = false,
+                            )
+                        } else current.copy(isWorking = false)
+                    }
+                    .onFailure(::showFailure)
+            } finally {
+                mutableState.value = mutableState.value.copy(readingFrames = false)
+            }
+        }
+    }
+
+    /**
+     * Reads a picked GIF or video and starts placing it as a moving picture, centred at the
+     * still picture's default size, keeping as many frames as fit there.
+     */
+    fun prepareMovingPicture(uri: String) {
+        val snapshot = mutableState.value.snapshot ?: return
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isWorking = true, readingFrames = true, error = null)
+            try {
+                runCatching { repository.readAnimation(uri) }
+                    .onSuccess { source ->
+                        if (source.frames.size < 2) {
+                            showFailure(WatchFaceException(if (source.clip == null) {
+                                "This GIF has only one frame. Add it as a picture instead."
+                            } else "Only one frame of this video could be read."))
+                            return@onSuccess
+                        }
+                        val panel = snapshot.preview
+                        val (width, height) = pictureBaselineSize(source.width, source.height, panel.width, panel.height)
+                        val prepared = PreparedPicture(
+                            handle = "moving:${UUID.randomUUID()}",
+                            width = width,
+                            height = height,
+                            opaque = false,
+                            sizes = pictureSizes(width, height, panel.width, panel.height,
+                                kept = width == source.width && height == source.height),
+                            preview = source.frames.first(),
+                        )
+                        val start = prepared.defaultSize
+                        if (start == null) {
+                            showFailure(WatchFaceException("This picture is too small to add."))
+                            return@onSuccess
+                        }
+                        val room = (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()
+                        val step = animationStepThatFits(source.delaysMs, room, start.width, start.height)
+                        if (step == null) {
+                            showFailure(WatchFaceException("There is no room on this face for even one frame of a moving " +
+                                "picture this size. Delete unused styles to make room."))
+                            return@onSuccess
+                        }
+                        mutableState.value.pendingPicture?.let { previous ->
+                            if (previous.animation == null) repository.releasePicture(previous.prepared.handle)
+                        }
+                        mutableState.value = mutableState.value.copy(
+                            pendingPicture = PendingPicture(prepared, start.percent / 100f,
+                                panel.width / 2f, panel.height / 2f, animation = PendingAnimation(source, step, step)),
+                            isWorking = false,
+                        )
+                    }
+                    .onFailure(::showFailure)
+            } finally {
+                mutableState.value = mutableState.value.copy(readingFrames = false)
+            }
+        }
+    }
+
+    /** Keeps every [step]th frame of the moving picture being placed. */
+    fun setMovingPictureStep(step: Int) {
+        val pending = mutableState.value.pendingPicture ?: return
+        val animation = pending.animation ?: return
+        val allowed = AnimationTiming.smallestStep(animation.source.frames.size)..animation.source.frames.size
+        if (step !in allowed || step == animation.step) return
+        mutableState.value = mutableState.value.copy(pendingPicture = pending.copy(animation = animation.copy(step = step)))
+    }
 
     /** The pending background's colour, or null for the picture's own; drawn now, applied on Use. */
     fun setBackgroundTint(tint: Int?) {
@@ -890,8 +1025,14 @@ class EditorViewModel @Inject constructor(
                 pictureAdded = PictureAdded(messageIds.incrementAndGet()),
             )
         }) {
-            repository.addPicture(pending.prepared.handle, snapshot.projectId, snapshot.selectedVariant.basename,
-                pending.size.percentOfOriginal, pending.left, pending.top, pending.tint)
+            val animation = pending.animation
+            if (animation != null) {
+                repository.addMovingPicture(animation.source, animation.step, pending.size.width, pending.size.height,
+                    pending.left, pending.top, pending.tint)
+            } else {
+                repository.addPicture(pending.prepared.handle, snapshot.projectId, snapshot.selectedVariant.basename,
+                    pending.size.percentOfOriginal, pending.left, pending.top, pending.tint)
+            }
         }
     }
 

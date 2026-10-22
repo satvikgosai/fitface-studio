@@ -78,6 +78,8 @@ data class WidgetImportOrigins(
         val claimed = mutableSetOf<Pair<String, Int>>()
         widgets.forEach { origin ->
             require(origin.id.length in 1..64) { "Invalid imported artwork identity." }
+            // Recognised from its record, never saved here: a table claiming one is not ours.
+            require(origin.kind != AddedWidgetKind.MOVING_PICTURE) { "A moving picture is saved as imported artwork." }
             if (origin.kind == AddedWidgetKind.DONOR) {
                 require(origin.faceId.matches(Regex("\\d{5}"))) { "Invalid donor identity." }
             } else {

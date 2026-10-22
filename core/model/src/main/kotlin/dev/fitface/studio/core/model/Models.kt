@@ -855,7 +855,7 @@ data class EditAuditSummary(
  */
 enum class EditKind {
     MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, RESTORE, DUPLICATE, IMPORT, BACKGROUND,
-    STYLES, THUMBNAIL, TEXT, PICTURE, MOVING_BACKGROUND,
+    STYLES, THUMBNAIL, TEXT, PICTURE, MOVING_BACKGROUND, MOVING_PICTURE,
 }
 
 data class EditorSnapshot(
@@ -967,6 +967,17 @@ data class EditorSnapshot(
     val movingBackground: MovingBackground? = null,
     /** The active style's moving background: what Install says will play on the watch. */
     val activeMovingBackground: MovingBackground? = null,
+    /**
+     * How many Animations the active style draws on top of the face — moving pictures, whether
+     * this app added them or the face arrived with them — which Install says will play too.
+     */
+    val activeMovingPictures: Int = 0,
+    /**
+     * The selected variant's animations, frames decoded, for the canvas to play: a moving
+     * background, moving pictures and any a face shipped with. [widgetImageLayers] draws each
+     * at its first frame.
+     */
+    val widgetAnimations: List<WidgetAnimation> = emptyList(),
     /** Size of the container as it stands, measured against the watch's ceiling. */
     val containerBytes: Int = 0,
     val imageCount: Int,
@@ -1277,10 +1288,13 @@ interface WatchFaceRepository {
     suspend fun openProject(projectId: Long): EditorSnapshot
 
     /**
-     * The GIF at [imageUri], every frame composited as a viewer shows it, for the moving
-     * background's placing page. Refused with a sentence when it is not a GIF this can read.
+     * The GIF or video at [imageUri], for a moving background's or picture's placing page: a
+     * GIF's every frame composited as a viewer shows it, or a video's [clip] read ten frames a
+     * second at a size that covers the selected variant's panel ([VideoClip.opening] when
+     * null). Refused with a sentence when it is neither, or not one this can read.
      */
-    suspend fun readAnimation(imageUri: String): AnimationSource = throw UnsupportedOperationException()
+    suspend fun readAnimation(imageUri: String, clip: VideoClip? = null): AnimationSource =
+        throw UnsupportedOperationException()
 
     /**
      * [source] as the selected variant's moving background: every [frameStep]th frame, each
@@ -1293,6 +1307,15 @@ interface WatchFaceRepository {
 
     /** Deletes the selected variant's moving background with its frames. Undo brings it back. */
     suspend fun removeMovingBackground(): EditorSnapshot = throw UnsupportedOperationException()
+
+    /**
+     * [source] as a moving picture on the selected variant, every [frameStep]th frame scaled
+     * to [width] × [height] (a rung of its picture ladder), recoloured to [tint] when there is
+     * one, with its top-left at panel coordinates [x], [y]. Drawn on top of every widget;
+     * Remove deletes it with its frames.
+     */
+    suspend fun addMovingPicture(source: AnimationSource, frameStep: Int, width: Int, height: Int, x: Int, y: Int,
+        tint: Int? = null): EditorSnapshot = throw UnsupportedOperationException()
 
     /**
      * Renames a project. A blank name is ignored rather than refused: a rename dialog is

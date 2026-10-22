@@ -10,6 +10,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -74,6 +75,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.State
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -143,6 +146,7 @@ import dev.fitface.studio.core.model.WidgetImageLayer
 import dev.fitface.studio.core.model.WidgetLayerComposer
 import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.WidgetResizeStepPercent
+import dev.fitface.studio.core.model.WidgetAnimation
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.drawTop
 import dev.fitface.studio.core.model.isCustomFaceNumber
@@ -201,6 +205,11 @@ fun EditorRoute(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) viewModel.prepareMovingBackground(uri.toString())
+    }
+    val movingPicturePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) viewModel.prepareMovingPicture(uri.toString())
     }
     val nearbyPermissionRequester = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -345,6 +354,8 @@ fun EditorRoute(
         onBackgroundScope = viewModel::setBackgroundThisStyleOnly,
         pictures = PictureActions(
             onChoose = { picturePicker.launch(arrayOf("image/*")) },
+            onChooseMoving = { movingPicturePicker.launch(MovingMediaTypes) },
+            onStep = viewModel::setMovingPictureStep,
             onTransform = viewModel::transformPicture,
             onStepSize = viewModel::stepPictureSize,
             onReset = viewModel::resetPicturePlacement,
@@ -352,11 +363,13 @@ fun EditorRoute(
             onDiscard = viewModel::discardPicture,
             onAdd = viewModel::addPicture,
             onAddedShown = viewModel::clearPictureAdded,
+            onClip = viewModel::setVideoClip,
         ),
         moving = MovingBackgroundActions(
-            onChoose = { gifPicker.launch(arrayOf("image/gif")) },
+            onChoose = { gifPicker.launch(MovingMediaTypes) },
             onStep = viewModel::setMovingBackgroundStep,
             onRemove = viewModel::removeMovingBackground,
+            onClip = viewModel::setVideoClip,
         ),
         onReset = viewModel::reset,
         onRename = viewModel::renameProject,
@@ -380,6 +393,9 @@ fun EditorRoute(
         onResetDelivery = viewModel::resetDirectInstall,
     )
 }
+
+/** What a moving background or picture is picked from: a GIF, or a video to take a clip of. */
+private val MovingMediaTypes = arrayOf("image/gif", "video/*")
 
 private enum class EditorPage {
     Canvas,
@@ -1328,26 +1344,44 @@ private fun CanvasFace(
     onHoldWidget: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Playing is the face as the watch shows it; Pause shows it at rest, on the first frame
+    // Install and the thumbnail show, to place something against one frame. Remembered for
+    // the screen, not the project: it is how you look.
+    var playing by rememberSaveable { mutableStateOf(true) }
+    val animated = snapshot.widgetAnimations.isNotEmpty()
     BoxWithConstraints(
         modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        DirectWatchCanvas(
-            snapshot = snapshot,
-            editing = true,
-            selectedGlobalIndex = selected?.globalIndex,
-            pendingWidgetMove = state.pendingWidgetMove,
-            pendingImage = state.pendingImage,
-            placement = state.placement,
-            enabled = !state.isWorking && !state.directInstall.isActive,
-            onWidget = onWidget,
-            onMoveWidget = onMoveWidget,
-            onTransformImage = onTransformImage,
-            modifier = Modifier.width(fittedCanvasWidth(snapshot, CanvasMaxWidth)),
-            multiSelection = state.multiSelection,
-            pendingSetMove = state.pendingSetMove,
-            onHoldWidget = onHoldWidget,
-        )
+        val canvasWidth = fittedCanvasWidth(snapshot, CanvasMaxWidth,
+            reserved = if (animated) CanvasPlayToggleHeight else 0.dp)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            DirectWatchCanvas(
+                snapshot = snapshot,
+                editing = true,
+                selectedGlobalIndex = selected?.globalIndex,
+                pendingWidgetMove = state.pendingWidgetMove,
+                pendingImage = state.pendingImage,
+                placement = state.placement,
+                enabled = !state.isWorking && !state.directInstall.isActive,
+                onWidget = onWidget,
+                onMoveWidget = onMoveWidget,
+                onTransformImage = onTransformImage,
+                modifier = Modifier.width(canvasWidth),
+                multiSelection = state.multiSelection,
+                pendingSetMove = state.pendingSetMove,
+                onHoldWidget = onHoldWidget,
+                playAnimations = playing,
+            )
+            if (animated) {
+                TextButton(onClick = { playing = !playing }, modifier = Modifier.height(CanvasPlayToggleHeight)) {
+                    Text(
+                        stringResource(if (playing) R.string.editor_canvas_pause else R.string.editor_canvas_play),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1409,6 +1443,7 @@ internal fun editKindLabel(kind: EditKind): String = stringResource(
         EditKind.TEXT -> R.string.editor_edit_kind_text
         EditKind.PICTURE -> R.string.editor_edit_kind_picture
         EditKind.MOVING_BACKGROUND -> R.string.editor_edit_kind_moving_background
+        EditKind.MOVING_PICTURE -> R.string.editor_edit_kind_moving_picture
     },
 )
 
@@ -1504,12 +1539,15 @@ private val CanvasSideBySideMinWidth = 560.dp
  * whatever it was given, which clips rather than shrinks — so anything sharing a column
  * with the canvas eats into the face instead of the margin.
  */
-private fun BoxWithConstraintsScope.fittedCanvasWidth(snapshot: EditorSnapshot, cap: Dp): Dp =
+private fun BoxWithConstraintsScope.fittedCanvasWidth(snapshot: EditorSnapshot, cap: Dp, reserved: Dp = 0.dp): Dp =
     minOf(
         maxWidth,
-        maxHeight * (snapshot.preview.width.toFloat() / snapshot.preview.height),
+        (maxHeight - reserved).coerceAtLeast(0.dp) * (snapshot.preview.width.toFloat() / snapshot.preview.height),
         cap,
     )
+
+/** The Pause/Play line under a face that moves, taken off the height the face may use. */
+private val CanvasPlayToggleHeight = 40.dp
 
 /**
  * The face was capped well below the width of a modern phone, which left it floating in
@@ -1763,6 +1801,8 @@ private fun RemoveWidgetDialog(
                     // It is not coming back from a list, so the dialog says so, and says
                     // where it can be had again.
                     stringResource(R.string.editor_delete_body_imported, importedFrom)
+                } else if (widget.addedKind == AddedWidgetKind.MOVING_PICTURE) {
+                    stringResource(R.string.editor_delete_body_moving_picture)
                 } else if (widget.addedKind != null) {
                     stringResource(R.string.editor_delete_body_picture)
                 } else if (moving) {
@@ -2286,6 +2326,9 @@ private fun WidgetsWorkspace(
                         enabled = enabled, style = FitButtonStyle.Secondary)
                     FitButton(stringResource(R.string.editor_picture_open), pictures.onChoose,
                         Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
+                    FitButton(stringResource(R.string.editor_moving_picture_open), pictures.onChooseMoving,
+                        Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
+                    if (state.readingFrames) ReadingFramesLine()
                 }
             }
             if (snapshot.removedWidgets.isNotEmpty()) {
@@ -2953,8 +2996,11 @@ private fun InspectorWorkspace(
         // colour each repeat it in their own "Applies to" line.
         if (widget.addedKind != null) {
             Text(
-                if (widget.addedKind == AddedWidgetKind.PICTURE) stringResource(R.string.editor_picture_scope)
-                else stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty()),
+                when (widget.addedKind) {
+                    AddedWidgetKind.PICTURE -> stringResource(R.string.editor_picture_scope)
+                    AddedWidgetKind.MOVING_PICTURE -> stringResource(R.string.editor_moving_picture_scope)
+                    else -> stringResource(R.string.widget_import_scope, widget.importedFromFaceId.orEmpty())
+                },
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
         } else if (snapshot.isAodSelected) {
             Text(
@@ -3386,6 +3432,7 @@ private fun BackgroundWorkspace(
                 stringResource(R.string.editor_moving_choose), moving.onChoose,
                 Modifier.fillMaxWidth(), !state.isWorking, style = FitButtonStyle.Secondary,
             )
+            if (state.readingFrames) ReadingFramesLine(Modifier.fillMaxWidth())
             FitDetails(label = stringResource(R.string.editor_image_details)) {
                 Text(
                     stringResource(
@@ -4419,6 +4466,11 @@ internal fun DirectWatchCanvas(
      * and moved and sized by the same pinch and drag that place a background.
      */
     pendingPicture: PendingPicture? = null,
+    /**
+     * Play the style's animations rather than show their first frame. Only while nothing is
+     * being dragged, nudged as a set or placed: those draw the face as it rests.
+     */
+    playAnimations: Boolean = false,
 ) {
     val composedBitmap = snapshot.composedPreview.rememberBitmap()
     val overlayBitmap = snapshot.widgetOverlay.rememberBitmap()
@@ -4483,6 +4535,11 @@ internal fun DirectWatchCanvas(
     DisposableEffect(setLayers) {
         onDispose { setLayers?.bitmaps?.forEach(Bitmap::recycle) }
     }
+    val animationLayers = if (playAnimations) snapshot.rememberAnimationLayers() else null
+    DisposableEffect(animationLayers) {
+        onDispose { animationLayers?.bitmaps?.forEach(Bitmap::recycle) }
+    }
+    val clock = rememberAnimationClock(animationLayers?.tickMs)
     val selectedGuideColor = MaterialTheme.colorScheme.tertiary
     val guideColor = MaterialTheme.colorScheme.primary
     val borderColor = if (editing) {
@@ -4708,6 +4765,29 @@ internal fun DirectWatchCanvas(
                             filterQuality = FilterQuality.Low,
                         )
                     }
+                }
+            }
+        } else if (dragLayer == null && animationLayers != null) {
+            // Read here, in the draw phase, so each tick redraws the face and nothing else.
+            val elapsed = clock.value
+            val scaleX = size.width / snapshot.preview.width
+            val scaleY = size.height / snapshot.preview.height
+            animationLayers.slices.forEach { slice ->
+                when (slice) {
+                    is AnimationSlice.Still -> drawImage(
+                        image = slice.image,
+                        dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                        filterQuality = FilterQuality.Low,
+                    )
+                    is AnimationSlice.Playing -> drawImage(
+                        image = slice.frames[slice.animation.frameAt(elapsed)],
+                        dstOffset = IntOffset((slice.left * scaleX).roundToInt(), (slice.top * scaleY).roundToInt()),
+                        dstSize = IntSize(
+                            (slice.width * scaleX).roundToInt().coerceAtLeast(1),
+                            (slice.height * scaleY).roundToInt().coerceAtLeast(1),
+                        ),
+                        filterQuality = FilterQuality.Low,
+                    )
                 }
             }
         } else {
@@ -5010,6 +5090,15 @@ private fun DeviceStatusRow(
             snapshot.activeMovingBackground?.let { moving ->
                 Text(
                     stringResource(R.string.editor_device_moving, moving.frames, loopSeconds(moving.loopMs)),
+                    modifier = Modifier.padding(top = 3.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (snapshot.activeMovingPictures > 0) {
+                Text(
+                    pluralStringResource(R.plurals.editor_device_moving_pictures, snapshot.activeMovingPictures,
+                        snapshot.activeMovingPictures),
                     modifier = Modifier.padding(top = 3.dp),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5864,6 +5953,77 @@ private fun EditorSnapshot.rememberWidgetDragLayer(globalIndex: Int): WidgetDrag
             listOf(baseBitmap, foregroundBitmap, widgetBitmap),
         )
     }
+
+/**
+ * The face with its animations pulled out: still runs between them composed once, and every
+ * frame of each animation as its own bitmap, drawn in record order with whichever frame is
+ * showing — the set-move segments, with frames where a moving layer has one image.
+ */
+private data class AnimationLayers(
+    val slices: List<AnimationSlice>,
+    val bitmaps: List<Bitmap>,
+    /** How often the face can change: its quickest animation's period, never under 20 ms. */
+    val tickMs: Long,
+)
+
+private sealed interface AnimationSlice {
+    data class Still(val image: ImageBitmap) : AnimationSlice
+    data class Playing(
+        val animation: WidgetAnimation,
+        val frames: List<ImageBitmap>,
+        val left: Int,
+        val top: Int,
+        val width: Int,
+        val height: Int,
+    ) : AnimationSlice
+}
+
+@Composable
+private fun EditorSnapshot.rememberAnimationLayers(): AnimationLayers? =
+    remember(widgetImageLayers, widgets, widgetAnimations, preview.width, preview.height) {
+        val animations = widgetAnimations.associateBy { it.globalIndex }
+            .filterKeys { index -> widgetImageLayers.any { it.globalIndex == index } }
+        if (animations.isEmpty()) return@remember null
+        val guides = widgets.associateBy { it.globalIndex }
+        val bitmaps = mutableListOf<Bitmap>()
+        fun bitmap(frame: PreviewFrame) = Bitmap.createBitmap(
+            frame.argb, frame.width, frame.height, Bitmap.Config.ARGB_8888).also(bitmaps::add).asImageBitmap()
+        val slices = setMoveSegments(widgetImageLayers, animations.keys).mapIndexedNotNull { index, segment ->
+            when (segment) {
+                is SetMoveSegment.Still -> AnimationSlice.Still(
+                    bitmap(WidgetLayerComposer.compose(preview.width, preview.height, segment.layers, widgets,
+                        transparent = index != 0)),
+                )
+                is SetMoveSegment.Moving -> {
+                    val guide = guides[segment.layer.globalIndex] ?: return@mapIndexedNotNull null
+                    val animation = animations.getValue(segment.layer.globalIndex)
+                    AnimationSlice.Playing(
+                        animation = animation,
+                        frames = animation.frames.map(::bitmap),
+                        left = guide.drawLeft + segment.layer.offsetX,
+                        top = guide.drawTop + segment.layer.offsetY,
+                        width = segment.layer.frame.width,
+                        height = segment.layer.frame.height,
+                    )
+                }
+            }
+        }
+        AnimationLayers(slices, bitmaps, animations.values.minOf { it.periodMs }.coerceAtLeast(20).toLong())
+    }
+
+/**
+ * Milliseconds the canvas's animations have played, ticking every [tickMs] while there is
+ * something to play and holding still when there is not.
+ */
+@Composable
+private fun rememberAnimationClock(tickMs: Long?): State<Long> = produceState(0L, tickMs) {
+    if (tickMs == null) return@produceState
+    val start = SystemClock.uptimeMillis() - value
+    while (true) {
+        delay(tickMs)
+        value = SystemClock.uptimeMillis() - start
+    }
+}
 
 internal fun fittedRect(
     sourceWidth: Int,

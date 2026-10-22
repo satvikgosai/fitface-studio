@@ -1411,12 +1411,51 @@ like a still background.
 | Timing | Delays under 20 ms count as 100 ms; a dropped frame's time goes to the frame kept before it; the period is the delays' GCD, falling back to the average with one entry a frame past 255 entries. The watch loops it whatever `+0x25` says (T1b), and plays it about 3× slower on the always-on display (T1e) |
 | Layer | Directly above the variant's last full-panel layer, or index 0 on a bare one; every later record moves up one and named alignment targets are renumbered. The insert checks every earlier record draws identical artwork at an identical place, and that the new record names exactly its own frames in table order |
 | Not "the" background | `FaceRecordParser.backgroundImage` skips rasters only an Animation draws, so Replace, tint and import edit the still background (or report none) and never one frame. Its guide is still `BACKGROUND`, so Arrange pins it |
-| Cost | `movingBackgroundAddedBytes`: frames × (12 + 1024 + w × h + 4) + 40 + 4 × entries, equal to the growth (tested); 103,952 bytes a frame at 256 × 402. One a variant |
+| Cost | `animationAddedBytes`: frames × (12 + 1024 + w × h + 4) + 40 + 4 × entries, equal to the growth (tested); 103,952 bytes a frame at 256 × 402. One a variant |
 | Provenance | None new: an added widget with no original (`NativeWidgetOrigin()`), as an added still background is. Removing it deletes the record and every frame only it drew; Undo restores it |
 
 `MovingBackgroundEditorTest` adds one to the first style of every catalogue face that has
-room and removes it again byte for byte. The T1 probes put appended Animations on a watch;
-one made through the app has not been sent yet.
+room and removes it again byte for byte.
+
+A video becomes the same frames: `AndroidVideoSource` reads a clip of it (`VideoClip`: ten
+frames a second, 0.5–6 s, opening at the first 3 s) with the platform's
+`MediaMetadataRetriever`, upright and just large enough to cover the panel, at most 64 MiB
+of frames. Each frame then lasts 100 ms; nothing else differs from a GIF.
+
+**On a watch** (one SM-R390, 2026-10-22; probes from `MovingBackgroundProbesTest` and the
+app's own flow), every case played as the Canvas showed it:
+
+- on a custom face, one frame named by four table entries was held four times as long: ten
+  loops took 27–28 s against 2.75 s a loop, and it restarted at its first frame on wake;
+- above `00046`'s still background, with no widget missing or moved;
+- on the always-on display, period 500 ran at the expected 1.5 s a frame. With T1e's
+  1000 ms at about 3 s, that supports a 3× multiplier rather than a fixed floor;
+- 25 full-panel frames at 100 ms played smoothly under a moving picture;
+- a background added in the app from a GIF, and one from a video clip.
+
+### Adding a moving picture
+
+`MovingPicture.insert` adds a GIF or video clip as a widget: one type-4 Animation on top of
+the selected variant, drawing frames of its own.
+
+| Rule | Contract |
+| --- | --- |
+| Frames | One `IMAGE_INDEXED8` raster per kept frame at the chosen size. When any pixel is under half alpha, palette entry 0 is clear (all four bytes zero) and those pixels take it; the other 255 entries are median cut (`IndexedImage.quantizeWithClear`). T1d proved an alpha-0 entry draws through; partial palette alpha is unproven, so nothing between is written. Appended after every existing image |
+| Record | As a moving background's, with its position at `+0x18/+0x1A`: panel coordinates, since an Animation has no alignment fields (the T1 probes' 64 px animation played at 96, 200) |
+| Layer | Appended: the last record, so it draws on top and nothing is renumbered. The insert checks every existing record and image byte is unchanged and the new guide sits at the requested place and size |
+| Size | Chosen before adding, from the picture ladder; the frames are resampled once from the source. Refused when it would cover the whole panel both ways (it would read as a background). `WidgetSchema.ANIMATION.resize` stays null, so it is not resized once added |
+| Provenance | None new, as for a moving background. The snapshot recognises one from its record (type 4, no original, not full-panel) and reports `AddedWidgetKind.MOVING_PICTURE`, which is never written into import origins (a table claiming one is refused). Remove deletes it with the frames no other record draws: a duplicate shares them |
+
+`MovingPictureTest` adds one to the first style of every catalogue face and removes it byte
+for byte. On a watch (2026-10-22), two over `00112`'s widgets each played at its own
+period and showed the face through their clear pixels. The one hanging 40 px past the
+right edge played smoothly and was clipped cleanly at the panel, not wrapped, as T2's
+Static, Sprite, Value and Composite overhangs were. Moving pictures added in the app, from a GIF and from a video, played over
+a moving background.
+
+The canvas plays every Animation it can decode: the composer returns each one's distinct
+frames, table and period beside the layers, and the Canvas page draws the still runs
+between animations once and each animation's current frame between them.
 
 ### Removing imported widgets
 
@@ -1482,8 +1521,10 @@ The stock always-on envelope is narrower than a style's:
 | Statics | 68 |
 
 No stock AOD carries an animation, a battery reading or a health metric. That is a
-corpus fact; whether the firmware draws those in AOD is unknown, which matters for the
-always-on display warnings in imports and planned animations.
+corpus fact. An added Animation does play there, about three times slower (T1e, and a
+moving background in 2026-10-22's M1). Whether the firmware draws a battery reading or a
+health metric in AOD is unknown, which matters for the always-on display warnings in
+imports.
 
 `Session.editTargets` enforces isolation in both directions, tested byte-for-byte by
 `AodIsolationTest`. `AOD_ENTRY_NAME` belongs to `:core:model`. `selectedVariant`
@@ -1504,14 +1545,17 @@ widget import, and original/modified standalone-BIN installation.
 Probe results from one watch on 2026-10-14 are recorded where each feature is
 described: type-4 animations (§7), palette alpha and appended RGB565+A pictures (§8),
 half-off overhangs and empty styles (identity and structural edits), changed font
-bindings (§5) and a swapped date order (Comp, §7).
+bindings (§5) and a swapped date order (Comp, §7). A session on 2026-10-22 covered
+moving backgrounds and moving pictures, from GIFs and video, made by probes and through
+the app, on a custom face started in the app
+([moving background](#adding-a-moving-background), [moving picture](#adding-a-moving-picture)).
 
 These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
 need particular attention; imported type/source combinations remain incompletely
 verified. Composite, Rule and vector arc recolours are software/corpus/emulator checked
-only. No AOD edit (including
-added background), imported-image deletion, or the single-style custom-template recipe
-has been verified on a watch. Resource preview tests prove joins and edit invariants,
+only. Apart from added Animations (T1e, M1), no AOD edit, including an added still
+background, and no imported-image deletion has been verified on a watch. Resource
+preview tests prove joins and edit invariants,
 not exact ROM fonts, antialiasing or live data.
 `AodCanvasSweepTest` covers all 99 AOD entries in software. Other firmware may
 read fields treated as no-effect here. Delivery recovery gaps

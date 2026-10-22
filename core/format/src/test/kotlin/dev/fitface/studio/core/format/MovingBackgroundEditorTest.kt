@@ -3,7 +3,7 @@ package dev.fitface.studio.core.format
 import dev.fitface.studio.core.model.MovingBackground
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.WidgetPlacement
-import dev.fitface.studio.core.model.movingBackgroundAddedBytes
+import dev.fitface.studio.core.model.animationAddedBytes
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.listDirectoryEntries
@@ -49,7 +49,7 @@ class MovingBackgroundEditorTest {
 
         assertEquals(0, result.globalIndex)
         assertEquals(MovingBackground(globalIndex = 0, frames = 3, entries = 4, periodMs = 100), MovingBackgroundEditor.read(after))
-        assertEquals(movingBackgroundAddedBytes(3, 4, 256, 402), result.edit.container.fileSize - template.fileSize)
+        assertEquals(animationAddedBytes(3, 4, 256, 402), result.edit.container.fileSize - template.fileSize)
         // A full-panel layer to the editor, but never "the" background a replacement would edit.
         val guides = FaceRecordParser.widgetGuides(after)
         assertEquals(WidgetPlacement.BACKGROUND, guides[0].placement)
@@ -133,7 +133,7 @@ class MovingBackgroundEditorTest {
         assertThrows(IllegalArgumentException::class.java) {
             MovingBackgroundEditor.insert(template, style, listOf(solid(red), solid(blue)), listOf(0, 0), 100)
         }
-        val tooMany = (WATCH_CONTAINER_BYTE_CEILING - template.fileSize) / movingBackgroundAddedBytes(1, 1, 256, 402) + 1
+        val tooMany = (WATCH_CONTAINER_BYTE_CEILING - template.fileSize) / animationAddedBytes(1, 1, 256, 402) + 1
         assertThrows(Fit3CapacityException::class.java) {
             MovingBackgroundEditor.insert(template, style, List(tooMany) { solid(red) }, List(tooMany) { it }, 100)
         }

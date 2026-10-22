@@ -58,18 +58,18 @@ class AnimationTimingTest {
 
     @Test
     fun theCostIsFramesTimesAnIndexedRasterPlusTheRecord() {
-        assertEquals(20 * (12 + 1024 + 256 * 402 + 4) + 40 + 20 * 4, movingBackgroundAddedBytes(20, 20, 256, 402))
+        assertEquals(20 * (12 + 1024 + 256 * 402 + 4) + 40 + 20 * 4, animationAddedBytes(20, 20, 256, 402))
     }
 
     /** The smallest step that fits: whole when there is room, every 2nd when half is, none when one frame is too many. */
     @Test
     fun theStepThatFitsIsTheSmallest() {
         val delays = List(10) { 100 }
-        val all = movingBackgroundAddedBytes(10, 10, 256, 402).toLong()
-        assertEquals(1, movingBackgroundStepThatFits(delays, all, 256, 402))
-        assertEquals(2, movingBackgroundStepThatFits(delays, all - 1, 256, 402))
-        assertEquals(10, movingBackgroundStepThatFits(delays, movingBackgroundAddedBytes(1, 10, 256, 402).toLong(), 256, 402))
-        assertNull(movingBackgroundStepThatFits(delays, 50_000, 256, 402))
+        val all = animationAddedBytes(10, 10, 256, 402).toLong()
+        assertEquals(1, animationStepThatFits(delays, all, 256, 402))
+        assertEquals(2, animationStepThatFits(delays, all - 1, 256, 402))
+        assertEquals(10, animationStepThatFits(delays, animationAddedBytes(1, 10, 256, 402).toLong(), 256, 402))
+        assertNull(animationStepThatFits(delays, 50_000, 256, 402))
     }
 
     private tailrec fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)

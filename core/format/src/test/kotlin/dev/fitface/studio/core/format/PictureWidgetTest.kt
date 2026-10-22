@@ -176,6 +176,10 @@ class PictureWidgetTest {
         assertTrue(origins(picture).hasPictures)
         assertThrows(IllegalArgumentException::class.java) { origins(picture.copy(faceId = "00112")).validate(original, edited) }
         assertThrows(IllegalArgumentException::class.java) { origins(picture.copy(kind = AddedWidgetKind.DONOR)).validate(original, edited) }
+        // A moving picture is recognised from its record and never saved here.
+        assertThrows(IllegalArgumentException::class.java) {
+            origins(picture.copy(kind = AddedWidgetKind.MOVING_PICTURE)).validate(original, edited)
+        }
 
         // A Value imported from another face, claimed as a picture: wrong record, and a font.
         val value = WidgetImporter.importWidget(original, style, face("00028"), style, 13)

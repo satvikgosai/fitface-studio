@@ -7,10 +7,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,8 +31,10 @@ import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.MovingBackground
 import dev.fitface.studio.core.model.PreviewFrame
+import dev.fitface.studio.core.model.VideoClip
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
-import dev.fitface.studio.core.model.movingBackgroundAddedBytes
+import dev.fitface.studio.core.model.animationAddedBytes
+import dev.fitface.studio.core.model.animationFrameBytes
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
 import dev.fitface.studio.core.ui.FitChip
@@ -46,6 +50,8 @@ internal class MovingBackgroundActions(
     val onChoose: () -> Unit,
     val onStep: (Int) -> Unit,
     val onRemove: () -> Unit,
+    /** A video's clip moved or stretched; read again. Shared with a moving picture. */
+    val onClip: (VideoClip) -> Unit,
 )
 
 /** A loop's length in seconds, one decimal: "2.4". */
@@ -101,7 +107,7 @@ internal fun MovingBackgroundWorkspace(
     val frame = rememberPlayingFrame(pending, playing)
     val plan = pending.plan
     val panel = snapshot.preview
-    val added = movingBackgroundAddedBytes(plan.frames.size, plan.table.size, panel.width, panel.height)
+    val added = animationAddedBytes(plan.frames.size, plan.table.size, panel.width, panel.height)
     val fits = snapshot.containerBytes + added <= WATCH_CONTAINER_BYTE_CEILING
     val total = pending.source.frames.size
     Column(
@@ -142,7 +148,8 @@ internal fun MovingBackgroundWorkspace(
             )
             Box(Modifier.padding(top = 4.dp)) { ImportRoomMeter(snapshot, added) }
         }
-        FrameStepControls(pending, total, enabled, actions.onStep)
+        FrameStepControls(pending, total, enabled, animationFrameBytes(panel.width, panel.height), actions.onStep)
+        pending.source.clip?.let { VideoClipControls(it, enabled, state.readingFrames, actions.onClip) }
         Column(Modifier.fillMaxWidth()) {
             MicroLabel(stringResource(R.string.editor_bg_fit_heading))
             Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -161,7 +168,7 @@ internal fun MovingBackgroundWorkspace(
             onResetPlacement = onResetPlacement,
         )
         ImageColourControls(state.placement.tint, enabled = enabled, onTint = onTint)
-        MovingBackgroundNotes(snapshot)
+        MovingBackgroundNotes(snapshot, video = pending.source.clip != null)
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             FitButton(
                 stringResource(R.string.editor_bg_discard),
@@ -180,11 +187,12 @@ internal fun MovingBackgroundWorkspace(
 }
 
 /**
- * Fewer or more frames: every frame, every 2nd, every 3rd… The step the page opened at is the
- * smallest that fits, so More stops there unless the face has since gained room.
+ * Fewer or more frames: every frame, every 2nd, every 3rd… The page opens at the smallest
+ * step that fits; More goes back below it only as far as the table's 255 entries allow, and
+ * Add stays off while the frames kept do not fit. [frameBytes] is what one frame costs here.
  */
 @Composable
-private fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: Boolean, onStep: (Int) -> Unit) {
+internal fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: Boolean, frameBytes: Int, onStep: (Int) -> Unit) {
     val smallest = AnimationTiming.smallestStep(total)
     Column(
         Modifier.fillMaxWidth()
@@ -214,7 +222,7 @@ private fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: Bo
             ) { onStep(pending.step - 1) }
         }
         Text(
-            stringResource(R.string.editor_moving_frames_hint),
+            stringResource(R.string.editor_moving_frames_hint, importBytes(frameBytes.toLong())),
             modifier = Modifier.padding(top = 9.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.fitText.secondary,
@@ -222,11 +230,76 @@ private fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: Bo
     }
 }
 
-/** What the watch does with it, said before it is added and while it is there. */
+/**
+ * Which part of a video is read: Earlier/Later move the start and Shorter/Longer the length,
+ * half a second at a time, and each reads the frames again. Plain buttons, not repeating
+ * ones: every press is a read of the video.
+ */
 @Composable
-private fun MovingBackgroundNotes(snapshot: EditorSnapshot) {
+internal fun VideoClipControls(clip: VideoClip, enabled: Boolean, reading: Boolean, onClip: (VideoClip) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+            .padding(14.dp),
+    ) {
+        MicroLabel(stringResource(R.string.editor_video_heading))
+        @Composable
+        fun line(text: String, back: String, forward: String, earlier: VideoClip?, later: VideoClip?) {
+            Text(text, modifier = Modifier.padding(top = 9.dp), style = MaterialTheme.typography.bodyMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                FitButton(back, { earlier?.let(onClip) }, Modifier.weight(1f), enabled && earlier != null,
+                    style = FitButtonStyle.Secondary)
+                FitButton(forward, { later?.let(onClip) }, Modifier.weight(1f), enabled && later != null,
+                    style = FitButtonStyle.Secondary)
+            }
+        }
+        line(stringResource(R.string.editor_video_start, loopSeconds(clip.startMs)),
+            stringResource(R.string.editor_video_earlier), stringResource(R.string.editor_video_later),
+            clip.earlier(), clip.later())
+        line(stringResource(R.string.editor_video_length, loopSeconds(clip.lengthMs)),
+            stringResource(R.string.editor_video_shorter), stringResource(R.string.editor_video_longer),
+            clip.shorter(), clip.longer())
+        Text(
+            stringResource(R.string.editor_video_hint, loopSeconds(clip.durationMs)),
+            modifier = Modifier.padding(top = 9.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.fitText.secondary,
+        )
+        if (reading) ReadingFramesLine(Modifier.padding(top = 9.dp))
+    }
+}
+
+/**
+ * Said while a GIF or video is read: a long video takes a few seconds, and greyed-out buttons
+ * alone do not say why.
+ */
+@Composable
+internal fun ReadingFramesLine(modifier: Modifier = Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+        CircularProgressIndicator(Modifier.size(15.dp), strokeWidth = 2.dp)
+        Text(
+            stringResource(R.string.editor_reading_frames),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.fitText.secondary,
+        )
+    }
+}
+
+/**
+ * What the watch does with it, said before it is added and while it is there. Once added
+ * nothing says whether it came from a GIF or a video, so that note names neither ([video] null).
+ */
+@Composable
+internal fun MovingBackgroundNotes(snapshot: EditorSnapshot, video: Boolean?) {
     Text(
-        stringResource(R.string.editor_moving_loops),
+        stringResource(when (video) {
+            true -> R.string.editor_moving_loops_video
+            false -> R.string.editor_moving_loops
+            null -> R.string.editor_moving_loops_added
+        }),
         modifier = Modifier.fillMaxWidth(),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.fitText.secondary,
@@ -256,7 +329,7 @@ internal fun MovingBackgroundPresent(snapshot: EditorSnapshot, moving: MovingBac
             color = MaterialTheme.fitText.secondary,
         )
     }
-    MovingBackgroundNotes(snapshot)
+    MovingBackgroundNotes(snapshot, video = null)
     var confirming by remember { mutableStateOf(false) }
     FitButton(
         stringResource(R.string.editor_moving_remove),

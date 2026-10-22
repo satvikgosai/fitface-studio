@@ -11,6 +11,13 @@ enum class AddedWidgetKind {
 
     /** A picture picked on the phone. */
     PICTURE,
+
+    /**
+     * A GIF or video clip picked on the phone, played by an Animation. Never saved with the
+     * import origins: it is recorded as an added widget with no original, as a moving
+     * background is, and recognised from its record.
+     */
+    MOVING_PICTURE,
 }
 
 enum class PictureSizePreset { ORIGINAL, SMALL, MEDIUM, LARGE, FULL }

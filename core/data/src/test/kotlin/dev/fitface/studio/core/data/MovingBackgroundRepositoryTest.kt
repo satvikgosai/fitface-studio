@@ -14,8 +14,8 @@ import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.MovingBackground
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
-import dev.fitface.studio.core.model.movingBackgroundAddedBytes
-import dev.fitface.studio.core.model.movingBackgroundStepThatFits
+import dev.fitface.studio.core.model.animationAddedBytes
+import dev.fitface.studio.core.model.animationStepThatFits
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
@@ -105,7 +105,7 @@ class MovingBackgroundRepositoryTest {
         assertEquals(listOf(100, 200, 100), source.delaysMs)
 
         val added = repository.addMovingBackground(source, ImagePlacement(), frameStep = 1)
-        assertEquals(movingBackgroundAddedBytes(3, 4, 256, 402), added.containerBytes - s.containerBytes)
+        assertEquals(animationAddedBytes(3, 4, 256, 402), added.containerBytes - s.containerBytes)
         // 00112's style 0 has its still background at index 0, so this goes directly above it.
         assertEquals(MovingBackground(globalIndex = 1, frames = 3, entries = 4, periodMs = 100), added.movingBackground)
         assertEquals(added.movingBackground, added.activeMovingBackground)
@@ -175,7 +175,7 @@ class MovingBackgroundRepositoryTest {
         assertTrue(runCatching { repository.addMovingBackground(forty, ImagePlacement(), 1) }.exceptionOrNull()
             is Fit3CapacityException)
         // The step the page offers is the smallest that fits, and it does.
-        val step = requireNotNull(movingBackgroundStepThatFits(forty.delaysMs,
+        val step = requireNotNull(animationStepThatFits(forty.delaysMs,
             (WATCH_CONTAINER_BYTE_CEILING - fresh.containerBytes).toLong(), 256, 402))
         assertTrue("00112 has room for a few frames, not forty", step > 1)
         assertNotNull(repository.addMovingBackground(forty, ImagePlacement(), step).movingBackground)

@@ -199,6 +199,32 @@ class AndroidImageSource @Inject constructor(
     }
 
     /**
+     * [frame] scaled to exactly [width] × [height] with its transparency kept, filtered as
+     * [decodeScaled] is: a frame of a moving picture, drawn over the face.
+     */
+    fun scaled(frame: PreviewFrame, width: Int, height: Int): IntArray {
+        require(width > 0 && height > 0) { "Target dimensions must be positive" }
+        if (frame.width == width && frame.height == height) return frame.argb.copyOf()
+        val source = Bitmap.createBitmap(frame.argb, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+        var output: Bitmap? = null
+        try {
+            output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            Canvas(output).drawBitmap(
+                source,
+                Rect(0, 0, source.width, source.height),
+                RectF(0f, 0f, width.toFloat(), height.toFloat()),
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+            )
+            val pixels = IntArray(width * height)
+            output.getPixels(pixels, 0, width, 0, 0, width, height)
+            return pixels
+        } finally {
+            output?.recycle()
+            source.recycle()
+        }
+    }
+
+    /**
      * The EXIF orientation of the picked file, or [ExifInterface.ORIENTATION_NORMAL].
      *
      * `BitmapFactory` ignores this tag, and phone cameras commonly store a portrait photo

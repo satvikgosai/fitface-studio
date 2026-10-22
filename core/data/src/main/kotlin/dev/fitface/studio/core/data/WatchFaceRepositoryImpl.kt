@@ -45,6 +45,7 @@ import dev.fitface.studio.core.format.ProjectArchive
 import dev.fitface.studio.core.format.ProjectArchiveException
 import dev.fitface.studio.core.format.ProjectManifest
 import dev.fitface.studio.core.format.SessionLineage
+import dev.fitface.studio.core.format.MovingPicture
 import dev.fitface.studio.core.format.NativeWidgetOrigin
 import dev.fitface.studio.core.format.WIDGET_ANIMATION
 import dev.fitface.studio.core.format.StructuralEdit
@@ -64,11 +65,13 @@ import dev.fitface.studio.core.model.AddedWidgetKind
 import dev.fitface.studio.core.model.AnimationPlan
 import dev.fitface.studio.core.model.AnimationSource
 import dev.fitface.studio.core.model.AnimationTiming
-import dev.fitface.studio.core.model.movingBackgroundAddedBytes
+import dev.fitface.studio.core.model.animationAddedBytes
 import dev.fitface.studio.core.model.PreparedPicture
 import dev.fitface.studio.core.model.pictureBaselineSize
 import dev.fitface.studio.core.model.pictureSizes
 import dev.fitface.studio.core.model.tinted
+import dev.fitface.studio.core.model.VideoClip
+import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.DirectInstallPayload
@@ -157,6 +160,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     /** A picked picture at its baseline size, kept while it is placed on the canvas. */
     private class Picture(val handle: String, val width: Int, val height: Int, val argb: IntArray)
     private var picture: Picture? = null
+    private val videoSource = AndroidVideoSource(context)
 
     override suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = withContext(Dispatchers.Default) {
         // This must not call openPackage: inspecting a donor never replaces the active project.
@@ -1391,7 +1395,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
         return snapshot
     }
 
-    override suspend fun readAnimation(imageUri: String): AnimationSource {
+    override suspend fun readAnimation(imageUri: String, clip: VideoClip?): AnimationSource {
+        if (clip != null || contentResolver.getType(Uri.parse(imageUri))?.startsWith("video/") == true) {
+            return readVideo(imageUri, clip)
+        }
         val bytes = withContext(Dispatchers.IO) { readPicked(imageUri, MAX_GIF_BYTES, "GIF") }
         val gif = withContext(Dispatchers.Default) {
             try {
@@ -1402,6 +1409,26 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
         return AnimationSource(imageUri, gif.width, gif.height,
             gif.frames.map { PreviewFrame(gif.width, gif.height, it.argb) }, gif.frames.map { it.delayMs })
+    }
+
+    /**
+     * A video's [requested] clip, or its first seconds, at the size that covers the selected
+     * variant's panel: ten frames a second, each shown 100 ms, from then on a GIF's frames.
+     */
+    private suspend fun readVideo(imageUri: String, requested: VideoClip?): AnimationSource {
+        val panel = mutex.withLock {
+            val current = requireSession()
+            FaceRecordParser.panelSize(current.currentContainer.entryByBasename(
+                current.selectedVariantName ?: current.styleEntries().first().basename))
+        }
+        return withContext(Dispatchers.IO) {
+            val video = videoSource.probe(imageUri)
+            val clip = requested?.takeIf { it.durationMs == video.durationMs } ?: VideoClip.opening(video.durationMs)
+            val (width, height) = VideoClip.frameSize(video.width, video.height,
+                panel.width.coerceAtLeast(1), panel.height.coerceAtLeast(1))
+            val frames = videoSource.frames(imageUri, video, clip, width, height)
+            AnimationSource(imageUri, width, height, frames, List(frames.size) { VideoClip.FRAME_MS }, clip)
+        }
     }
 
     /** What [addMovingBackground] checked under the lock, for the commit to check again. */
@@ -1443,7 +1470,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 }
                 val plan = AnimationTiming.plan(source.delaysMs, frameStep)
                 val size = current.currentContainer.fileSize
-                val proposed = size + movingBackgroundAddedBytes(plan.frames.size, plan.table.size, panel.width, panel.height)
+                val proposed = size + animationAddedBytes(plan.frames.size, plan.table.size, panel.width, panel.height)
                 if (proposed > WATCH_CONTAINER_BYTE_CEILING) throw Fit3CapacityException(size, proposed)
                 PreparedMovingBackground(current, current.currentContainer, variant, panel.width, panel.height, plan)
             }
@@ -1488,17 +1515,79 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val variant = current.selectedVariantName ?: current.styleEntries().first().basename
             val moving = MovingBackgroundEditor.read(current.currentContainer.entryByBasename(variant))
                 ?: throw WatchFaceException("This style has no moving background to remove.")
-            deleteMovingBackground(current, variant, moving.globalIndex, group = null)
+            deleteAddedAnimation(current, variant, moving.globalIndex, group = null)
+        }
+    }
+
+    /** What [addMovingPicture] checked under the lock, for the commit to check again. */
+    private class PreparedMovingPicture(
+        val session: Session,
+        val container: Fit3Container,
+        val variant: String,
+        val plan: AnimationPlan,
+    )
+
+    /**
+     * See [WatchFaceRepository.addMovingPicture]. Shaped like [addMovingBackground]: checked
+     * under the lock, every frame scaled off it, committed under it again only if nothing
+     * changed in between. Its record goes on top, after every other, so nothing is renumbered;
+     * it is an added widget with no original, as a moving background is, so the checkpoint
+     * needs nothing new.
+     */
+    override suspend fun addMovingPicture(source: AnimationSource, frameStep: Int, width: Int, height: Int,
+        x: Int, y: Int, tint: Int?): EditorSnapshot {
+        val prepared = withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                val variant = current.selectedVariantName ?: current.styleEntries().first().basename
+                val panel = FaceRecordParser.panelSize(current.currentContainer.entryByBasename(variant))
+                if (width !in 1..panel.width || height !in 1..panel.height || (width >= panel.width && height >= panel.height)) {
+                    throw WatchFaceException("A moving picture must fit on the face without covering all of it.")
+                }
+                val plan = AnimationTiming.plan(source.delaysMs, frameStep)
+                val size = current.currentContainer.fileSize
+                val proposed = size + animationAddedBytes(plan.frames.size, plan.table.size, width, height)
+                if (proposed > WATCH_CONTAINER_BYTE_CEILING) throw Fit3CapacityException(size, proposed)
+                PreparedMovingPicture(current, current.currentContainer, variant, plan)
+            }
+        }
+        val frames = withContext(Dispatchers.Default) {
+            prepared.plan.frames.map { index ->
+                currentCoroutineContext().ensureActive()
+                imageSource.scaled(source.frames[index], width, height).let { pixels -> tint?.let { tinted(pixels, it) } ?: pixels }
+            }
+        }
+        return withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                if (current !== prepared.session || current.currentContainer !== prepared.container) {
+                    throw WatchFaceException("The project changed while the moving picture was being prepared. Try adding it again.")
+                }
+                val variant = prepared.variant
+                val plan = prepared.plan
+                val result = MovingPicture.insert(current.currentContainer, variant, width, height, frames,
+                    plan.table, plan.periodMs, x, y)
+                commit(
+                    current,
+                    result.edit.container,
+                    result.edit.audit("Added a moving picture to $variant: ${width}x$height, ${plan.frames.size} frames, " +
+                        "${plan.table.size} steps of ${plan.periodMs} ms"),
+                    variant,
+                    lineage = current.identities().append(variant, result.globalIndex, NativeWidgetOrigin()),
+                    kind = EditKind.MOVING_PICTURE,
+                )
+            }
         }
     }
 
     /**
-     * Deletes [variant]'s moving background at [globalIndex] with every frame only it drew.
-     * Not parked under Removed: it was never part of the face, it can be added again, and a
-     * restorable entry would keep two or three megabytes of frames in the container, drawn by
-     * nothing — the reason imported widgets are deleted rather than removed.
+     * Deletes [variant]'s animation at [globalIndex] — a moving background or picture this app
+     * added — with every frame only it drew. Not parked under Removed: it was never part of the
+     * face, it can be added again, and a restorable entry would keep its frames (megabytes, for
+     * a background) in the container, drawn by nothing — the reason imported widgets are
+     * deleted rather than removed. Frames a duplicate still draws stay.
      */
-    private suspend fun deleteMovingBackground(current: Session, variant: String, globalIndex: Int, group: Long?): EditorSnapshot {
+    private suspend fun deleteAddedAnimation(current: Session, variant: String, globalIndex: Int, group: Long?): EditorSnapshot {
         val entry = current.currentContainer.entryByBasename(variant)
         val record = FaceRecordParser.scanWidgets(entry).single { it.globalIndex == globalIndex }
         val edit = StructuralEditor.deleteWidget(
@@ -1517,7 +1606,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         return commit(
             current,
             edit.container,
-            edit.audit("Moving background deleted with its frames from $variant"),
+            edit.audit("${if (MovingBackgroundEditor.read(entry)?.globalIndex == globalIndex) "Moving background" else "Moving picture"} " +
+                "deleted with its frames from $variant"),
             variant,
             importOrigins = current.importOrigins?.renumber(variant, mapping),
             droppedImages = edit.droppedImages,
@@ -1919,12 +2009,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // Its record goes; its artwork stays, because the widget it copied draws it.
             val duplicate = imported == null &&
                 current.identities().widgets[styleName]?.get(globalIndex)?.duplicate == true
-            // A moving background this app added is deleted with its frames, as from the
-            // Background page; one a face shipped with (none in the catalogue) stays restorable.
-            val moving = MovingBackgroundEditor.read(current.currentContainer.entryByBasename(styleName))
-            if (imported == null && moving?.globalIndex == globalIndex && widgetType == WIDGET_ANIMATION &&
+            // A moving background or picture this app added is deleted with its frames, as from
+            // the Background page; one a face shipped with (none in the catalogue) stays restorable.
+            if (imported == null && widgetType == WIDGET_ANIMATION &&
                 current.identities().widgets[styleName]?.get(globalIndex)?.originalIndex == null) {
-                return@withLock deleteMovingBackground(current, styleName, globalIndex, group)
+                return@withLock deleteAddedAnimation(current, styleName, globalIndex, group)
             }
             val edit = try {
                 if (imported != null) {
@@ -3524,6 +3613,24 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 FaceRecordParser.scanWidgets(originalEntry(styleName)).associateBy { it.globalIndex }
             }
 
+        /**
+         * [entry]'s moving pictures: Animations this app added (no original, and not the
+         * full-panel moving background), recognised from their records — they are saved as
+         * nothing more than an added widget.
+         */
+        fun movingPictureIndices(entry: ContainerEntry): Set<Int> {
+            val records = FaceRecordParser.scanWidgets(entry)
+            if (records.none { it.widgetType == WIDGET_ANIMATION }) return emptySet()
+            val origins = identities().widgets[entry.basename].orEmpty()
+            val guides = FaceRecordParser.widgetGuides(entry).associateBy { it.globalIndex }
+            val imported = importOrigins?.indices(entry.basename).orEmpty()
+            return records.filter { record ->
+                record.widgetType == WIDGET_ANIMATION && record.globalIndex !in imported &&
+                    origins[record.globalIndex]?.let { it.originalIndex == null } == true &&
+                    guides[record.globalIndex]?.placement != WidgetPlacement.BACKGROUND
+            }.mapTo(mutableSetOf()) { it.globalIndex }
+        }
+
         fun snapshot(requestedStyle: String? = null): EditorSnapshot {
             val styles = styleEntries()
             if (styles.isEmpty()) throw IllegalArgumentException("No editable style entries found")
@@ -3568,6 +3675,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 FaceRecordParser.scanWidgets(selected).associateBy { it.globalIndex }
             }
             val savedTurns = identities().takeIf { !it.artworkTurns.isNullOrEmpty() }
+            val movingPictures = movingPictureIndices(selected)
             val artworkKeys by lazy(LazyThreadSafetyMode.NONE) {
                 artworkKeys(selected.basename, FaceRecordParser.widgetGuides(selected)
                     .filter { it.rotationKind == WidgetRotationKind.ARTWORK }.map { it.globalIndex }.toSet())
@@ -3615,7 +3723,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         ?: original?.rotationTenths ?: widget.rotationTenths,
                     duplicateSourceGlobalIndex = duplicateSource,
                     importedFromFaceId = imported?.faceId?.takeIf { imported.kind == AddedWidgetKind.DONOR },
-                    addedKind = imported?.kind,
+                    addedKind = imported?.kind
+                        ?: AddedWidgetKind.MOVING_PICTURE.takeIf { widget.globalIndex in movingPictures },
                 )
             }
             // Every variant is reconstructed from its current records, in record order.
@@ -3697,6 +3806,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 movingBackground = MovingBackgroundEditor.read(selected),
                 activeMovingBackground = styles.firstOrNull { it.basename == (activeStyleName ?: styles.first().basename) }
                     ?.let(MovingBackgroundEditor::read),
+                activeMovingPictures = styles.firstOrNull { it.basename == (activeStyleName ?: styles.first().basename) }
+                    ?.let(MovingPicture::countOnTop) ?: 0,
+                widgetAnimations = composition.animations,
                 aodCanTakeBackground = aodEntry != null &&
                     StructuralEditor.backgroundStylesThatFit(
                         source = currentContainer,

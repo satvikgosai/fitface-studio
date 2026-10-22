@@ -3,6 +3,9 @@ package dev.fitface.studio.feature.editor
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.model.AnimationSource
+import dev.fitface.studio.core.model.VideoClip
+import dev.fitface.studio.core.model.animationAddedBytes
+import dev.fitface.studio.core.model.animationStepThatFits
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.EditKind
@@ -200,6 +203,77 @@ class EditorViewModelTest {
         viewModel.cancelBackground()
         assertNull(viewModel.state.value.pendingAnimation)
         assertNull(viewModel.state.value.pendingImage)
+    }
+
+    /**
+     * A GIF placed as a moving picture starts where a still picture would, at its own size
+     * here, keeping as many frames as fit at that size; Add sends the frames, not a picture.
+     */
+    @Test
+    fun aGifIsPlacedLikeAPictureKeepingTheFramesThatFitAtItsSize() {
+        val source = AnimationSource("content://gif", 120, 90,
+            List(20) { index -> PreviewFrame(120, 90, IntArray(120 * 90) { index }) }, List(20) { 100 })
+        val repository = FakeRepository(snapshot(widgets).copy(containerBytes = 4_100_000), commitImmediately = true)
+            .apply { animation = source }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingPicture("content://gif")
+        settle()
+        val pending = requireNotNull(viewModel.state.value.pendingPicture)
+        val animation = requireNotNull(pending.animation)
+        assertEquals(120 to 90, pending.size.width to pending.size.height)
+        val room = (WATCH_CONTAINER_BYTE_CEILING - 4_100_000).toLong()
+        assertEquals(animationStepThatFits(source.delaysMs, room, 120, 90), animation.step)
+        assertTrue("a face this full keeps some frames, not all", animation.step > 1)
+        assertSame(source.frames.first(), pending.prepared.preview)
+        assertEquals(animationAddedBytes(animation.plan.frames.size, animation.plan.table.size, 120, 90), pending.addedBytes)
+
+        viewModel.stepPictureSize(grow = false)
+        val smaller = requireNotNull(viewModel.state.value.pendingPicture)
+        assertTrue(smaller.size.width < 120)
+        viewModel.setMovingPictureStep(animation.step - 1)
+        viewModel.setPictureTint(0xFF00FF00.toInt())
+        viewModel.addPicture()
+        settle()
+        assertEquals(listOf(listOf<Any?>(animation.step - 1, smaller.size.width, smaller.size.height,
+            smaller.left, smaller.top, 0xFF00FF00.toInt())), repository.addedMovingPictures)
+        assertTrue("no still picture was added", repository.addedPictures.isEmpty())
+        assertNull(viewModel.state.value.pendingPicture)
+        assertEquals(9, viewModel.state.value.selectedWidgetIndex)
+    }
+
+    /** A video's clip is read again when it is moved, keeping the step and the place. */
+    @Test
+    fun aVideosClipIsReadAgainWhenItIsMovedOrStretched() {
+        val clip = VideoClip.opening(8000)
+        val source = AnimationSource("content://video", 64, 36,
+            List(clip.frames) { index -> PreviewFrame(64, 36, IntArray(64 * 36) { index }) }, List(clip.frames) { 100 }, clip)
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply { animation = source }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingPicture("content://video")
+        settle()
+        viewModel.setMovingPictureStep(2)
+        viewModel.transformPicture(1f, 0.05f, 0f)
+        val placed = requireNotNull(viewModel.state.value.pendingPicture)
+        viewModel.setVideoClip(requireNotNull(clip.later()))
+        settle()
+        assertEquals(listOf(VideoClip(8000, 500, 3000)), repository.clipsRead)
+        val moved = requireNotNull(viewModel.state.value.pendingPicture)
+        assertEquals(VideoClip(8000, 500, 3000), moved.animation?.source?.clip)
+        assertEquals(2, moved.animation?.step)
+        assertEquals(placed.centreX, moved.centreX)
+
+        // The same control on a moving background.
+        viewModel.discardPicture()
+        viewModel.prepareMovingBackground("content://video")
+        settle()
+        viewModel.setVideoClip(requireNotNull(clip.longer()))
+        settle()
+        assertEquals(VideoClip(8000, 0, 3500), viewModel.state.value.pendingAnimation?.source?.clip)
+        assertEquals(35, viewModel.state.value.pendingAnimation?.source?.frames?.size)
     }
 
     /** A pinch lands on a rung; a drag past the edge stops where a widget drag would. */
@@ -786,10 +860,29 @@ class EditorViewModelTest {
         /** Each moving background added: its placement and frame step. */
         val addedMoving = mutableListOf<Pair<ImagePlacement, Int>>()
 
-        override suspend fun readAnimation(imageUri: String) = requireNotNull(animation)
+        /** Each clip a video was read again over. */
+        val clipsRead = mutableListOf<VideoClip>()
+
+        override suspend fun readAnimation(imageUri: String, clip: VideoClip?): AnimationSource {
+            val source = requireNotNull(animation)
+            if (clip == null) return source
+            clipsRead += clip
+            return AnimationSource(source.uri, source.width, source.height,
+                List(clip.frames) { source.frames[it % source.frames.size] }, List(clip.frames) { 100 }, clip)
+        }
 
         override suspend fun addMovingBackground(source: AnimationSource, placement: ImagePlacement, frameStep: Int): EditorSnapshot {
             addedMoving += placement to frameStep
+            return current
+        }
+
+        /** Each moving picture added: its frame step, size, top-left and colour. */
+        val addedMovingPictures = mutableListOf<List<Any?>>()
+
+        override suspend fun addMovingPicture(source: AnimationSource, frameStep: Int, width: Int, height: Int,
+            x: Int, y: Int, tint: Int?): EditorSnapshot {
+            addedMovingPictures += listOf(frameStep, width, height, x, y, tint)
+            current = current.copy(widgets = current.widgets + widget(globalIndex = 9, x = x, y = y))
             return current
         }
 

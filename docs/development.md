@@ -46,9 +46,9 @@ credentials are deliberately not stored in this repository.
   :app:lintDebug
 ```
 
-Last recorded corpus-backed verification (2026-10-21, moving backgrounds from GIFs):
-**957 tests collected, 956 passed, 1 skipped, 0 failures, 0 lint errors,
-23 lint warnings.**
+Last recorded corpus-backed verification (2026-10-22, moving pictures and video clips):
+**972 tests collected, 971 passed, 1 skipped, 0 failures, 0 lint errors,
+25 lint warnings.**
 Those warnings were dependency/SDK notices. These are recorded results, not an
 assertion that a later checkout has already passed; run the command above.
 
@@ -91,8 +91,9 @@ Robolectric.
 appended Animation, Indexed8 palette alpha, large overhangs, face IDs outside the
 catalogue, a changed font binding, swapped date sources and a soft-edged appended picture.
 Their writers live in test code only. `MovingBackgroundProbesTest` builds moving backgrounds
-the way the app does (a held frame, one under a catalogue face's widgets, one on the
-always-on display). Every probe must validate and pass the delivery checks, and the test
+and pictures the way the app does (a held frame, one under a catalogue face's widgets, one on
+the always-on display, moving pictures over a face's widgets and off its edge, a
+video-rate background). Every probe must validate and pass the delivery checks, and the test
 fails if one does not. Pass `-Pfit3.probeOut=<dir>` (with `--rerun`)
 to also write each probe as a project archive, which the Library's Import opens like any
 other project. Never commit the output: it holds corpus artwork.

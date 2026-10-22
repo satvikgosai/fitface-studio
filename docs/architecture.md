@@ -238,7 +238,8 @@ columns stay NULL so a store update does not mark templates outdated. Archive ex
 retains that provenance. Existing recipe-1 projects keep their four styles, and
 recipe-1 and -2 projects keep `00006` and still install over Info_4.
 One style is absent from the vendor census (minimum three); activation names the
-remaining style, but a physical-watch test of this shape is still outstanding.
+remaining style. A custom face started in the app installed and drew on a watch
+(2026-10-22).
 Numbering needs no schema change: the number is the row's existing `faceId`, and
 archives already carry and check it. Deleting a custom face frees its number for the next
 one. With all fifty in use, the library refuses before downloading and the repository
@@ -247,8 +248,9 @@ imported archive keeps its number, as any copy keeps its face's, so the two repl
 other on the watch. Custom faces are named against each other (`findCustomFaces`, by
 `fit3-template://` key), not against their number's projects. Install names the face
 "Custom face 201", because its package metadata still says Info_4. On a watch, `00201`
-and `00202` installed beside Info_4 ([recorded](direct-install.md#recorded-on-a-watch));
-reinstalling one number alone, a reboot, and more than two have not been tried.
+and `00202`, then `00210`, `00211` and a face numbered by the app, installed as faces of
+their own ([recorded](direct-install.md#recorded-on-a-watch)); reinstalling one number
+alone and a reboot have not been tried.
 
 ## The project archive
 
@@ -307,10 +309,13 @@ exists and returns to 3 when every turn is reset, because readers decode with
 `ignoreUnknownKeys` and an older build would otherwise drop the turn and straighten the
 artwork on its next resize. See [format: rotating widgets](bin-format.md#rotating-widgets).
 
-A moving background ([format](bin-format.md#adding-a-moving-background)) needs no schema:
-its record is an added widget with no original, like an added still background, its timing
-lives in the record, and nothing about the GIF is kept. Removing it deletes it with its
-frames instead of parking it under Removed.
+A moving background ([format](bin-format.md#adding-a-moving-background)) or moving picture
+([format](bin-format.md#adding-a-moving-picture)) needs no schema: its record is an added
+widget with no original, like an added still background, its timing lives in the record,
+and nothing about the GIF or video is kept. The snapshot tells a moving picture apart from
+its record. Removing either deletes it with its frames instead of parking it under Removed.
+Video frames are read by `AndroidVideoSource` in `:core:data`, through the platform's
+`MediaMetadataRetriever`; `:core:model`'s `VideoClip` plans which.
 
 Schema 5 is schema 3 or 4 plus an added picture: a `WidgetImportOrigin` whose `kind` is
 `PICTURE`, with an empty donor face and a baseline that is one Static placed on the panel.
