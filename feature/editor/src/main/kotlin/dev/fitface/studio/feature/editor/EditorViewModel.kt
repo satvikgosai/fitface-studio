@@ -613,7 +613,11 @@ class EditorViewModel @Inject constructor(
         if (targets.any { (_, x, y) -> x !in Short.MIN_VALUE..Short.MAX_VALUE || y !in Short.MIN_VALUE..Short.MAX_VALUE }) {
             return
         }
-        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false, group = nudgeGroup) }
+        // A press that lands while the last one's members are still committing joins its undo
+        // step: the members it re-targets would otherwise commit under the new one, and undoing
+        // that would leave the set apart, the members already committed moved and the rest not.
+        val group = moves.firstNotNullOfOrNull { (_, base, _) -> base.group } ?: nudgeGroup
+        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false, group = group) }
         // Published once, for every member, after they are all queued: the canvas moves the
         // set as one picture on this step, whatever order the commits then land in.
         mutableState.value = mutableState.value.copy(

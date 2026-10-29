@@ -21,7 +21,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -185,7 +185,10 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 
+import kotlinx.coroutines.launch
 @Composable
 fun EditorRoute(
     projectId: Long,
@@ -2199,16 +2202,8 @@ private val NudgeArrowSize = 15.dp
 private val NudgeArrowStroke = 1.6.dp
 
 /**
- * Fires once on press and then keeps firing while the finger is down, so nudging a
- * widget across the face is one long press instead of forty taps.
- *
- * The repeat is driven from the press interaction rather than a click, because a
- * click only arrives on release. That alone dropped the shortest taps: the effect is
- * launched by the recomposition the press causes and runs a frame later, so a tap that
- * is over within that frame was cancelled before its first step ever ran, and a control
- * whose own label promises "tap for 1 px" moved nothing at all. The click is the
- * fallback for exactly that case, and [steppedWhilePressed] keeps the release of a
- * longer press from adding a step the repeat already made.
+ * Steps once for a tap and keeps stepping while the finger is down, so nudging a widget
+ * across the face is one long press instead of forty taps. See [NudgeRepeater].
  */
 @Composable
 private fun RepeatingNudgeButton(
@@ -2259,40 +2254,27 @@ private fun RepeatingButton(
     content: @Composable RowScope.() -> Unit,
 ) {
     val interactions = remember { MutableInteractionSource() }
-    val pressed by interactions.collectIsPressedAsState()
     val step by rememberUpdatedState(onStep)
     val press by rememberUpdatedState(onPress)
-    val steppedWhilePressed = remember { mutableStateOf(false) }
+    val repeater = remember { NudgeRepeater(onPress = { press() }, onStep = { step(it) }) }
 
-    LaunchedEffect(pressed, enabled) {
-        if (!pressed || !enabled) return@LaunchedEffect
-        press()
-        // The first step is always the one the label promises, however long the press
-        // turns out to be: a hold that began as a tap must not overshoot.
-        step(1)
-        steppedWhilePressed.value = true
-        delay(FirstRepeatDelayMillis)
-        var interval = RepeatIntervalMillis
-        var repeat = 0
-        while (true) {
-            step(nudgeStepPixels(repeat))
-            repeat++
-            delay(interval)
-            // The repeat rate accelerates too, but never faster than the editor can
-            // commit an edit. Rate alone was not enough: at one pixel a tick, the far
-            // side of a 402px panel is still half a minute away.
-            interval = (interval - 8).coerceAtLeast(MinRepeatIntervalMillis)
+    LaunchedEffect(interactions, enabled) {
+        // A hold this replaced (the button was disabled under it) has ended without a click.
+        repeater.cancelled()
+        if (!enabled) return@LaunchedEffect
+        // The interactions themselves, in order, rather than a pressed state that reaches a
+        // recomposition a frame or more after the release it should have stopped at.
+        interactions.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> repeater.pressed(this@LaunchedEffect)
+                is PressInteraction.Release -> repeater.released()
+                is PressInteraction.Cancel -> repeater.cancelled()
+            }
         }
     }
 
     FitButton(
-        onClick = {
-            if (!steppedWhilePressed.value) {
-                press()
-                step(1)
-            }
-            steppedWhilePressed.value = false
-        },
+        onClick = repeater::clicked,
         modifier = modifier,
         enabled = enabled,
         style = FitButtonStyle.Secondary,
@@ -2324,7 +2306,7 @@ internal fun nudgeStepPixels(repeat: Int): Int = when {
     else -> 1
 }
 
-private const val FirstRepeatDelayMillis = 420L
+internal const val FirstRepeatDelayMillis = 420L
 
 /** Repetitions before a held nudge widens its step, and how far it widens it. */
 private const val MediumNudgeRepeat = 10
@@ -2333,6 +2315,76 @@ private const val MediumNudgePixels = 2
 private const val CoarseNudgePixels = 5
 private const val RepeatIntervalMillis = 110L
 private const val MinRepeatIntervalMillis = 45L
+
+/**
+ * One arrow's taps and holds, as steps: a tap is one step, from its click; a hold steps
+ * from [FirstRepeatDelayMillis] on, coarser as it goes, and its release adds nothing. Each
+ * gesture is one [onPress], so one undo step.
+ *
+ * The first step used to be taken on the press, with the click as a fallback for a tap
+ * too short for the press to be seen. A slow phone sees the press after the click it
+ * belongs to, and then both stepped: one tap moved 2 px, as two presses, and the second
+ * press's undo step took over the members of a set the first had not committed yet, so
+ * undoing it left the set apart. Now a tap only ever steps from its click and a hold only
+ * from its timer, which the click stops, so the order press, click and release arrive in
+ * cannot add a step. Pure of Compose, so a test can play them in any order.
+ */
+internal class NudgeRepeater(
+    private val onPress: () -> Unit,
+    private val onStep: (Int) -> Unit,
+) {
+    private var hold: Job? = null
+
+    /** This press's hold has stepped, so its click is a release, not a tap. */
+    private var held = false
+
+    /** This press's click has come: a hold still waiting must not start. */
+    private var clicked = false
+
+    fun pressed(scope: CoroutineScope) {
+        hold?.cancel()
+        held = false
+        clicked = false
+        hold = scope.launch {
+            delay(FirstRepeatDelayMillis)
+            if (clicked) return@launch
+            held = true
+            onPress()
+            var interval = RepeatIntervalMillis
+            var repeat = 0
+            while (!clicked) {
+                onStep(nudgeStepPixels(repeat))
+                repeat++
+                delay(interval)
+                // The repeat rate accelerates too, but never faster than the editor can
+                // commit an edit. Rate alone was not enough: at one pixel a tick, the far
+                // side of a 402px panel is still half a minute away.
+                interval = (interval - 8).coerceAtLeast(MinRepeatIntervalMillis)
+            }
+        }
+    }
+
+    fun released() {
+        hold?.cancel()
+    }
+
+    /** The finger left the button, or the button went away: no click follows. */
+    fun cancelled() {
+        hold?.cancel()
+        held = false
+    }
+
+    /** A tap, a hold's release, or an accessibility click, which has no press at all. */
+    fun clicked() {
+        if (held) {
+            held = false
+        } else {
+            onPress()
+            onStep(1)
+        }
+        clicked = true
+    }
+}
 
 @Composable
 private fun CanvasSidePane(
