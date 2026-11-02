@@ -1861,6 +1861,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         y: Int,
         colorArgb: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1886,6 +1887,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 ),
                 styleName,
                 kind = EditKind.COLOUR,
+                group = group,
             )
         }
     }
@@ -1898,6 +1900,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1933,6 +1936,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 ),
                 styleName,
                 kind = EditKind.COLOUR,
+                group = group,
             )
         }
     }

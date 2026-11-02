@@ -239,6 +239,25 @@ fun FitIconButton(
      */
     selected: Boolean = false,
 ) {
+    FitIconButton(contentDescription, onClick, modifier, enabled, tint, selected) {
+        Text(glyph, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+/**
+ * [FitIconButton] with drawn content in place of a glyph — a colour swatch, a drawn mark — so
+ * a row of them shares one size, border and **on** look with the glyph buttons beside it.
+ */
+@Composable
+fun FitIconButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tint: Color? = null,
+    selected: Boolean = false,
+    content: @Composable () -> Unit,
+) {
     val accent = MaterialTheme.colorScheme.primary
     OutlinedButton(
         onClick = onClick,
@@ -265,7 +284,7 @@ fun FitIconButton(
             disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = .28f),
         ),
     ) {
-        Text(glyph, style = MaterialTheme.typography.titleLarge)
+        content()
     }
 }
 

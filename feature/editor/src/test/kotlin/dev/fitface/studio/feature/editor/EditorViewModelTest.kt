@@ -890,6 +890,59 @@ class EditorViewModelTest {
         assertEquals(teal, viewModel.state.value.snapshot?.widgets?.single()?.colorArgb)
     }
 
+    /**
+     * The Canvas's Colour page saves a strip when the finger lifts. A lift while the last one
+     * saves is queued, the latest winning, and saved straight after in the same undo group;
+     * Edit widget's tap mid-save is still dropped, as it always was.
+     */
+    @Test
+    fun aQuickColourReleasedWhileOneSavesIsSavedAfterItInTheSameGroup() {
+        val teal = 0xFF75D8D6.toInt()
+        val red = 0xFFFF0000.toInt()
+        val green = 0xFF00FF00.toInt()
+        val blue = 0xFF0000FF.toInt()
+        val text = widget(globalIndex = 1, x = 20, y = 20).copy(type = 13, colorArgb = teal, originalColorArgb = teal)
+        val repository = FakeRepository(snapshot(listOf(text)))
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.selectWidget(1)
+
+        viewModel.setSelectedWidgetColor(red, 7L)
+        settle() // Parked: red is saving.
+        viewModel.setSelectedWidgetColor(green, 7L)
+        viewModel.setSelectedWidgetColor(blue, 7L)
+        viewModel.setSelectedWidgetColor(0xFFFFFFFF.toInt())
+        repository.releaseAll()
+        settle()
+
+        assertEquals(listOf(13 to red, 13 to blue), repository.colors)
+        assertEquals(listOf<Long?>(7L, 7L), repository.colorGroups)
+        assertEquals(blue, viewModel.state.value.snapshot?.widgets?.single()?.colorArgb)
+    }
+
+    /** A queued colour belongs to the widget it was chosen for; selecting another drops it. */
+    @Test
+    fun aQueuedQuickColourIsDroppedWhenAnotherWidgetIsSelected() {
+        val teal = 0xFF75D8D6.toInt()
+        val first = widget(globalIndex = 1, x = 20, y = 20).copy(type = 13, colorArgb = teal, originalColorArgb = teal)
+        val second = widget(globalIndex = 2, x = 60, y = 60).copy(type = 13, colorArgb = teal, originalColorArgb = teal)
+        val repository = FakeRepository(snapshot(listOf(first, second)))
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.selectWidget(1)
+
+        viewModel.setSelectedWidgetColor(0xFFFF0000.toInt(), 7L)
+        settle()
+        viewModel.setSelectedWidgetColor(0xFF0000FF.toInt(), 7L)
+        viewModel.selectWidget(2)
+        repository.releaseAll()
+        settle()
+
+        assertEquals(listOf(13 to 0xFFFF0000.toInt()), repository.colors)
+    }
+
     // ---------------------------------------------------------------------------
     // Harness
     // ---------------------------------------------------------------------------
@@ -975,6 +1028,9 @@ class EditorViewModelTest {
         /** Every colour edit, as the widget type and the colour, or null for a reset. */
         val colors = mutableListOf<Pair<Int, Int?>>()
 
+        /** The undo group each colour edit was saved in, in order. */
+        val colorGroups = mutableListOf<Long?>()
+
         override suspend fun recolorWidget(
             styleName: String,
             globalIndex: Int,
@@ -984,8 +1040,11 @@ class EditorViewModelTest {
             y: Int,
             colorArgb: Int,
             applyToAllStyles: Boolean,
+            group: Long?,
         ): EditorSnapshot {
+            if (!commitImmediately) gate.await()
             colors += widgetType to colorArgb
+            colorGroups += group
             current = current.copy(widgets = current.widgets.map {
                 if (it.globalIndex == globalIndex) it.copy(colorArgb = colorArgb) else it
             })
@@ -1000,8 +1059,10 @@ class EditorViewModelTest {
             x: Int,
             y: Int,
             applyToAllStyles: Boolean,
+            group: Long?,
         ): EditorSnapshot {
             colors += widgetType to null
+            colorGroups += group
             current = current.copy(widgets = current.widgets.map {
                 if (it.globalIndex == globalIndex) it.copy(colorArgb = it.originalColorArgb) else it
             })

@@ -231,7 +231,13 @@ internal fun ColourPicker(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ColorSliders(hsv: Hsv, enabled: Boolean, onChange: (Hsv) -> Unit) {
+internal fun ColorSliders(
+    hsv: Hsv,
+    enabled: Boolean,
+    onChange: (Hsv) -> Unit,
+    /** When a drag ends: the Canvas's Colour page saves here rather than on every step. */
+    onRelease: () -> Unit = {},
+) {
     val labels = listOf(
         R.string.editor_color_hue,
         R.string.editor_color_saturation,
@@ -271,6 +277,7 @@ private fun ColorSliders(hsv: Hsv, enabled: Boolean, onChange: (Hsv) -> Unit) {
                     },
                     modifier = Modifier.weight(1f).semantics { contentDescription = name },
                     enabled = enabled,
+                    onValueChangeFinished = onRelease,
                     thumb = {
                         // A ring, so the track's colour under it stays visible; the dark edge
                         // keeps the white ring readable on the white end of a track.

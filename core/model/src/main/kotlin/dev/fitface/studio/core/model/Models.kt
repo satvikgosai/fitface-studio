@@ -1434,6 +1434,8 @@ interface WatchFaceRepository {
         y: Int,
         colorArgb: Int,
         applyToAllStyles: Boolean,
+        /** Edits sharing a group in a row are one undo step: a run of quick-colour drags. */
+        group: Long? = null,
     ): EditorSnapshot
 
     /**
@@ -1448,6 +1450,7 @@ interface WatchFaceRepository {
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long? = null,
     ): EditorSnapshot
 
     suspend fun moveWidget(

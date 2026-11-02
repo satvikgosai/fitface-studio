@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -457,7 +458,7 @@ private fun EditorScreen(
     onBackgroundImported: (EditorSnapshot) -> Unit,
     onStylesDeleted: (EditorSnapshot) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
-    onWidgetColor: (Int?) -> Unit,
+    onWidgetColor: (Int?, Long?) -> Unit,
     onRotateWidget: (Int) -> Unit,
     onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -519,6 +520,11 @@ private fun EditorScreen(
             importingBackground = false
             page = EditorPage.Canvas
         })
+    // A picture chosen from the Canvas's Layers page is placed on the Widgets page, where
+    // placing one happens; the Canvas has no controls for it.
+    LaunchedEffect(state.pendingPicture != null) {
+        if (state.pendingPicture != null && page == EditorPage.Canvas) page = EditorPage.Widgets
+    }
     // An added picture is shown where it landed, selected, as an import is.
     LaunchedEffect(state.pictureAdded?.id) {
         state.pictureAdded?.let { added ->
@@ -1030,8 +1036,45 @@ internal fun RailItem(
  */
 private val RailLabel = FitFaceType.micro.copy(letterSpacing = 0.sp)
 
-/** Between two buttons of the selection tray, on both of its rows. */
-private val ActionGap = 6.dp
+/**
+ * The selection tray's frame. Every page of it — the actions, Colour, the set tray — is built
+ * on these, so a swipe between pages moves nothing that stays: the title, both button rows and
+ * the hint sit at the same heights and gaps.
+ */
+internal val TrayPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+internal val TrayFirstRowTop = 10.dp
+/** The four nudge arrows' gap: a hair wider than the second row's, as shipped. */
+internal val TrayFirstRowGap = 7.dp
+internal val TraySecondRowTop = 7.dp
+internal val TraySecondRowGap = 6.dp
+internal val TrayHintTop = 9.dp
+/** A square tray button's height; anything else in a button row is held to it. */
+internal val TrayButtonHeight = 38.dp
+
+/**
+ * A tray page's title: the accent bar and the name, with the corner kept free for the page
+ * dots. [trailing] takes that corner instead where a page has no dots over it.
+ */
+@Composable
+internal fun TrayTitle(
+    title: String,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(Modifier.width(3.dp).height(24.dp).background(MaterialTheme.colorScheme.primary))
+        Text(
+            title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (trailing != null) trailing() else Spacer(Modifier.width(QuickPageDotsReserve - 10.dp))
+    }
+}
 
 private val RailItemHorizontalPadding = 2.dp
 
@@ -1134,7 +1177,7 @@ private fun EditorPageContent(
     onManageStyles: () -> Unit,
     onDeleteStyle: (String) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
-    onWidgetColor: (Int?) -> Unit,
+    onWidgetColor: (Int?, Long?) -> Unit,
     onRotateWidget: (Int) -> Unit,
     onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
     onSyncThumbnail: () -> Unit,
@@ -1164,7 +1207,8 @@ private fun EditorPageContent(
     when (page) {
         EditorPage.Canvas -> CanvasWorkspace(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
-            onResizeWidget, onRotateWidget, onDuplicateWidget, onRemoveWidget,
+            onResizeWidget, onRotateWidget, onWidgetColor, onArrangeWidget, onApplyAll, onImportWidget,
+            pictures.onChoose, onDuplicateWidget, onRemoveWidget,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
             selection, onUndo, onRedo, modifier,
         )
@@ -1195,7 +1239,7 @@ private fun EditorPageContent(
         )
         EditorPage.Inspector -> InspectorWorkspace(
             state, snapshot, selected, onNudgeWidget, onPlaceWidget, selection.onBeginNudge, onApplyAll, onRemoveWidget,
-            onDuplicateWidget, onResizeWidget, onWidgetColor, onRotateWidget, onArrangeWidget, modifier,
+            onDuplicateWidget, onResizeWidget, { onWidgetColor(it, null) }, onRotateWidget, onArrangeWidget, modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
@@ -1248,6 +1292,11 @@ private fun CanvasWorkspace(
     onTransformImage: (Float, Float, Float) -> Unit,
     onResizeWidget: (Boolean) -> Unit,
     onRotateWidget: (Int) -> Unit,
+    onWidgetColor: (Int?, Long?) -> Unit,
+    onArrangeWidget: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
+    onApplyAll: (Boolean) -> Unit,
+    onImportWidget: () -> Unit,
+    onAddPicture: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRemoveWidget: () -> Unit,
     onOpenWidgets: () -> Unit,
@@ -1275,18 +1324,48 @@ private fun CanvasWorkspace(
             )
         }
         val actions: @Composable (WidgetGuide) -> Unit = { widget ->
-            SelectionActionBar(
-                widget = widget,
-                state = state,
-                snapshot = snapshot,
-                onNudgeWidget = onNudgeWidget,
-                onResize = onResizeWidget,
-                onRotate = onRotateWidget,
-                onDuplicate = onDuplicateWidget,
-                onRemove = onRemoveWidget,
-                onInspect = onInspect,
-                onBeginNudge = selection.onBeginNudge,
-            )
+            QuickPanelPager { page, active ->
+                when (page) {
+                    QuickPage.Main -> SelectionActionBar(
+                        widget = widget,
+                        state = state,
+                        snapshot = snapshot,
+                        onNudgeWidget = onNudgeWidget,
+                        onResize = onResizeWidget,
+                        onRotate = onRotateWidget,
+                        onDuplicate = onDuplicateWidget,
+                        onRemove = onRemoveWidget,
+                        onInspect = onInspect,
+                        onBeginNudge = selection.onBeginNudge,
+                    )
+                    QuickPage.Colour -> QuickColourPage(
+                        widget = widget,
+                        title = widget.readingLabel(),
+                        scope = when {
+                            !snapshot.isAodSelected && snapshot.styleNames.size <= 1 -> null
+                            state.editsReachOtherStyles && widget.addedKind == null ->
+                                stringResource(R.string.editor_tray_scope_all)
+                            else -> stringResource(R.string.editor_tray_scope_one, snapshot.selectedVariantLabel())
+                        },
+                        isWorking = state.isWorking,
+                        active = active,
+                        onColour = onWidgetColor,
+                        onInspect = onInspect,
+                    )
+                    QuickPage.Layers -> QuickLayersPage(
+                        widget = widget,
+                        title = widget.readingLabel(),
+                        snapshot = snapshot,
+                        allStyles = state.applyWidgetEditsToAllStyles,
+                        isWorking = state.isWorking,
+                        onArrange = onArrangeWidget,
+                        onApplyAll = onApplyAll,
+                        onImportWidget = onImportWidget,
+                        onAddPicture = onAddPicture,
+                        onInspect = onInspect,
+                    )
+                }
+            }
         }
         val tray: @Composable () -> Unit = {
             when {
@@ -1606,23 +1685,11 @@ private fun SelectionActionBar(
     val enabled = !state.isWorking
     Column(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(TrayPadding),
     ) {
-        // Nothing to the right of the title: the actions are all on the row below, and a
-        // second row of icons up here was three more things to learn for one widget.
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Box(Modifier.width(3.dp).height(24.dp).background(MaterialTheme.colorScheme.primary))
-            Text(
-                widget.readingLabel(),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        // Nothing to the right of the title but the page dots: the actions are all on the
+        // rows below, and a second row of icons up here was three more things to learn.
+        TrayTitle(widget.readingLabel())
         Text(
             // The rectangle the canvas outlines, not the stored endpoint. Reading
             // the stored coordinate here reported a far-end Rule's far endpoint —
@@ -1639,8 +1706,8 @@ private fun SelectionActionBar(
             style = FitFaceType.numeric,
         )
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = TrayFirstRowTop),
+            horizontalArrangement = Arrangement.spacedBy(TrayFirstRowGap),
         ) {
             NudgeDirection.entries.forEach { direction ->
                 RepeatingNudgeButton(
@@ -1663,8 +1730,8 @@ private fun SelectionActionBar(
         // hole in it. The pairs that do one job sit together: smaller and larger, then
         // rotate left and right, then the two that make or remove a widget.
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(ActionGap),
+            modifier = Modifier.fillMaxWidth().padding(top = TraySecondRowTop),
+            horizontalArrangement = Arrangement.spacedBy(TraySecondRowGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // `−` `+` `⧉` `✕` — picked off a rendered sampler rather than a character
@@ -1726,7 +1793,7 @@ private fun SelectionActionBar(
                     else -> R.string.editor_nudge_hint_no_drag
                 },
             ),
-            Modifier.align(Alignment.CenterHorizontally).padding(top = 9.dp),
+            Modifier.align(Alignment.CenterHorizontally).padding(top = TrayHintTop),
         )
     }
 }
@@ -1883,7 +1950,7 @@ private fun SelectionSetBar(
     val movable = picks.any { it.canEditPosition }
     Column(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(TrayPadding),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1920,8 +1987,8 @@ private fun SelectionSetBar(
             )
         }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = TrayFirstRowTop),
+            horizontalArrangement = Arrangement.spacedBy(TrayFirstRowGap),
         ) {
             NudgeDirection.entries.forEach { direction ->
                 RepeatingNudgeButton(
@@ -1936,8 +2003,8 @@ private fun SelectionSetBar(
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(ActionGap),
+            modifier = Modifier.fillMaxWidth().padding(top = TraySecondRowTop),
+            horizontalArrangement = Arrangement.spacedBy(TraySecondRowGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             FitIconButton(
@@ -1984,7 +2051,7 @@ private fun SelectionSetBar(
         }
         MicroLabel(
             stringResource(if (movable) R.string.editor_nudge_hint_set else R.string.editor_nudge_locked),
-            Modifier.align(Alignment.CenterHorizontally).padding(top = 9.dp),
+            Modifier.align(Alignment.CenterHorizontally).padding(top = TrayHintTop),
         )
     }
 }

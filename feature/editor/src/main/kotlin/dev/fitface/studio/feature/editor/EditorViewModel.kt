@@ -91,6 +91,9 @@ internal object EditGroups {
     fun next(): Long = last.incrementAndGet()
 }
 
+/** A colour waiting for the save in progress, for the widget that was selected then. */
+private data class QueuedColour(val globalIndex: Int, val colorArgb: Int?, val group: Long)
+
 /** "Undid move", shown once after an undo or a redo. */
 data class HistoryNotice(val id: Long, val undone: Boolean, val kind: EditKind)
 
@@ -283,6 +286,12 @@ class EditorViewModel @Inject constructor(
 
     /** The group a nudge press commits under; a new press starts a new one. */
     private var nudgeGroup: Long = EditGroups.next()
+
+    /**
+     * A quick-colour choice that arrived while another edit was saving: the latest wins and
+     * is saved as soon as the save ends, so a drag released mid-save is not lost.
+     */
+    private var queuedColour: QueuedColour? = null
 
     /** The coroutine committing queued moves, while there is one. Undo waits for it. */
     private var moveWorker: Job? = null
@@ -1471,9 +1480,22 @@ class EditorViewModel @Inject constructor(
      * Sets the selected widget's colour, or — given null — returns it to the colour each
      * style in scope shipped with.
      */
-    fun setSelectedWidgetColor(colorArgb: Int?) {
+    /**
+     * Recolours the selected widget, or returns it to its original colours with null.
+     *
+     * A [group] comes from the Canvas's Colour page: its drags save on release, a run of them
+     * is one undo step, and one released while an edit saves is queued rather than dropped.
+     * Edit widget passes none and keeps the old rule: a tap while saving does nothing.
+     */
+    fun setSelectedWidgetColor(colorArgb: Int?, group: Long? = null) {
         val current = mutableState.value
-        if (current.isWorking) return
+        if (current.isWorking) {
+            if (group != null) {
+                current.selectedWidgetIndex?.let { queuedColour = QueuedColour(it, colorArgb, group) }
+            }
+            return
+        }
+        queuedColour = null
         val snapshot = current.snapshot ?: return
         val selected = snapshot.widgets.singleOrNull {
             it.globalIndex == current.selectedWidgetIndex
@@ -1482,14 +1504,23 @@ class EditorViewModel @Inject constructor(
         if (colorArgb != null && colorArgb ushr 24 != 0xFF) return
         val style = snapshot.selectedVariant.basename
         val allStyles = current.applyWidgetEditsToAllStyles
-        operate {
+        operate(then = ::saveQueuedColour) {
             if (colorArgb == null) {
                 repository.resetWidgetColor(style, selected.globalIndex, selected.type,
-                    selected.sequenceId, selected.x, selected.y, allStyles)
+                    selected.sequenceId, selected.x, selected.y, allStyles, group)
             } else {
                 repository.recolorWidget(style, selected.globalIndex, selected.type,
-                    selected.sequenceId, selected.x, selected.y, colorArgb, allStyles)
+                    selected.sequenceId, selected.x, selected.y, colorArgb, allStyles, group)
             }
+        }
+    }
+
+    /** Saves the colour queued during the last save, if the same widget is still selected. */
+    private fun saveQueuedColour() {
+        val queued = queuedColour ?: return
+        queuedColour = null
+        if (mutableState.value.selectedWidgetIndex == queued.globalIndex) {
+            setSelectedWidgetColor(queued.colorArgb, queued.group)
         }
     }
 
@@ -1643,6 +1674,8 @@ class EditorViewModel @Inject constructor(
 
     private fun operate(
         onSuccess: (EditorUiState) -> EditorUiState = { it },
+        /** Runs once the edit has landed or failed and the editor is idle again. */
+        then: () -> Unit = {},
         block: suspend () -> EditorSnapshot,
     ) {
         viewModelScope.launch {
@@ -1684,6 +1717,7 @@ class EditorViewModel @Inject constructor(
                     )
                 }
                 .onFailure(::showFailure)
+            then()
         }
     }
 
