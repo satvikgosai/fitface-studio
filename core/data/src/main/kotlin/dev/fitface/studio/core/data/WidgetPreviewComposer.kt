@@ -2,6 +2,7 @@ package dev.fitface.studio.core.data
 
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.FaceRecordParser
+import dev.fitface.studio.core.format.MovingBackgroundEditor
 import dev.fitface.studio.core.format.WidgetFields
 import dev.fitface.studio.core.format.WidgetPreviewSample
 import dev.fitface.studio.core.format.WidgetText
@@ -130,8 +131,9 @@ internal object WidgetPreviewComposer {
         }
         // Background replacement edits the primary background raster, not every panel-sized
         // record. A second full-panel layer must remain above the replacement preview too.
+        // A moving background goes too: a new background, still or moving, replaces it.
         val primaryBackground = FaceRecordParser.backgroundImage(entry)
-        val backgrounds = if (primaryBackground == null) emptySet() else {
+        val stills = if (primaryBackground == null) emptySet() else {
             FaceRecordParser.scanWidgets(entry).filter { record ->
                 record.widgetType == 1 && runCatching {
                     FaceRecordParser.resourceImages(entry, record)
@@ -139,6 +141,7 @@ internal object WidgetPreviewComposer {
                 }.getOrDefault(false)
             }.map { it.globalIndex }.toSet()
         }
+        val backgrounds = stills + setOfNotNull(runCatching { MovingBackgroundEditor.read(entry)?.globalIndex }.getOrNull())
         return WidgetPreview(
             WidgetLayerComposer.compose(panel.width, panel.height, layers, guides),
             WidgetLayerComposer.compose(panel.width, panel.height,

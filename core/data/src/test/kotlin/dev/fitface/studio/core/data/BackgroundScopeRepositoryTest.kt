@@ -6,11 +6,13 @@ import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.fitface.studio.core.data.db.FitFaceDatabase
+import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
+import dev.fitface.studio.core.model.WatchFaceException
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
@@ -33,7 +35,8 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * "This style only": a background replaced, added or imported for the selected style alone
- * leaves every other style's bytes as they were, and the default still writes them all.
+ * leaves every other style's bytes as they were, and the repository's default still writes them
+ * all; removing one paints it black in the same scope.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -116,6 +119,64 @@ class BackgroundScopeRepositoryTest {
         val after = entries()
         (before.keys - "style0.bin").forEach { name ->
             assertArrayEquals("$name is untouched", before.getValue(name), after.getValue(name))
+        }
+    }
+
+    /**
+     * Issue on face 00043: four styles, each its own background. With a later style selected,
+     * this style alone changes it there and every other style keeps its own picture.
+     */
+    @Test fun eachStyleOf00043KeepsItsOwnBackground() = runBlocking {
+        repository.openPackage(face("00043"))
+        val selected = repository.currentSnapshot("style2.bin")
+        assertTrue(selected.offersBackgroundScope)
+        val before = entries()
+        repository.replaceBackground(png(), ImagePlacement(fit = ImageFit.STRETCH), thisStyleOnly = true)
+        val after = entries()
+        assertFalse(before.getValue("style2.bin").contentEquals(after.getValue("style2.bin")))
+        (before.keys - "style2.bin").forEach { name ->
+            assertArrayEquals("$name kept its background", before.getValue(name), after.getValue(name))
+        }
+    }
+
+    /**
+     * Remove background paints it black, in the scope chosen, keeping its raster: the size does
+     * not change, a second Remove is refused, Undo brings it back and a picture still replaces it.
+     */
+    @Test fun removingABackgroundPaintsItBlackInTheScopeChosen() = runBlocking {
+        val opened = repository.openPackage(face("00043"))
+        repository.currentSnapshot("style1.bin")
+        val before = entries()
+        val removed = repository.removeBackground(thisStyleOnly = true)
+        assertEquals(opened.containerBytes, removed.containerBytes)
+        assertTrue("it still has a raster a picture can replace", "style1.bin" in removed.backgroundStyles)
+        assertFalse("but shows none, so Remove is not offered again", removed.selectedBackgroundShown)
+        val container = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        val entry = container.entryByBasename("style1.bin")
+        val raster = requireNotNull(FaceRecordParser.backgroundImage(entry))
+        assertTrue(FaceRecordParser.decodeImage(entry, raster).argb.all { it and 0xFFFFFF == 0 })
+        val after = entries()
+        (before.keys - "style1.bin").forEach { name ->
+            assertArrayEquals("$name kept its background", before.getValue(name), after.getValue(name))
+        }
+
+        val again = runCatching { repository.removeBackground(thisStyleOnly = true) }.exceptionOrNull()
+        assertEquals("There is no background here to remove.", (again as WatchFaceException).userMessage)
+        assertFalse(repository.currentSnapshot().selectedBackgroundShown)
+
+        repository.undo()
+        assertArrayEquals(before.getValue("style1.bin"), entries().getValue("style1.bin"))
+        repository.removeBackground(thisStyleOnly = true)
+        repository.replaceBackground(png(), ImagePlacement(fit = ImageFit.STRETCH), thisStyleOnly = true)
+        assertFalse(after.getValue("style1.bin").contentEquals(entries().getValue("style1.bin")))
+
+        // All styles paints every style's.
+        repository.removeBackground()
+        val all = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
+        opened.backgroundStyles.forEach { name ->
+            val styled = all.entryByBasename(name)
+            val image = requireNotNull(FaceRecordParser.backgroundImage(styled))
+            assertTrue("$name is black", FaceRecordParser.decodeImage(styled, image).argb.all { it and 0xFFFFFF == 0 })
         }
     }
 

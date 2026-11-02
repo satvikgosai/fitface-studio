@@ -965,6 +965,12 @@ data class EditorSnapshot(
     val aodCanTakeBackground: Boolean = false,
     /** The selected variant's moving background, which the Background page shows and removes. */
     val movingBackground: MovingBackground? = null,
+    /**
+     * Whether the selected variant shows a background: a moving one, or a still one that draws
+     * more than black. A removed background is painted black, so this, not
+     * [selectedVariantHasBackground], is what decides whether Remove is offered.
+     */
+    val selectedBackgroundShown: Boolean = false,
     /** The active style's moving background: what Install says will play on the watch. */
     val activeMovingBackground: MovingBackground? = null,
     /**
@@ -1299,8 +1305,9 @@ interface WatchFaceRepository {
     /**
      * [source] as the selected variant's moving background: every [frameStep]th frame, each
      * placed by [placement] (and coloured by its tint) the way a still background is, played
-     * as [AnimationTiming.plan] times it. Refused when the variant already has one or it would
-     * not fit under the watch's ceiling.
+     * as [AnimationTiming.plan] times it. It replaces the variant's background in the same edit:
+     * a moving one is deleted, its room counted free, and a still one painted black, so removing
+     * the moving one later leaves none. Refused when it would not fit under the watch's ceiling.
      */
     suspend fun addMovingBackground(source: AnimationSource, placement: ImagePlacement, frameStep: Int): EditorSnapshot =
         throw UnsupportedOperationException()
@@ -1366,6 +1373,11 @@ interface WatchFaceRepository {
 
     suspend fun prepareReplacementImage(imageUri: String): ReplacementImage
 
+    /**
+     * The picture at [imageUri] as the background, placed by [placement], in the styles
+     * that carry one. The selected variant's moving background, if it has one, is deleted in
+     * the same edit: its frames are opaque, so nothing under them would show.
+     */
     suspend fun replaceBackground(
         imageUri: String,
         placement: ImagePlacement,
@@ -1379,7 +1391,8 @@ interface WatchFaceRepository {
      *
      * Separate from [replaceBackground] because it is a different edit: that one patches
      * pixels in place, this one grows the container. Both end with the same picture on
-     * the watch, and which applies is decided by [EditorSnapshot.canAddBackground].
+     * the watch, and which applies is decided by [EditorSnapshot.canAddBackground]. Like
+     * [replaceBackground], it replaces the selected variant's moving background.
      */
     suspend fun addBackground(
         imageUri: String,
@@ -1387,6 +1400,15 @@ interface WatchFaceRepository {
         /** Give the selected style one alone, even while its siblings carry theirs. */
         thisStyleOnly: Boolean = false,
     ): EditorSnapshot
+
+    /**
+     * Takes the background away in the styles [replaceBackground] would write: the selected
+     * variant's moving background is deleted and every still one painted black — what the watch
+     * shows where a face has none — in one edit. A still raster stays, so a later picture still
+     * replaces it, and Undo or Reset brings everything back. Refused when there is nothing to take.
+     */
+    suspend fun removeBackground(thisStyleOnly: Boolean = false): EditorSnapshot =
+        throw UnsupportedOperationException()
 
     suspend fun tintBackground(red: Int, green: Int, blue: Int): EditorSnapshot
 
