@@ -261,8 +261,6 @@
     <string name="editor_position_y_field">Top edge (Y)</string>
     <string name="editor_position_range">%1$d to %2$d</string>
     <string name="editor_position_apply">Apply position</string>
-    <string name="editor_position_centre_x">Centre horizontally</string>
-    <string name="editor_position_centre_y">Centre vertically</string>
     <!-- Shown when the stored value is an offset from another widget rather than from the
          panel, so the numbers above and the numbers in the file legitimately differ. -->
     <string name="editor_encoded_offset">stored %1$d, %2$d · measured from widget #%3$d</string>
@@ -271,7 +269,6 @@
     <string name="editor_record_detail">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d</string>
     <string name="editor_record_detail_frames">size %1$d×%2$d   global #%3$d   type %4$d   seq %5$d   frames %6$d</string>
     <string name="editor_duplicate_of">Copy of #%1$d</string>
-    <string name="editor_color">Widget colour</string>
     <string name="editor_color_current">Current: %1$s · Original: %2$s</string>
     <string name="editor_color_white">White</string>
     <string name="editor_color_red">Red</string>
@@ -284,7 +281,6 @@
     <string name="editor_color_saturation">Saturation</string>
     <string name="editor_color_brightness">Brightness</string>
     <string name="editor_color_apply">Apply colour</string>
-    <string name="editor_color_reset">Reset colour</string>
     <string name="editor_color_watch_depth">The watch shows 16-bit colour, so very close colours can look the same.</string>
     <string name="editor_apply_all_title">Edit matching widgets in all styles</string>
     <plurals name="editor_apply_all_on">
@@ -301,6 +297,7 @@
     <!-- Widget size -->
     <string name="editor_size_heading">Size · proportions locked</string>
     <string name="editor_size_value">%1$d × %2$d px</string>
+    <string name="editor_size_zoom">%1$d%%</string>
     <string name="editor_size_shipped">Original size · %1$d%% steps</string>
     <string name="editor_size_percent">%1$d%% of original %2$d × %3$d · %4$d%% steps</string>
     <string name="editor_size_off_ladder">Next tap uses a size step based on the original %1$d × %2$d.</string>
@@ -312,24 +309,16 @@
     <string name="editor_size_unavailable_text">The watch controls this text’s font size. Resizing its box would not resize the text.</string>
 
     <!-- Shared -->
-    <string name="editor_signed_pixels">%1$d px</string>
-    <string name="editor_signed_pixels_positive">+%1$d px</string>
     <string name="editor_check_pass">pass</string>
     <string name="editor_check_fail">fail</string>
     <string name="editor_step_working">working…</string>
 
     <!-- Placement controls -->
-    <string name="editor_placement_heading">Placement</string>
-    <string name="editor_placement_readout">zoom %1$d%%   x %2$s   y %3$s</string>
-    <string name="editor_placement_move">MOVE</string>
-    <string name="editor_placement_size">SIZE</string>
     <string name="editor_placement_hint">Tap: 1 px or %1$d%% · hold to repeat · pinch for larger changes</string>
     <string name="editor_placement_reset">RESET PLACEMENT</string>
 
     <!-- Background page -->
-    <string name="editor_bg_no_image_title">No image chosen</string>
     <string name="editor_bg_no_image_detail">Resized to %1$d×%2$d when applied.</string>
-    <string name="editor_bg_choose">Choose image</string>
     <string name="editor_bg_fit_heading">Fit</string>
     <string name="editor_bg_scope_heading">Applies to</string>
     <string name="editor_bg_scope_all">All styles</string>
@@ -577,12 +566,15 @@
     <string name="editor_rotation_text">Fonts in the preview are approximate.</string>
     <string name="editor_arrange">Arrange layers</string>
     <string name="editor_arrange_scope">Applies to: %1$s only</string>
-    <string name="editor_arrange_description">Front widgets cover those behind.</string>
     <string name="editor_arrange_front">Bring to front</string>
     <string name="editor_arrange_forward">Bring forward</string>
     <string name="editor_arrange_backward">Send backward</string>
     <string name="editor_arrange_back">Send to back</string>
-    <string name="editor_arrange_boundaries">Backgrounds stay at the back. Moves that break alignment are refused.</string>
+    <string name="editor_arrange_front_short">Front</string>
+    <string name="editor_arrange_forward_short">Forward</string>
+    <string name="editor_arrange_backward_short">Backward</string>
+    <string name="editor_arrange_back_short">Back</string>
+    <string name="editor_arrange_boundaries">Front widgets cover those behind. Backgrounds stay at the back, and moves that break alignment are refused.</string>
     <string name="editor_manage_styles">Manage styles</string>
     <string name="editor_style_delete_action">Delete %1$s</string>
     <string name="editor_style_delete_title">Delete %1$s?</string>
@@ -604,7 +596,6 @@
     <string name="editor_style_delete_saved">Style deletion is saved separately. Cancelling the pending edit will not restore deleted styles.</string>
     <string name="editor_style_aod_kept">AOD is kept separately and cannot be deleted here.</string>
     <!-- Moving background (a GIF played by the watch as the style's background). -->
-    <string name="editor_moving_choose">Add a moving background (GIF or video)</string>
     <string name="editor_moving_pause">Pause</string>
     <string name="editor_moving_play">Play</string>
     <string name="editor_moving_fact_frames">Frames</string>
@@ -624,9 +615,10 @@
     <string name="editor_moving_aod">On the always-on display it plays about three times slower, and moving all the time can use more battery.</string>
     <string name="editor_moving_heading">Moving background</string>
     <string name="editor_moving_summary">%1$d frames · %2$s s loop</string>
-    <string name="editor_moving_present_detail">It plays under every widget. Remove it to add a different one or to use a still picture.</string>
-    <string name="editor_moving_remove">Remove moving background</string>
-    <string name="editor_moving_remove_title">Delete the moving background?</string>
+    <string name="editor_moving_present_detail">It plays under every widget. A new background replaces it; Remove leaves none.</string>
+    <string name="editor_moving_replaced">It replaces this style’s current background.</string>
+    <string name="editor_moving_scope">Applies to %1$s only. A moving background is added one style at a time: each frame takes about 100 KB in every style it is in.</string>
+    <string name="editor_bg_remove">Remove background</string>
 
     <!-- A video read as a moving background or picture: which part of it. -->
     <string name="editor_video_heading">Part of the video</string>

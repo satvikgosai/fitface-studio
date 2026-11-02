@@ -243,10 +243,12 @@ data class EditorUiState(
      */
     val applyWidgetEditsToAllStyles: Boolean = false,
     /**
-     * A background edit writes the selected style alone rather than every style. Off by
-     * default, as background edits always were; see [EditorSnapshot.offersBackgroundScope].
+     * A background edit writes the selected style alone rather than every style. On by
+     * default, as every other edit is: replacing one style's picture used to replace every
+     * style's, so a face could not keep a background a style. See
+     * [EditorSnapshot.offersBackgroundScope].
      */
-    val backgroundThisStyleOnly: Boolean = false,
+    val backgroundThisStyleOnly: Boolean = true,
     val previewReviewed: Boolean = false,
     val pendingWidgetMove: WidgetMovePreview? = null,
     /**
@@ -727,6 +729,20 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The one Add an image, GIF or video button's pick, as the background: a GIF or video is
+     * placed as a moving background, anything else as a still one. Either replaces a moving
+     * background the style already has once it is applied.
+     */
+    fun chooseBackground(uri: String, mimeType: String?) {
+        if (isMovingMedia(mimeType)) prepareMovingBackground(uri) else prepareBackground(uri)
+    }
+
+    /** The same button on the Widgets page: a GIF or video is placed as a moving picture, anything else as a picture. */
+    fun choosePicture(uri: String, mimeType: String?) {
+        if (isMovingMedia(mimeType)) prepareMovingPicture(uri) else preparePicture(uri)
+    }
+
     fun prepareBackground(uri: String) {
         viewModelScope.launch {
             mutableState.value = mutableState.value.copy(isWorking = true, error = null)
@@ -747,8 +763,8 @@ class EditorViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(
             placement = placement.copy(
                 zoom = (placement.zoom * zoomChange).coerceIn(0.25f, 8f),
-                offsetX = (placement.offsetX + panX).coerceIn(-2f, 2f),
-                offsetY = (placement.offsetY + panY).coerceIn(-2f, 2f),
+                offsetX = (placement.offsetX + panX).coerceIn(-MaxImageOffset, MaxImageOffset),
+                offsetY = (placement.offsetY + panY).coerceIn(-MaxImageOffset, MaxImageOffset),
             ),
         )
     }
@@ -777,7 +793,9 @@ class EditorViewModel @Inject constructor(
 
     /**
      * Reads a picked GIF or video and starts placing it as a moving background, keeping as
-     * many frames as fit: every frame when they do, every 2nd or 3rd when they do not.
+     * many frames as fit: every frame when they do, every 2nd or 3rd when they do not. The
+     * room counts a moving background it would replace as free; a GIF of one frame is placed
+     * as the still picture it is.
      */
     fun prepareMovingBackground(uri: String) {
         val snapshot = mutableState.value.snapshot ?: return
@@ -787,12 +805,11 @@ class EditorViewModel @Inject constructor(
                 runCatching { repository.readAnimation(uri) }
                     .onSuccess { source ->
                         if (source.frames.size < 2) {
-                            showFailure(WatchFaceException(if (source.clip == null) {
-                                "This GIF has only one frame. Choose it as a still image instead."
-                            } else "Only one frame of this video could be read."))
+                            if (source.clip == null) prepareBackground(uri)
+                            else showFailure(WatchFaceException("Only one frame of this video could be read."))
                             return@onSuccess
                         }
-                        val room = (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()
+                        val room = snapshot.roomForMovingBackground()
                         val step = animationStepThatFits(source.delaysMs, room, snapshot.preview.width, snapshot.preview.height)
                         if (step == null) {
                             showFailure(WatchFaceException("There is no room on this face for even one frame of a moving " +
@@ -821,7 +838,15 @@ class EditorViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(pendingAnimation = pending.copy(step = step))
     }
 
-    fun removeMovingBackground() = operate { repository.removeMovingBackground() }
+    /**
+     * Takes the background away: the selected style's moving one deleted and the still ones
+     * painted black, in the scope a replacement would take. Undo brings it back.
+     */
+    fun removeBackground() {
+        val snapshot = mutableState.value.snapshot ?: return
+        val thisStyleOnly = mutableState.value.backgroundThisStyleOnly && snapshot.offersBackgroundScope
+        operate(onSuccess = { it.copy(previewReviewed = false) }) { repository.removeBackground(thisStyleOnly) }
+    }
 
     /**
      * Reads the moving background's or picture's video again over [clip] — a start or a
@@ -840,8 +865,7 @@ class EditorViewModel @Inject constructor(
                     .onSuccess { source ->
                         val current = mutableState.value
                         val picture = current.pendingPicture
-                        val room = (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()
-                        fun retimed(width: Int, height: Int): PendingAnimation {
+                        fun retimed(width: Int, height: Int, room: Long): PendingAnimation {
                             val fitting = animationStepThatFits(source.delaysMs, room, width, height)
                                 ?: source.frames.size
                             val smallest = AnimationTiming.smallestStep(source.frames.size)
@@ -853,14 +877,16 @@ class EditorViewModel @Inject constructor(
                             current.copy(
                                 pendingPicture = picture.copy(
                                     prepared = picture.prepared.copy(preview = source.frames.first()),
-                                    animation = retimed(size.width, size.height),
+                                    animation = retimed(size.width, size.height,
+                                        (WATCH_CONTAINER_BYTE_CEILING - snapshot.containerBytes).toLong()),
                                 ),
                                 isWorking = false,
                             )
                         } else if (current.pendingAnimation != null) {
                             current.copy(
                                 pendingImage = ReplacementImage(source.uri, source.frames.first()),
-                                pendingAnimation = retimed(snapshot.preview.width, snapshot.preview.height),
+                                pendingAnimation = retimed(snapshot.preview.width, snapshot.preview.height,
+                                    snapshot.roomForMovingBackground()),
                                 isWorking = false,
                             )
                         } else current.copy(isWorking = false)
@@ -874,7 +900,8 @@ class EditorViewModel @Inject constructor(
 
     /**
      * Reads a picked GIF or video and starts placing it as a moving picture, centred at the
-     * still picture's default size, keeping as many frames as fit there.
+     * still picture's default size, keeping as many frames as fit there. A GIF of one frame
+     * is placed as the still picture it is.
      */
     fun prepareMovingPicture(uri: String) {
         val snapshot = mutableState.value.snapshot ?: return
@@ -884,9 +911,8 @@ class EditorViewModel @Inject constructor(
                 runCatching { repository.readAnimation(uri) }
                     .onSuccess { source ->
                         if (source.frames.size < 2) {
-                            showFailure(WatchFaceException(if (source.clip == null) {
-                                "This GIF has only one frame. Add it as a picture instead."
-                            } else "Only one frame of this video could be read."))
+                            if (source.clip == null) preparePicture(uri)
+                            else showFailure(WatchFaceException("Only one frame of this video could be read."))
                             return@onSuccess
                         }
                         val panel = snapshot.preview
@@ -1142,13 +1168,13 @@ class EditorViewModel @Inject constructor(
      * still committing lands where it says. It is then a nudge by the difference, with the
      * same clamp, range check and commit queue.
      */
-    fun placeWidget(globalIndex: Int, left: Int?, top: Int?) {
+    fun placeWidget(globalIndex: Int, left: Int, top: Int) {
         val snapshot = mutableState.value.snapshot ?: return
         val widget = snapshot.widgets.firstOrNull { it.globalIndex == globalIndex } ?: return
         val base = pendingTarget(snapshot.selectedVariant.basename, globalIndex)
             ?: PendingWidgetTarget(widget.x, widget.y, widget.type, widget.sequenceId)
-        val deltaX = left?.let { it - (widget.drawLeft + base.x - widget.x) } ?: 0
-        val deltaY = top?.let { it - (widget.drawTop + base.y - widget.y) } ?: 0
+        val deltaX = left - (widget.drawLeft + base.x - widget.x)
+        val deltaY = top - (widget.drawTop + base.y - widget.y)
         if (deltaX != 0 || deltaY != 0) nudgeWidget(globalIndex, deltaX, deltaY, EditGroups.next())
     }
 
@@ -1387,7 +1413,13 @@ class EditorViewModel @Inject constructor(
      * Steps the selected widget one rung along its resize ladder — see [widgetResizeLadder]
      * for why the sizes come from a ladder rather than from scaling what is on screen.
      */
+    /**
+     * One rung of the selected widget's resize ladder. A step that arrives while an edit is
+     * saving is dropped rather than run against the snapshot it would replace: a held − or +
+     * keeps stepping, each step from the size the last one left.
+     */
     fun resizeSelectedWidget(grow: Boolean) {
+        if (mutableState.value.isWorking) return
         val snapshot = mutableState.value.snapshot ?: return
         val selected = snapshot.widgets.singleOrNull {
             it.globalIndex == mutableState.value.selectedWidgetIndex
@@ -1753,10 +1785,25 @@ internal fun steppedZoom(zoom: Float, grow: Boolean): Float {
 }
 
 internal const val ZoomStepPercent = 2
+
+/** How far an image being placed may move: its centre, in panels from the face's. */
+internal const val MaxImageOffset = 2f
 internal const val MinZoomPercent = 25
 internal const val MaxZoomPercent = 800
 
 internal fun centeredPlacement(fit: ImageFit): ImagePlacement = ImagePlacement(fit = fit)
+
+/** Whether a picked file is read as frames — a GIF or a video — rather than as one still picture. */
+internal fun isMovingMedia(mimeType: String?): Boolean =
+    mimeType.equals("image/gif", ignoreCase = true) || mimeType?.startsWith("video/", ignoreCase = true) == true
+
+/** What the selected variant's moving background takes in the container: what replacing it frees. */
+internal fun EditorSnapshot.movingBackgroundBytes(): Int =
+    movingBackground?.let { animationAddedBytes(it.frames, it.entries, preview.width, preview.height) } ?: 0
+
+/** The room a new moving background has: what is left under the watch's ceiling, plus what the one it replaces frees. */
+internal fun EditorSnapshot.roomForMovingBackground(): Long =
+    (WATCH_CONTAINER_BYTE_CEILING - containerBytes).toLong() + movingBackgroundBytes()
 
 /**
  * The step a whole set takes, given the step each member could take on its own.

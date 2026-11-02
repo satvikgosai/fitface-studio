@@ -88,6 +88,8 @@ fun FitButton(
     style: FitButtonStyle = FitButtonStyle.Primary,
     interactionSource: MutableInteractionSource? = null,
     compact: Boolean = false,
+    /** Narrower than the default for a tile in a row of four, like Arrange layers'. */
+    contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     content: @Composable RowScope.() -> Unit,
 ) {
     val isEnabled = enabled && !loading
@@ -99,6 +101,7 @@ fun FitButton(
             modifier = modifier.heightIn(min = minHeight),
             shape = MaterialTheme.shapes.small,
             interactionSource = interactionSource,
+            contentPadding = contentPadding,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -128,6 +131,7 @@ fun FitButton(
             modifier = modifier.heightIn(min = minHeight),
             shape = MaterialTheme.shapes.small,
             interactionSource = interactionSource,
+            contentPadding = contentPadding,
             border = BorderStroke(1.dp, color.copy(alpha = if (enabled) .38f else .12f)),
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = color,

@@ -346,16 +346,12 @@ private fun ColumnScope.PhotosBackgroundTab(
         return
     }
     PhotoStrip(state, onSelect)
-    Column(Modifier.fillMaxWidth()) {
-        MicroLabel(stringResource(R.string.editor_bg_fit_heading))
-        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ImageFit.entries.forEach { fit ->
-                FitChip(fit.name, photo.placement.fit == fit, { onFit(fit) }, Modifier.weight(1f), enabled)
-            }
-        }
-    }
+    FitControls(photo.placement.fit, enabled, onFit)
     PlacementControls(
         placement = photo.placement,
+        edges = imageEdges(photo.preview.width, photo.preview.height, ALBUM_PHOTO_WIDTH, ALBUM_PHOTO_HEIGHT,
+            photo.placement),
+        entryKey = photo.id,
         panelWidth = ALBUM_PHOTO_WIDTH,
         panelHeight = ALBUM_PHOTO_HEIGHT,
         enabled = enabled,
@@ -363,7 +359,7 @@ private fun ColumnScope.PhotosBackgroundTab(
         onStepZoom = onStepZoom,
         onResetPlacement = onResetPlacement,
     )
-    ImageColourControls(photo.placement.tint, enabled = enabled, onTint = onTint)
+    ImageColourControls(photo.placement.tint, enabled = enabled, onTint = onTint, stateKey = photo.id)
     RoomLine(state)
     FitButton(stringResource(R.string.editor_photos_add_more), onChoose, Modifier.fillMaxWidth(),
         enabled = enabled && state.room > 0, style = FitButtonStyle.Secondary)

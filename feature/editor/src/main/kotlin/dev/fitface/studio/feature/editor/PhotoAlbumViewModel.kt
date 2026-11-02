@@ -211,8 +211,8 @@ class PhotoAlbumViewModel @Inject constructor(
     fun transform(zoomChange: Float, panX: Float, panY: Float) = place { placement ->
         placement.copy(
             zoom = (placement.zoom * zoomChange).coerceIn(0.25f, 8f),
-            offsetX = (placement.offsetX + panX).coerceIn(-2f, 2f),
-            offsetY = (placement.offsetY + panY).coerceIn(-2f, 2f),
+            offsetX = (placement.offsetX + panX).coerceIn(-MaxImageOffset, MaxImageOffset),
+            offsetY = (placement.offsetY + panY).coerceIn(-MaxImageOffset, MaxImageOffset),
         )
     }
 

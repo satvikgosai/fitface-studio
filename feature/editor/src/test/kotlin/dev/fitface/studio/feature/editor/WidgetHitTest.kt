@@ -16,7 +16,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.abs
 
 class WidgetHitTest {
     @Test fun rotatedCornersAreSelectableAndMovementClampsTheirVisualBounds() {
@@ -515,22 +514,6 @@ class WidgetHitTest {
         assertTrue(isPartlyOffFace(guide(1, 20, 380, 40, 40), 256, 402))
         assertEquals(false, isPartlyOffFace(guide(1, 0, 0, 40, 40), 256, 402))
         assertEquals(false, isPartlyOffFace(guide(1, 216, 362, 40, 40), 256, 402))
-    }
-
-    @Test
-    fun centringPutsTheMiddleOfTheWidgetOnTheMiddleOfTheFace() {
-        val plain = guide(1, 3, 7, 40, 30)
-        assertEquals(108, centredDrawEdge(plain, 256, horizontal = true))
-        assertEquals(186, centredDrawEdge(plain, 402, horizontal = false))
-
-        // Turned text is centred on the outline it draws, which is taller than its record.
-        val turned = guide(1, 3, 7, 60, 20).copy(rotationTenths = 450, rotationKind = WidgetRotationKind.TEXT)
-        val bounds = turned.visualBounds
-        val left = centredDrawEdge(turned, 256, horizontal = true)
-        val top = centredDrawEdge(turned, 402, horizontal = false)
-        assertTrue(bounds.top < 0 && bounds.height > turned.height)
-        assertTrue(abs(2 * (left + bounds.left) + bounds.width - 256) <= 1)
-        assertTrue(abs(2 * (top + bounds.top) + bounds.height - 402) <= 1)
     }
 
     /** The numbers Edit widget accepts are the drag clamp's, widened to where the widget is. */

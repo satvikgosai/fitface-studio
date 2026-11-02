@@ -1,7 +1,6 @@
 <resources>
-    <!-- Widgets page entry, under "Add widgets from another face". -->
-    <string name="editor_picture_open">Add a picture</string>
-    <string name="editor_moving_picture_open">Add a moving picture (GIF or video)</string>
+    <!-- Widgets page and Background page entry: one picker; a GIF or video is placed moving. -->
+    <string name="editor_media_choose">Add an image, GIF or video</string>
     <!-- Header subtitle on the Widgets page while a picture is being placed. -->
     <string name="editor_subtitle_picture_positioning">Placing a picture: drag to move, pinch to resize</string>
     <string name="editor_picture_fact">Picture</string>

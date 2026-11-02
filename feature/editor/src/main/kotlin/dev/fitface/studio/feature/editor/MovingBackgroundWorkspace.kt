@@ -8,10 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -37,7 +33,6 @@ import dev.fitface.studio.core.model.animationAddedBytes
 import dev.fitface.studio.core.model.animationFrameBytes
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
-import dev.fitface.studio.core.ui.FitChip
 import dev.fitface.studio.core.ui.FitStatus
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
@@ -47,12 +42,15 @@ import kotlinx.coroutines.delay
 
 /** What the moving background's controls can do beyond a still background's; see [EditorViewModel.prepareMovingBackground]. */
 internal class MovingBackgroundActions(
-    val onChoose: () -> Unit,
     val onStep: (Int) -> Unit,
-    val onRemove: () -> Unit,
     /** A video's clip moved or stretched; read again. Shared with a moving picture. */
     val onClip: (VideoClip) -> Unit,
+    /** Remove, for a moving or a still background alike; see [EditorViewModel.removeBackground]. */
+    val onRemoveBackground: () -> Unit,
 )
+
+/** The Pause/Play line under a playing face, kept with it when the face is pinned. */
+internal val PlayToggleHeight = 48.dp
 
 /** A loop's length in seconds, one decimal: "2.4". */
 internal fun loopSeconds(milliseconds: Int): String = String.format(Locale.ROOT, "%.1f", milliseconds / 1000.0)
@@ -108,32 +106,37 @@ internal fun MovingBackgroundWorkspace(
     val plan = pending.plan
     val panel = snapshot.preview
     val added = animationAddedBytes(plan.frames.size, plan.table.size, panel.width, panel.height)
-    val fits = snapshot.containerBytes + added <= WATCH_CONTAINER_BYTE_CEILING
+    // A moving background already there makes way for this one, so the face grows by the difference.
+    val growth = added - snapshot.movingBackgroundBytes()
+    val fits = snapshot.containerBytes + growth <= WATCH_CONTAINER_BYTE_CEILING
     val total = pending.source.frames.size
-    Column(
-        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        DirectWatchCanvas(
-            snapshot = snapshot,
-            editing = false,
-            selectedGlobalIndex = null,
-            pendingWidgetMove = null,
-            pendingImage = state.pendingImage?.let { image -> frame?.let { image.copy(preview = it) } ?: image },
-            placement = state.placement,
-            enabled = enabled,
-            onWidget = {},
-            onMoveWidget = { _, _, _ -> },
-            onTransformImage = onTransformImage,
-            modifier = Modifier.widthIn(max = 186.dp),
-        )
-        TextButton(onClick = { playing = !playing }) {
-            Text(
-                stringResource(if (playing) R.string.editor_moving_pause else R.string.editor_moving_play),
-                style = MaterialTheme.typography.labelMedium,
+    PinnedFacePage(
+        snapshot,
+        faceCap = 186.dp,
+        modifier = modifier,
+        faceExtra = PlayToggleHeight,
+        face = { faceModifier ->
+            DirectWatchCanvas(
+                snapshot = snapshot,
+                editing = false,
+                selectedGlobalIndex = null,
+                pendingWidgetMove = null,
+                pendingImage = state.pendingImage?.let { image -> frame?.let { image.copy(preview = it) } ?: image },
+                placement = state.placement,
+                enabled = enabled,
+                onWidget = {},
+                onMoveWidget = { _, _, _ -> },
+                onTransformImage = onTransformImage,
+                modifier = faceModifier,
             )
-        }
+            TextButton(onClick = { playing = !playing }) {
+                Text(
+                    stringResource(if (playing) R.string.editor_moving_pause else R.string.editor_moving_play),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        },
+    ) {
         ImportFactCard {
             ImportFactRow(
                 stringResource(R.string.editor_moving_fact_frames),
@@ -146,29 +149,33 @@ internal fun MovingBackgroundWorkspace(
                 importBytes(added.toLong()),
                 emphasised = true,
             )
-            Box(Modifier.padding(top = 4.dp)) { ImportRoomMeter(snapshot, added) }
+            Box(Modifier.padding(top = 4.dp)) { ImportRoomMeter(snapshot, growth) }
         }
         FrameStepControls(pending, total, enabled, animationFrameBytes(panel.width, panel.height), actions.onStep)
         pending.source.clip?.let { VideoClipControls(it, enabled, state.readingFrames, actions.onClip) }
-        Column(Modifier.fillMaxWidth()) {
-            MicroLabel(stringResource(R.string.editor_bg_fit_heading))
-            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ImageFit.entries.forEach { fit ->
-                    FitChip(fit.name, state.placement.fit == fit, { onFit(fit) }, Modifier.weight(1f), enabled)
-                }
-            }
-        }
+        FitControls(state.placement.fit, enabled, onFit)
         PlacementControls(
             placement = state.placement,
+            edges = imageEdges(pending.source.width, pending.source.height, panel.width, panel.height, state.placement),
             panelWidth = panel.width,
             panelHeight = panel.height,
             enabled = enabled,
             onTransformImage = onTransformImage,
             onStepZoom = onStepImageZoom,
             onResetPlacement = onResetPlacement,
+            entryKey = pending.source.uri,
         )
-        ImageColourControls(state.placement.tint, enabled = enabled, onTint = onTint)
+        ImageColourControls(state.placement.tint, enabled = enabled, onTint = onTint, stateKey = pending.source.uri)
         MovingBackgroundNotes(snapshot, video = pending.source.clip != null)
+        if (snapshot.offersBackgroundScope) {
+            Text(
+                stringResource(R.string.editor_moving_scope, snapshot.selectedVariantLabel()),
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
+        if (snapshot.selectedBackgroundShown) MovingBackgroundReplacedNote()
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             FitButton(
                 stringResource(R.string.editor_bg_discard),
@@ -194,11 +201,7 @@ internal fun MovingBackgroundWorkspace(
 @Composable
 internal fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: Boolean, frameBytes: Int, onStep: (Int) -> Unit) {
     val smallest = AnimationTiming.smallestStep(total)
-    Column(
-        Modifier.fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-            .padding(14.dp),
-    ) {
+    ControlCard {
         MicroLabel(stringResource(R.string.editor_moving_frames_heading))
         Text(
             if (pending.step == 1) stringResource(R.string.editor_moving_every_frame)
@@ -237,11 +240,7 @@ internal fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: B
  */
 @Composable
 internal fun VideoClipControls(clip: VideoClip, enabled: Boolean, reading: Boolean, onClip: (VideoClip) -> Unit) {
-    Column(
-        Modifier.fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-            .padding(14.dp),
-    ) {
+    ControlCard {
         MicroLabel(stringResource(R.string.editor_video_heading))
         @Composable
         fun line(text: String, back: String, forward: String, earlier: VideoClip?, later: VideoClip?) {
@@ -309,9 +308,20 @@ internal fun MovingBackgroundNotes(snapshot: EditorSnapshot, video: Boolean?) {
     }
 }
 
-/** The selected style's moving background: what it is, and Remove. */
+/** Said while a new background is placed over a style that shows one: Apply replaces it. */
 @Composable
-internal fun MovingBackgroundPresent(snapshot: EditorSnapshot, moving: MovingBackground, enabled: Boolean, onRemove: () -> Unit) {
+internal fun MovingBackgroundReplacedNote() {
+    Text(
+        stringResource(R.string.editor_moving_replaced),
+        modifier = Modifier.fillMaxWidth(),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.fitText.secondary,
+    )
+}
+
+/** The selected style's moving background: what it is. Remove takes it away; a new background replaces it. */
+@Composable
+internal fun MovingBackgroundPresent(snapshot: EditorSnapshot, moving: MovingBackground) {
     Column(
         Modifier.fillMaxWidth()
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
@@ -330,28 +340,4 @@ internal fun MovingBackgroundPresent(snapshot: EditorSnapshot, moving: MovingBac
         )
     }
     MovingBackgroundNotes(snapshot, video = null)
-    var confirming by remember { mutableStateOf(false) }
-    FitButton(
-        stringResource(R.string.editor_moving_remove),
-        { confirming = true },
-        Modifier.fillMaxWidth(),
-        enabled,
-        style = FitButtonStyle.Secondary,
-    )
-    // Deleted, frames and all, not parked under Removed; the same words the widget list uses.
-    if (confirming) {
-        AlertDialog(
-            onDismissRequest = { confirming = false },
-            title = { Text(stringResource(R.string.editor_moving_remove_title)) },
-            text = { Text(stringResource(R.string.editor_delete_body_moving)) },
-            confirmButton = {
-                TextButton(onClick = { confirming = false; onRemove() }) {
-                    Text(stringResource(R.string.editor_delete_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.editor_cancel)) }
-            },
-        )
-    }
 }

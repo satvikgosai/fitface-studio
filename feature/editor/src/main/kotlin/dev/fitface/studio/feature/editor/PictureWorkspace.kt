@@ -2,13 +2,9 @@ package dev.fitface.studio.feature.editor
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -17,7 +13,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -32,9 +27,8 @@ import dev.fitface.studio.core.ui.fitText
 
 /** What placing a picture can do; see [EditorViewModel.preparePicture] and what follows it. */
 internal class PictureActions(
+    /** Pick an image, a GIF or a video; see [EditorViewModel.choosePicture]. */
     val onChoose: () -> Unit,
-    /** Pick a GIF or video to place as a moving picture; see [EditorViewModel.prepareMovingPicture]. */
-    val onChooseMoving: () -> Unit,
     /** A moving picture's frame step. */
     val onStep: (Int) -> Unit,
     val onTransform: (Float, Float, Float) -> Unit,
@@ -78,33 +72,36 @@ internal fun PictureWorkspace(
     val frame = rememberPlayingFrame(animation, playing)
     // The face draws the frame showing now, through the same pending-picture path a still uses.
     val shown = frame?.let { pending.copy(prepared = pending.prepared.copy(preview = it)) } ?: pending
-    Column(
-        modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        DirectWatchCanvas(
-            snapshot = snapshot,
-            editing = false,
-            selectedGlobalIndex = null,
-            pendingWidgetMove = null,
-            pendingImage = null,
-            placement = placement,
-            enabled = enabled,
-            onWidget = {},
-            onMoveWidget = { _, _, _ -> },
-            onTransformImage = pictures.onTransform,
-            modifier = Modifier.widthIn(max = 186.dp),
-            pendingPicture = shown,
-        )
-        if (animation != null) {
-            TextButton(onClick = { playing = !playing }) {
-                Text(
-                    stringResource(if (playing) R.string.editor_moving_pause else R.string.editor_moving_play),
-                    style = MaterialTheme.typography.labelMedium,
-                )
+    PinnedFacePage(
+        snapshot,
+        faceCap = 186.dp,
+        modifier = modifier,
+        faceExtra = if (animation != null) PlayToggleHeight else 0.dp,
+        face = { faceModifier ->
+            DirectWatchCanvas(
+                snapshot = snapshot,
+                editing = false,
+                selectedGlobalIndex = null,
+                pendingWidgetMove = null,
+                pendingImage = null,
+                placement = placement,
+                enabled = enabled,
+                onWidget = {},
+                onMoveWidget = { _, _, _ -> },
+                onTransformImage = pictures.onTransform,
+                modifier = faceModifier,
+                pendingPicture = shown,
+            )
+            if (animation != null) {
+                TextButton(onClick = { playing = !playing }) {
+                    Text(
+                        stringResource(if (playing) R.string.editor_moving_pause else R.string.editor_moving_play),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
             }
-        }
+        },
+    ) {
         ImportFactCard {
             ImportFactRow(
                 stringResource(if (animation != null) R.string.editor_moving_picture_fact else R.string.editor_picture_fact),
@@ -127,6 +124,9 @@ internal fun PictureWorkspace(
         }
         PlacementControls(
             placement = placement,
+            edges = pictureEdges(pending, panel.width, panel.height),
+            entryKey = pending.prepared.handle,
+            sizeDetail = stringResource(R.string.editor_size_value, size.width, size.height),
             panelWidth = panel.width,
             panelHeight = panel.height,
             enabled = enabled,
@@ -142,7 +142,7 @@ internal fun PictureWorkspace(
                 animationFrameBytes(size.width, size.height), pictures.onStep)
             animation.source.clip?.let { VideoClipControls(it, enabled, state.readingFrames, pictures.onClip) }
         }
-        ImageColourControls(pending.tint, enabled = enabled, onTint = pictures.onTint)
+        ImageColourControls(pending.tint, enabled = enabled, onTint = pictures.onTint, stateKey = pending.prepared.handle)
         if (animation != null) {
             MovingBackgroundNotes(snapshot, video = animation.source.clip != null)
         } else if (snapshot.isAodSelected) {

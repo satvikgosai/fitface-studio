@@ -12,6 +12,7 @@ import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
+import dev.fitface.studio.core.model.MovingBackground
 import dev.fitface.studio.core.model.PreparedPicture
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.pictureAddedBytes
@@ -20,6 +21,7 @@ import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.WidgetGuide
+import dev.fitface.studio.core.model.WidgetResizeKind
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.drawTop
 import dev.fitface.studio.core.data.DiagnosticsReporter
@@ -176,16 +178,19 @@ class EditorViewModelTest {
         assertNull("a still background was not touched", repository.backgroundPlacement)
     }
 
+    /** A GIF of one frame is a still picture, placed as one rather than refused. */
     @Test
-    fun aOneFrameGifOrAFullFaceIsRefusedAndDiscardForgetsAGif() {
+    fun aOneFrameGifIsPlacedStillAFullFaceIsRefusedAndDiscardForgetsAGif() {
         val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply { animation = gif(frames = 1) }
         val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
         viewModel.prepareMovingBackground("content://gif")
         settle()
-        assertEquals("This GIF has only one frame. Choose it as a still image instead.", viewModel.state.value.error?.text)
+        assertNull(viewModel.state.value.error)
         assertNull(viewModel.state.value.pendingAnimation)
+        assertEquals("content://gif", viewModel.state.value.pendingImage?.uri)
+        viewModel.cancelBackground()
 
         val full = FakeRepository(snapshot(widgets).copy(containerBytes = WATCH_CONTAINER_BYTE_CEILING - 1000),
             commitImmediately = true).apply { animation = gif() }
@@ -202,6 +207,116 @@ class EditorViewModelTest {
         assertNotNull(viewModel.state.value.pendingAnimation)
         viewModel.cancelBackground()
         assertNull(viewModel.state.value.pendingAnimation)
+        assertNull(viewModel.state.value.pendingImage)
+    }
+
+    /** What the one picker returns decides how it is placed: an image still, a GIF or video moving. */
+    @Test
+    fun oneButtonPlacesAnImageStillAndAGifOrVideoMoving() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true)
+            .apply { animation = gif(); prepared = picture() }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+
+        viewModel.chooseBackground("content://png", "image/png")
+        settle()
+        assertEquals("content://png", viewModel.state.value.pendingImage?.uri)
+        assertNull(viewModel.state.value.pendingAnimation)
+        viewModel.cancelBackground()
+        for (type in listOf("image/gif", "video/mp4")) {
+            viewModel.chooseBackground("content://moving", type)
+            settle()
+            assertNotNull(type, viewModel.state.value.pendingAnimation)
+            viewModel.cancelBackground()
+        }
+        viewModel.chooseBackground("content://unknown", null)
+        settle()
+        assertNull("a file of no known type is tried as a still picture", viewModel.state.value.pendingAnimation)
+        assertNotNull(viewModel.state.value.pendingImage)
+        viewModel.cancelBackground()
+
+        viewModel.choosePicture("content://jpeg", "image/jpeg")
+        settle()
+        assertNull(requireNotNull(viewModel.state.value.pendingPicture).animation)
+        viewModel.discardPicture()
+        settle()
+        viewModel.choosePicture("content://gif", "image/gif")
+        settle()
+        assertNotNull(requireNotNull(viewModel.state.value.pendingPicture).animation)
+    }
+
+    @Test
+    fun aGifOrAVideoIsMovingAnythingElseStill() {
+        assertTrue(isMovingMedia("image/gif"))
+        assertTrue(isMovingMedia("IMAGE/GIF"))
+        assertTrue(isMovingMedia("video/mp4"))
+        assertTrue(isMovingMedia("video/webm"))
+        assertFalse(isMovingMedia("image/png"))
+        assertFalse(isMovingMedia("image/webp"))
+        assertFalse(isMovingMedia(null))
+    }
+
+    /** On the Widgets page a GIF of one frame is added as the picture it is. */
+    @Test
+    fun aOneFrameGifIsPlacedAsAStillPicture() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true)
+            .apply { animation = gif(frames = 1); prepared = picture() }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.choosePicture("content://gif", "image/gif")
+        settle()
+        val pending = requireNotNull(viewModel.state.value.pendingPicture)
+        assertNull(pending.animation)
+        assertEquals("p", pending.prepared.handle)
+        assertNull(viewModel.state.value.error)
+    }
+
+    /**
+     * A new moving background replaces the one the style has, so that one's frames count as
+     * room: a face too full for one more frame still takes a GIF in its place, and Add sends it.
+     */
+    @Test
+    fun aGifReplacingAMovingBackgroundHasItsRoom() {
+        val moving = MovingBackground(globalIndex = 1, frames = 5, entries = 5, periodMs = 100)
+        val full = snapshot(widgets).copy(containerBytes = WATCH_CONTAINER_BYTE_CEILING - 1000, movingBackground = moving)
+        val freed = animationAddedBytes(5, 5, PanelWidth, PanelHeight)
+        assertEquals(freed, full.movingBackgroundBytes())
+        assertEquals(1000L + freed, full.roomForMovingBackground())
+        assertEquals("nothing to replace, nothing freed", 1000L,
+            full.copy(movingBackground = null).roomForMovingBackground())
+
+        val source = gif()
+        val repository = FakeRepository(full, commitImmediately = true).apply { animation = source }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.chooseBackground("content://gif", "image/gif")
+        settle()
+        assertNull(viewModel.state.value.error)
+        val pending = requireNotNull(viewModel.state.value.pendingAnimation)
+        assertEquals(animationStepThatFits(source.delaysMs, 1000L + freed, PanelWidth, PanelHeight), pending.step)
+        viewModel.applyBackground()
+        settle()
+        assertEquals(pending.step, repository.addedMoving.single().second)
+    }
+
+    /** A still picture applied over a moving background goes through the ordinary replacement. */
+    @Test
+    fun aStillPictureOverAMovingBackgroundIsAppliedAsAnyBackgroundIs() {
+        val moving = MovingBackground(globalIndex = 1, frames = 5, entries = 5, periodMs = 100)
+        val repository = FakeRepository(snapshot(widgets).copy(movingBackground = moving), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.chooseBackground("content://png", "image/png")
+        settle()
+        assertNull(viewModel.state.value.pendingAnimation)
+        viewModel.applyBackground()
+        settle()
+        assertNotNull(repository.backgroundPlacement)
+        assertTrue(repository.addedMoving.isEmpty())
         assertNull(viewModel.state.value.pendingImage)
     }
 
@@ -339,6 +454,76 @@ class EditorViewModelTest {
             settle()
             assertEquals(expected, repository.backgroundThisStyleOnly)
         }
+    }
+
+    /**
+     * Left alone, a background goes to the selected style only, as every other edit does;
+     * All styles is the choice that widens it.
+     */
+    @Test
+    fun aBackgroundGoesToTheSelectedStyleAloneUnlessAllStylesIsChosen() {
+        val styled = snapshot(widgets).copy(styleNames = listOf("style0.bin", "style1.bin"),
+            backgroundStyles = listOf("style0.bin", "style1.bin"))
+        val repository = FakeRepository(styled, commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        assertTrue(viewModel.state.value.backgroundThisStyleOnly)
+        viewModel.prepareBackground("content://background")
+        settle()
+        viewModel.applyBackground()
+        settle()
+        assertEquals(true, repository.backgroundThisStyleOnly)
+
+        viewModel.setBackgroundThisStyleOnly(false)
+        viewModel.prepareBackground("content://background")
+        settle()
+        viewModel.applyBackground()
+        settle()
+        assertEquals(false, repository.backgroundThisStyleOnly)
+    }
+
+    /** Remove background takes the scope a replacement would, and asks nothing first. */
+    @Test
+    fun removingABackgroundTakesTheScopeChosen() {
+        val styled = snapshot(widgets).copy(styleNames = listOf("style0.bin", "style1.bin"),
+            backgroundStyles = listOf("style0.bin", "style1.bin"))
+        val repository = FakeRepository(styled, commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.removeBackground()
+        settle()
+        viewModel.setBackgroundThisStyleOnly(false)
+        viewModel.removeBackground()
+        settle()
+        assertEquals(listOf(true, false), repository.removedBackgrounds)
+    }
+
+    /**
+     * A held − or + keeps its button enabled while a step saves, so a step that arrives
+     * mid-save is dropped rather than run against the snapshot being replaced; the next one,
+     * after the save, steps from the new size.
+     */
+    @Test
+    fun aResizeStepArrivingWhileOneSavesIsDropped() {
+        val resizable = widget(globalIndex = 1, x = 20, y = 20).copy(resizeKind = WidgetResizeKind.RASTER)
+        val repository = FakeRepository(snapshot(listOf(resizable)))
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.selectWidget(1)
+        viewModel.resizeSelectedWidget(grow = true)
+        settle() // Parked: the first step is saving.
+        viewModel.resizeSelectedWidget(grow = true)
+        viewModel.resizeSelectedWidget(grow = true)
+        repository.releaseAll()
+        settle()
+        assertEquals(listOf(42 to 42), repository.resizes)
+        viewModel.resizeSelectedWidget(grow = true)
+        repository.releaseAll()
+        settle()
+        assertEquals("the next step starts from the saved size", listOf(42 to 42, 44 to 44), repository.resizes)
     }
 
     /** The library has opened it already; the editor takes that session, not a second load. */
@@ -585,7 +770,7 @@ class EditorViewModelTest {
     }
 
     /**
-     * A typed position or a Centre tap is measured from the move being saved, like a nudge,
+     * A typed position is measured from the move being saved, like a nudge,
      * so it lands where it says even while an earlier nudge is still committing.
      */
     @Test
@@ -597,7 +782,7 @@ class EditorViewModelTest {
 
         viewModel.nudgeWidget(1, 1, 0)
         settle() // 21 is in flight, but the snapshot still reports 20.
-        viewModel.placeWidget(1, left = 100, top = null)
+        viewModel.placeWidget(1, left = 100, top = 20)
         assertEquals(100f, viewModel.state.value.pendingWidgetMove?.displayX)
         assertEquals(20f, viewModel.state.value.pendingWidgetMove?.displayY)
         repository.releaseAll()
@@ -616,7 +801,7 @@ class EditorViewModelTest {
 
         viewModel.placeWidget(1, left = 100, top = 50)
         settle()
-        viewModel.placeWidget(1, left = 1000, top = null)
+        viewModel.placeWidget(1, left = 1000, top = 50)
         settle()
         val limit = PanelWidth - offFaceKeepVisible(40)
         viewModel.placeWidget(1, left = limit, top = 50)
@@ -668,7 +853,7 @@ class EditorViewModelTest {
         viewModel.beginNudge()
         viewModel.nudgeWidget(1, 1, 0)
         settle()
-        viewModel.placeWidget(1, left = 100, top = null)
+        viewModel.placeWidget(1, left = 100, top = 20)
         settle()
 
         val (first, second, third, typed) = repository.groups
@@ -883,6 +1068,27 @@ class EditorViewModelTest {
             x: Int, y: Int, tint: Int?): EditorSnapshot {
             addedMovingPictures += listOf(frameStep, width, height, x, y, tint)
             current = current.copy(widgets = current.widgets + widget(globalIndex = 9, x = x, y = y))
+            return current
+        }
+
+        /** Each resize reaching the repository, as its new width and height. */
+        val resizes = mutableListOf<Pair<Int, Int>>()
+
+        override suspend fun resizeWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
+            x: Int, y: Int, width: Int, height: Int, applyToAllStyles: Boolean): EditorSnapshot {
+            resizes += width to height
+            if (!commitImmediately) gate.await()
+            current = current.copy(widgets = current.widgets.map {
+                if (it.globalIndex == globalIndex) it.copy(width = width, height = height) else it
+            })
+            return current
+        }
+
+        /** Each Remove background, as its this-style-only flag. */
+        val removedBackgrounds = mutableListOf<Boolean>()
+
+        override suspend fun removeBackground(thisStyleOnly: Boolean): EditorSnapshot {
+            removedBackgrounds += thisStyleOnly
             return current
         }
 
