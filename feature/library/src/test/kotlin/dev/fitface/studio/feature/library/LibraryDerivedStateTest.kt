@@ -17,6 +17,18 @@ import org.junit.Test
  * sheet now decides is new. All of it is pure, so none of it needs a screen.
  */
 class LibraryDerivedStateTest {
+    // -- Photos face ----------------------------------------------------------
+
+    /** Not offered yet: the Photos face is an ordinary face in the catalogue, with no card or badge. */
+    @Test
+    fun thePhotosFaceIsNotOfferedYet() {
+        val photos = face("Photos", "00254", "Your photos")
+        val state = LibraryUiState(faces = faces + photos)
+        assertFalse(PHOTOS_FACE_OFFERED)
+        assertEquals(null, state.photosFace)
+        assertFalse(state.takesPhotos(photos))
+    }
+
     // -- Catalogue search ---------------------------------------------------
 
     @Test

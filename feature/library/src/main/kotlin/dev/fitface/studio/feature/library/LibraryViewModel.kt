@@ -145,11 +145,12 @@ data class LibraryUiState(
 
     /**
      * The watch's Photos face, which has no container to edit but takes the user's photos;
-     * null while the catalogue has none. Whether its package really declares a photo album is
-     * read when its page opens.
+     * null while the catalogue has none, or while [PHOTOS_FACE_OFFERED] is off. Whether its
+     * package really declares a photo album is read when its page opens.
      */
     val photosFace: CatalogFace?
-        get() = faces.firstOrNull { it.faceId == PHOTO_ALBUM_FACE_ID.toString().padStart(5, '0') }
+        get() = if (!PHOTOS_FACE_OFFERED) null
+        else faces.firstOrNull { it.faceId == PHOTO_ALBUM_FACE_ID.toString().padStart(5, '0') }
 
     fun takesPhotos(face: CatalogFace): Boolean = face.productId == photosFace?.productId
 
@@ -831,3 +832,10 @@ class LibraryViewModel @Inject constructor(
             "This face is customised on the watch and cannot be edited here."
     }
 }
+
+/**
+ * Whether the library offers the Photos face: its Projects card, its catalogue badge and its
+ * sheet's Send photos to it. Off until it is ready for release; with it off the face reads as
+ * Not editable, as before. Everything behind those entry points stays built and tested.
+ */
+internal const val PHOTOS_FACE_OFFERED = false
