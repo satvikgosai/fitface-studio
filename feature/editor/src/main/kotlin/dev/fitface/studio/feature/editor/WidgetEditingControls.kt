@@ -37,8 +37,9 @@ import dev.fitface.studio.core.model.canRotateTo
 import dev.fitface.studio.core.model.normalizedRotation
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
+import dev.fitface.studio.core.ui.FitHeading
 import dev.fitface.studio.core.ui.FitIconButton
-import dev.fitface.studio.core.ui.MicroLabel
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.fitText
 
 /** One tap of the rotate buttons, in tenths: a whole number of degrees for every kind. */
@@ -92,8 +93,6 @@ internal fun RotationStepButton(
 @Composable
 internal fun RotationControls(
     widget: WidgetGuide,
-    snapshot: EditorSnapshot,
-    allStyles: Boolean,
     enabled: Boolean,
     onRotate: (Int) -> Unit,
 ) {
@@ -101,31 +100,44 @@ internal fun RotationControls(
     val kind = widget.rotationKind
     var angle by rememberSaveable(widget.globalIndex, current) { mutableStateOf(rotationInput(current ?: 0)) }
     val parsed = parseRotationInput(angle)
+    val heading = stringResource(R.string.editor_rotation)
     ControlCard(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        MicroLabel(stringResource(R.string.editor_rotation))
         if (current == null || kind == null) {
-            Text(
-                stringResource(unsupportedRotationReason(widget)),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
+            // Nothing to turn: the heading and one word, with the reason behind the ⓘ.
+            FitHeading(heading, key = widget.globalIndex, trailing = {
+                Text(
+                    stringResource(R.string.editor_rotation_none),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }) {
+                InfoText(stringResource(unsupportedRotationReason(widget)))
+            }
             return@ControlCard
         }
+        FitHeading(heading, key = widget.globalIndex) {
+            InfoText(
+                stringResource(
+                    when (kind) {
+                        WidgetRotationKind.TEXT -> R.string.editor_rotation_text
+                        WidgetRotationKind.LINE -> R.string.editor_rotation_line
+                        WidgetRotationKind.ARC -> R.string.editor_rotation_arc
+                        WidgetRotationKind.ARTWORK -> R.string.editor_rotation_artwork
+                    },
+                ),
+            )
+            // An opaque picture's black box turns with it, which matters on a coloured face.
+            if (kind == WidgetRotationKind.ARTWORK && widget.opaqueArtwork) {
+                InfoText(stringResource(R.string.editor_rotation_artwork_opaque))
+            }
+        }
+        val original = widget.originalRotationTenths ?: current
         Text(
-            stringResource(
-                R.string.editor_rotation_current,
-                rotationInput(current),
-                rotationInput(widget.originalRotationTenths ?: current),
-            ),
-        )
-        Text(
-            if (!snapshot.isAodSelected && allStyles && widget.addedKind == null) {
-                stringResource(R.string.editor_rotation_scope_all)
+            if (original == current) {
+                stringResource(R.string.editor_rotation_value, rotationInput(current))
             } else {
-                stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename))
+                stringResource(R.string.editor_rotation_changed, rotationInput(current), rotationInput(original))
             },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             RotationStepButton(widget, clockwise = false, enabled, onRotate, Modifier.weight(1f))
@@ -154,32 +166,11 @@ internal fun RotationControls(
                     parsed != normalizedRotation(current),
                 style = FitButtonStyle.Secondary,
             )
-            val original = widget.originalRotationTenths ?: current
             FitButton(
                 stringResource(R.string.editor_rotation_reset),
                 { onRotate(original) },
                 enabled = enabled && original != current && canRotateTo(widget, original),
                 style = FitButtonStyle.Secondary,
-            )
-        }
-        Text(
-            stringResource(
-                when (kind) {
-                    WidgetRotationKind.TEXT -> R.string.editor_rotation_text
-                    WidgetRotationKind.LINE -> R.string.editor_rotation_line
-                    WidgetRotationKind.ARC -> R.string.editor_rotation_arc
-                    WidgetRotationKind.ARTWORK -> R.string.editor_rotation_artwork
-                },
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
-        // An opaque picture's black box turns with it, which matters on a coloured face.
-        if (kind == WidgetRotationKind.ARTWORK && widget.opaqueArtwork) {
-            Text(
-                stringResource(R.string.editor_rotation_artwork_opaque),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
             )
         }
         // Said before the tap, as resize says it: a shared digit pool turns every digit.
@@ -247,7 +238,10 @@ internal fun ArrangementControls(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            MicroLabel(stringResource(R.string.editor_arrange), Modifier.align(Alignment.CenterVertically))
+            FitHeading(stringResource(R.string.editor_arrange), Modifier.align(Alignment.CenterVertically)) {
+                InfoText(stringResource(R.string.editor_arrange_boundaries))
+            }
+            // Its own scope, unlike the edits above: layer order is always one style's.
             Text(
                 stringResource(R.string.editor_arrange_scope, variantLabel(snapshot.selectedVariant.basename)),
                 Modifier.align(Alignment.CenterVertically),
@@ -306,11 +300,6 @@ internal fun ArrangementControls(
                 }
             }
         }
-        Text(
-            stringResource(R.string.editor_arrange_boundaries),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
     }
 }
 

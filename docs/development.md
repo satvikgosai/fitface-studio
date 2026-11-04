@@ -64,9 +64,12 @@ Even in native mode Robolectric's metrics are not the device's — it measures t
 subtitle that clipped on a real phone as fitting — so it asserts layout geometry rather
 than whether text was ellipsized. See the class comment.
 
-`FitDetailsTest` checks that optional help opens by click, announces its expanded state,
-keeps its body reachable and restores that state after recreation. It complements the
-emulator checks of long explanations, large text and scrolling.
+`FitDetailsTest` checks that a reference drop-down opens by click, announces its expanded
+state, keeps its body reachable and restores that state after recreation. `FitInfoTest`
+checks that an ⓘ or tag is a labelled button, that its bubble exists only once opened and
+carries a pane title, and where the bubble sits beside its trigger.
+Robolectric does not lay popup windows out, so bubble placement near screen edges and
+with large text is an emulator check.
 
 `SemanticColorContrastTest` and `SmallTextContrastTest` need no Android runtime at all:
 `Color` is a value class and the WCAG formula is arithmetic, so the palette is pinned by
@@ -163,8 +166,8 @@ download/edit path for face `00112`.
 - Editor ViewModel tests use a test `Dispatchers.Main` and
   `unitTests.isReturnDefaultValues` for Android logging. They deliberately avoid
   Robolectric: the accessory SDK's pre-stackmap receiver bytecode fails JVM verification.
-- Native Robolectric tests pin geometry and `FitDetails` semantics, not device font
-  truncation. Dialog composition can fail to idle; verify scrolling on the emulator.
+- Native Robolectric tests pin geometry and `FitDetails`/`FitInfo` semantics, not device
+  font truncation or popup placement. Dialog composition can fail to idle; verify scrolling on the emulator.
 - Real gestures are not driven by tests. Pure hit testing, clamping and drag-axis
   helpers are covered; stale gesture inputs and accumulation still need UI checks.
 - The updater dialogs/state-to-UI mapping in `:app` have no automated UI coverage.

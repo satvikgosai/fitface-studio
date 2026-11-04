@@ -29,7 +29,6 @@ import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.FitIconButton
-import dev.fitface.studio.core.ui.MicroLabel
 
 /**
  * The Layers page, swiped to from page 1's left: layer order on the first row; the all-styles
@@ -56,13 +55,9 @@ internal fun QuickLayersPage(
     val enabled = !isWorking
     val ordered = snapshot.widgets.sortedBy { it.ordinal }
     val layer = ordered.indexOfFirst { it.globalIndex == widget.globalIndex } + 1
-    // The switch only means something where a widget has another style to reach.
-    val scopeFixed = when {
-        snapshot.isAodSelected -> R.string.editor_quick_layers_scope_aod
-        widget.addedKind != null -> R.string.editor_quick_layers_scope_added
-        snapshot.styleNames.size <= 1 -> R.string.editor_quick_layers_scope_single
-        else -> null
-    }
+    // The switch only means something where a widget has another style to reach: not on the
+    // always-on display, not for a widget added to one style, not on a one-style face.
+    val scopeFixed = snapshot.isAodSelected || widget.addedKind != null || snapshot.styleNames.size <= 1
     Column(Modifier.fillMaxWidth().padding(TrayPadding)) {
         TrayTitle(title)
         Text(
@@ -112,8 +107,8 @@ internal fun QuickLayersPage(
                         contentDescription = name,
                         onClick = { onApplyAll(!allStyles) },
                         modifier = Modifier.weight(1f).semantics { stateDescription = state },
-                        enabled = enabled && scopeFixed == null,
-                        selected = allStyles && scopeFixed == null,
+                        enabled = enabled && !scopeFixed,
+                        selected = allStyles && !scopeFixed,
                     ) {
                         Text(stringResource(R.string.editor_quick_all), style = MaterialTheme.typography.labelMedium)
                     }
@@ -139,15 +134,6 @@ internal fun QuickLayersPage(
                 }
             }
         }
-        MicroLabel(
-            scopeFixed?.let { stringResource(it) } ?: if (allStyles) {
-                stringResource(R.string.editor_quick_layers_hint_all)
-            } else {
-                stringResource(R.string.editor_quick_layers_hint_one, snapshot.selectedVariantLabel())
-            },
-            Modifier.align(Alignment.CenterHorizontally).padding(top = TrayHintTop),
-            color = if (allStyles && scopeFixed == null) MaterialTheme.colorScheme.primary else null,
-        )
     }
 }
 

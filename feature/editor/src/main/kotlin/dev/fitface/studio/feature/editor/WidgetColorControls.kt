@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,7 +39,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
-import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.Hsv
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.colorHex
@@ -48,7 +48,8 @@ import dev.fitface.studio.core.model.parseColorHex
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
 import dev.fitface.studio.core.ui.FitChip
-import dev.fitface.studio.core.ui.MicroLabel
+import dev.fitface.studio.core.ui.FitHeading
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.fitText
 
 /**
@@ -71,8 +72,6 @@ internal val WidgetColorPresets: List<Pair<Int, Int>> = listOf(
 @Composable
 internal fun ColorControls(
     widget: WidgetGuide,
-    snapshot: EditorSnapshot,
-    allStyles: Boolean,
     enabled: Boolean,
     onColor: (Int?) -> Unit,
 ) {
@@ -85,23 +84,14 @@ internal fun ColorControls(
         commits = true,
         onColour = onColor,
         stateKey = widget.globalIndex,
+        info = { InfoText(stringResource(R.string.editor_color_watch_depth)) },
         details = {
-            Text(stringResource(R.string.editor_color_current, colorHex(current), colorHex(original)))
             Text(
-                if (!snapshot.isAodSelected && allStyles && widget.addedKind == null) {
-                    stringResource(R.string.editor_rotation_scope_all)
+                if (current == original) {
+                    colorHex(current)
                 } else {
-                    stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename))
+                    stringResource(R.string.editor_color_changed, colorHex(current), colorHex(original))
                 },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        },
-        footer = {
-            Text(
-                stringResource(R.string.editor_color_watch_depth),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
             )
         },
     )
@@ -129,6 +119,8 @@ internal fun ColourPicker(
     commits: Boolean,
     onColour: (Int?) -> Unit,
     stateKey: Any?,
+    /** How this colour works; behind the heading's ⓘ. */
+    info: (@Composable ColumnScope.() -> Unit)? = null,
     details: @Composable () -> Unit = {},
     footer: @Composable () -> Unit = {},
 ) {
@@ -154,7 +146,7 @@ internal fun ColourPicker(
         if (!commits) onColour(colour)
     }
     ControlCard(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        MicroLabel(stringResource(R.string.editor_image_colour))
+        FitHeading(stringResource(R.string.editor_image_colour), key = stateKey, info = info)
         details()
         FitChip(
             stringResource(R.string.editor_image_colour_original),
@@ -345,12 +337,6 @@ internal fun ImageColourControls(tint: Int?, enabled: Boolean, onTint: (Int?) ->
         commits = false,
         onColour = onTint,
         stateKey = stateKey,
-        details = {
-            Text(
-                stringResource(R.string.editor_image_colour_detail),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        },
+        info = { InfoText(stringResource(R.string.editor_image_colour_detail)) },
     )
 }

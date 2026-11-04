@@ -15,7 +15,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.ui.FitChip
-import dev.fitface.studio.core.ui.MicroLabel
+import dev.fitface.studio.core.ui.FitHeading
+import dev.fitface.studio.core.ui.InfoText
 
 /**
  * The box every major control sits in — position, size, rotation, colour, arrangement, fit,
@@ -38,11 +39,17 @@ internal fun ControlCard(
     )
 }
 
-/** How a background or photo fills the face: the same chips on every page that places one. */
+/**
+ * How a background or photo fills the face: the same chips, and the same ⓘ saying what each
+ * does, on every page that places one. [info] is what only that page adds.
+ */
 @Composable
-internal fun FitControls(fit: ImageFit, enabled: Boolean, onFit: (ImageFit) -> Unit) {
+internal fun FitControls(fit: ImageFit, enabled: Boolean, onFit: (ImageFit) -> Unit, info: String? = null) {
     ControlCard {
-        MicroLabel(stringResource(R.string.editor_bg_fit_heading))
+        FitHeading(stringResource(R.string.editor_bg_fit_heading)) {
+            InfoText(stringResource(R.string.editor_bg_fit_info))
+            info?.let { InfoText(it) }
+        }
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ImageFit.entries.forEach { option ->
                 FitChip(option.name, fit == option, { onFit(option) }, Modifier.weight(1f), enabled)

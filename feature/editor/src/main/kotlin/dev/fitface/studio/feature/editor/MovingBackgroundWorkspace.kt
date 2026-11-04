@@ -33,9 +33,9 @@ import dev.fitface.studio.core.model.animationAddedBytes
 import dev.fitface.studio.core.model.animationFrameBytes
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
-import dev.fitface.studio.core.ui.FitStatus
-import dev.fitface.studio.core.ui.MicroLabel
-import dev.fitface.studio.core.ui.StatusBanner
+import dev.fitface.studio.core.ui.FitHeading
+import dev.fitface.studio.core.ui.FitInfo
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.fitText
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -143,7 +143,8 @@ internal fun MovingBackgroundWorkspace(
                 stringResource(R.string.editor_moving_frames_of, plan.frames.size, total),
             )
             ImportFactRow(stringResource(R.string.editor_moving_fact_loop),
-                stringResource(R.string.editor_moving_seconds, loopSeconds(plan.loopMs)))
+                stringResource(R.string.editor_moving_seconds, loopSeconds(plan.loopMs)),
+                info = movingLoopNotes(snapshot, video = pending.source.clip != null))
             ImportFactRow(
                 stringResource(R.string.widget_import_fact_adds),
                 importBytes(added.toLong()),
@@ -166,14 +167,18 @@ internal fun MovingBackgroundWorkspace(
             entryKey = pending.source.uri,
         )
         ImageColourControls(state.placement.tint, enabled = enabled, onTint = onTint, stateKey = pending.source.uri)
-        MovingBackgroundNotes(snapshot, video = pending.source.clip != null)
         if (snapshot.offersBackgroundScope) {
-            Text(
-                stringResource(R.string.editor_moving_scope, snapshot.selectedVariantLabel()),
-                modifier = Modifier.fillMaxWidth(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    stringResource(R.string.editor_apply_all_off, snapshot.selectedVariantLabel()),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+                FitInfo(
+                    snapshot.selectedVariantLabel(),
+                    stringResource(R.string.editor_moving_scope, snapshot.selectedVariantLabel()),
+                )
+            }
         }
         if (snapshot.selectedBackgroundShown) MovingBackgroundReplacedNote()
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -202,7 +207,9 @@ internal fun MovingBackgroundWorkspace(
 internal fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: Boolean, frameBytes: Int, onStep: (Int) -> Unit) {
     val smallest = AnimationTiming.smallestStep(total)
     ControlCard {
-        MicroLabel(stringResource(R.string.editor_moving_frames_heading))
+        FitHeading(stringResource(R.string.editor_moving_frames_heading)) {
+            InfoText(stringResource(R.string.editor_moving_frames_hint, importBytes(frameBytes.toLong())))
+        }
         Text(
             if (pending.step == 1) stringResource(R.string.editor_moving_every_frame)
             else stringResource(R.string.editor_moving_every_nth, pending.step),
@@ -224,12 +231,6 @@ internal fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: B
                 Modifier.weight(1f),
             ) { onStep(pending.step - 1) }
         }
-        Text(
-            stringResource(R.string.editor_moving_frames_hint, importBytes(frameBytes.toLong())),
-            modifier = Modifier.padding(top = 9.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
     }
 }
 
@@ -241,7 +242,9 @@ internal fun FrameStepControls(pending: PendingAnimation, total: Int, enabled: B
 @Composable
 internal fun VideoClipControls(clip: VideoClip, enabled: Boolean, reading: Boolean, onClip: (VideoClip) -> Unit) {
     ControlCard {
-        MicroLabel(stringResource(R.string.editor_video_heading))
+        FitHeading(stringResource(R.string.editor_video_heading)) {
+            InfoText(stringResource(R.string.editor_video_hint, loopSeconds(clip.durationMs)))
+        }
         @Composable
         fun line(text: String, back: String, forward: String, earlier: VideoClip?, later: VideoClip?) {
             Text(text, modifier = Modifier.padding(top = 9.dp), style = MaterialTheme.typography.bodyMedium)
@@ -261,12 +264,6 @@ internal fun VideoClipControls(clip: VideoClip, enabled: Boolean, reading: Boole
         line(stringResource(R.string.editor_video_length, loopSeconds(clip.lengthMs)),
             stringResource(R.string.editor_video_shorter), stringResource(R.string.editor_video_longer),
             clip.shorter(), clip.longer())
-        Text(
-            stringResource(R.string.editor_video_hint, loopSeconds(clip.durationMs)),
-            modifier = Modifier.padding(top = 9.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
         if (reading) ReadingFramesLine(Modifier.padding(top = 9.dp))
     }
 }
@@ -288,25 +285,19 @@ internal fun ReadingFramesLine(modifier: Modifier = Modifier) {
 }
 
 /**
- * What the watch does with it, said before it is added and while it is there. Once added
- * nothing says whether it came from a GIF or a video, so that note names neither ([video] null).
+ * What the watch does with it, behind the Loop fact's ⓘ before it is added and the heading's
+ * once it is there. Once added nothing says whether it came from a GIF or a video, so that
+ * note names neither ([video] null).
  */
 @Composable
-internal fun MovingBackgroundNotes(snapshot: EditorSnapshot, video: Boolean?) {
-    Text(
-        stringResource(when (video) {
-            true -> R.string.editor_moving_loops_video
-            false -> R.string.editor_moving_loops
-            null -> R.string.editor_moving_loops_added
-        }),
-        modifier = Modifier.fillMaxWidth(),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.fitText.secondary,
-    )
-    if (snapshot.isAodSelected) {
-        StatusBanner(FitStatus.Warning, stringResource(R.string.editor_moving_aod))
-    }
-}
+internal fun movingLoopNotes(snapshot: EditorSnapshot, video: Boolean?): String = listOfNotNull(
+    stringResource(when (video) {
+        true -> R.string.editor_moving_loops_video
+        false -> R.string.editor_moving_loops
+        null -> R.string.editor_moving_loops_added
+    }),
+    if (snapshot.isAodSelected) stringResource(R.string.editor_moving_aod) else null,
+).joinToString("\n\n")
 
 /** Said while a new background is placed over a style that shows one: Apply replaces it. */
 @Composable
@@ -328,16 +319,14 @@ internal fun MovingBackgroundPresent(snapshot: EditorSnapshot, moving: MovingBac
             .padding(horizontal = 18.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        MicroLabel(stringResource(R.string.editor_moving_heading))
+        val notes = movingLoopNotes(snapshot, video = null)
+        FitHeading(stringResource(R.string.editor_moving_heading)) {
+            InfoText(stringResource(R.string.editor_moving_present_detail))
+            InfoText(notes)
+        }
         Text(
             stringResource(R.string.editor_moving_summary, moving.frames, loopSeconds(moving.loopMs)),
             style = MaterialTheme.typography.titleMedium,
         )
-        Text(
-            stringResource(R.string.editor_moving_present_detail),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
     }
-    MovingBackgroundNotes(snapshot, video = null)
 }

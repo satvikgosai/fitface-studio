@@ -7,6 +7,7 @@
     <string name="editor_picture_detail">It is added on top of everything in %1$s. Move, resize, turn or delete it there like any widget.</string>
     <string name="editor_moving_picture_fact">Moving picture</string>
     <string name="editor_moving_picture_detail">It is added on top of everything in %1$s. Move or delete it there like any widget. Choose its size here: a moving picture cannot be resized once it is added.</string>
+    <string name="editor_moving_picture_size_now">Set its size now: it can’t change after adding</string>
     <string name="editor_picture_aod_note">The always-on display keeps every pixel of it lit, which uses more battery.</string>
 
     <!-- One colour control for a background and a picture being placed. -->
@@ -16,14 +17,14 @@
     <string name="editor_image_colour_hex">Any colour, #RRGGBB</string>
 
     <!-- Edit widget, for a picture the editor added rather than imported. -->
-    <string name="editor_picture_scope">Added picture. Edits affect this variant only.</string>
-    <string name="editor_moving_picture_scope">Added moving picture. Edits affect this variant only.</string>
-    <string name="editor_picture_full_size">Full picture size · %1$d%% steps</string>
-    <string name="editor_delete_body_picture">It was added here, so it is deleted with its artwork instead of going to the Removed list, and the face gets that space back. Undo, or add it again, to have it back.</string>
+    <string name="editor_picture_scope">An added picture: edits stay in the style it was added to.</string>
+    <string name="editor_moving_picture_scope">An added moving picture: edits stay in the style it was added to.</string>
+    <string name="editor_picture_full_size">Full picture size</string>
+    <string name="editor_delete_body_picture">Deletes it and its artwork. Undo brings it back.</string>
 
     <plurals name="editor_remove_set_added">
-        <item quantity="one">%1$d is a picture added here, so it is deleted with its artwork. Undo, or add it again, to have it back.</item>
-        <item quantity="other">%1$d are pictures added here, so they are deleted with their artwork. Undo, or add them again, to have them back.</item>
+        <item quantity="one">%1$d added picture is deleted with its artwork.</item>
+        <item quantity="other">%1$d added pictures are deleted with their artwork.</item>
     </plurals>
 
     <string name="editor_edit_kind_picture">new picture</string>

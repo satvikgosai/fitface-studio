@@ -53,6 +53,8 @@ import dev.fitface.studio.core.model.ALBUM_PHOTO_WIDTH
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.PHOTO_ALBUM_LIMIT
 import dev.fitface.studio.core.ui.*
+import dev.fitface.studio.core.ui.FitInfoLink
+import dev.fitface.studio.core.ui.InfoText
 import kotlin.math.roundToInt
 
 /** The Photos face's page: pick, place, send, or remove what this phone sent. */
@@ -336,12 +338,8 @@ private fun ColumnScope.PhotosBackgroundTab(
         FitButton(stringResource(R.string.editor_photos_choose), onChoose, Modifier.fillMaxWidth(),
             enabled = enabled && state.room > 0)
         RoomLine(state)
-        FitDetails(label = stringResource(R.string.editor_photos_details_label)) {
-            Text(
-                stringResource(R.string.editor_photos_intro, PHOTO_ALBUM_LIMIT),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        FitInfoLink(stringResource(R.string.editor_photos_details_label)) {
+            InfoText(stringResource(R.string.editor_photos_intro, PHOTO_ALBUM_LIMIT))
         }
         return
     }
@@ -441,12 +439,8 @@ private fun ColumnScope.PhotosInstallTab(
             onConfirmPluginReleased = onConfirmPluginReleased,
         )
     }
-    FitDetails(label = stringResource(R.string.editor_photos_about_label)) {
-        Text(
-            stringResource(R.string.editor_photos_about),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
+    FitInfoLink(stringResource(R.string.editor_photos_about_label)) {
+        InfoText(stringResource(R.string.editor_photos_about))
     }
     TextButton(onClick = onResetDelivery, enabled = !delivery.isActive, modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.editor_install_restart), style = MaterialTheme.typography.labelMedium)

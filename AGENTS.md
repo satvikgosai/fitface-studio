@@ -137,13 +137,19 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
 
 ## UI copy and visible status
 
-- Keep actions, edit scope, warnings, errors and recovery instructions visible.
-  Optional explanations belong in accessible, labelled `FitDetails` sections.
-  A control must work by tap and assistive technology, not only by long press.
+- The screen states; the ⓘ explains. Keep visible: actions, values, state, edit scope
+  (once per screen), errors, refusals, blocking warnings, progress, recovery steps, the
+  consequence of a destructive action where it is taken, and shared-artwork consequences.
+  How something works, why a control is disabled and preview caveats go behind
+  `FitInfo`/`FitHeading`/`FitTag`/`FitInfoLink` (an ⓘ bubble, or inside a button via
+  `FitButton(info =)`); a widget's record is its kind tag's bubble. Reference facts to
+  open — file details, checks, audit, transfer details — stay in labelled `FitDetails`
+  drop-downs. Undiscoverable gestures use `rememberLearnedHint` until done once. Every
+  trigger works by tap and assistive technology, not only by long press.
 - Canvas shows **EDITED** in its header whenever `snapshot.isDirty`. Never move it
   into Project, a menu or details. Pending background changes retain **UNAPPLIED**.
-- Use names a user understands. Put binary/protocol details in Inspector or optional
-  details. Preserve essential preview limitations and destructive-action meaning.
+- Use names a user understands. Put binary/protocol details in Inspector or `FitDetails`.
+  Preserve essential preview limitations and destructive-action meaning.
 - UI strings live in module resources with `editor_`, `library_`, or `ui_` prefixes.
   Framework-free diagnostics and decorative glyphs stay in Kotlin where appropriate.
   Brand names are not UI copy; literal technical identifiers and NOTICE are exceptions.
@@ -186,9 +192,6 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
   when organizing it. Do not move corpus, SDK JARs, build caches or machine settings.
 - Keep secrets out of notes as well as Git. Do not make repository instructions depend
   on a local artifact that another checkout cannot obtain.
-- Changelog entries are per released version, newest first:
-  `## <versionName> (code <versionCode>) — <tag date>`, under `Fixed:` / `Added:`.
-  Write short user-visible changes. No refactors, tests, docs, version-bump bullets,
-  hidden developer features, or bugs introduced and fixed within the same unreleased
-  cycle. Initial release: one line. Detailed causes and safeguards belong in the
-  canonical reference.
+- Changelog rules live in a comment at the top of [CHANGELOG.md](CHANGELOG.md): per version,
+  newest first, `Fixed:` / `Added:`, short user-visible bullets, untagged work under
+  `## Unreleased`.

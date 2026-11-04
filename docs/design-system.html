@@ -279,13 +279,21 @@
   .empty-title { font: 600 15px/20px var(--sans); }
   .empty-body { font: 400 13px/20px var(--sans); color: var(--on-surface-var); }
 
-  /* ---- optional reference: FitDetails ---- */
+  /* ---- reference facts: FitDetails ---- */
   .fit-details { border: 1px solid var(--outline-variant); border-radius: 8px; background: var(--sc-low); }
   .fit-details summary { min-height: 48px; padding: 14px; display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; font: 500 9.5px var(--mono); letter-spacing: 1.3px; color: var(--on-surface-var); }
   .fit-details summary::-webkit-details-marker { display: none; }
   .fit-details summary::after { content: "▾"; margin-left: auto; font: 400 13px var(--sans); }
   .fit-details[open] summary::after { content: "▴"; }
   .fit-details .details-body { padding: 0 14px 14px; font: 400 12px/18px var(--sans); color: var(--on-surface-var); }
+
+  /* ---- explanations: FitInfo (ⓘ and its bubble) ---- */
+  .fit-info { position: relative; display: inline-block; }
+  .fit-info summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; font: 500 9.5px var(--mono); letter-spacing: 1.3px; color: var(--on-surface-var); }
+  .fit-info summary::-webkit-details-marker { display: none; }
+  .info-glyph { width: 10px; height: 10px; border: 1.3px solid currentColor; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font: 700 7px var(--sans); letter-spacing: 0; }
+  .fit-info[open] .info-glyph { color: var(--primary); }
+  .fit-info .bubble { margin-top: 6px; max-width: 300px; padding: 14px; border: 1px solid var(--outline); border-radius: 8px; background: var(--sc-high, var(--sc-low)); font: 400 12px/18px var(--sans); color: var(--on-surface); }
 
   /* ---- glyph inventory ---- */
   .glyphs { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -507,10 +515,16 @@
           <span class="badge">UNAPPLIED</span>
         </div>
 
-        <div class="caption">FitDetails — tap or use the keyboard to open</div>
+        <div class="caption">FitDetails — reference facts; tap or use the keyboard to open</div>
         <details class="fit-details">
-          <summary>PREVIEW DETAILS</summary>
-          <div class="details-body">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</div>
+          <summary>CHECKS</summary>
+          <div class="details-body">Entry table bounds · Record sizes · Per-entry CRC · Payload length · Face ID byte range</div>
+        </details>
+
+        <div class="caption">FitHeading / FitInfo — tap the ⓘ (drawn, never the ℹ character); the bubble stays until dismissed</div>
+        <details class="fit-info">
+          <summary>SIZE <span class="info-glyph">i</span></summary>
+          <div class="bubble">The watch controls this text’s font size. Resizing its box would not resize the text.</div>
         </details>
 
         <div class="caption">FitIconButton — 38dp · default / warning-tinted</div>
@@ -685,10 +699,16 @@
           <span class="badge">UNAPPLIED</span>
         </div>
 
-        <div class="caption">FitDetails — tap or use the keyboard to open</div>
+        <div class="caption">FitDetails — reference facts; tap or use the keyboard to open</div>
         <details class="fit-details">
-          <summary>PREVIEW DETAILS</summary>
-          <div class="details-body">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</div>
+          <summary>CHECKS</summary>
+          <div class="details-body">Entry table bounds · Record sizes · Per-entry CRC · Payload length · Face ID byte range</div>
+        </details>
+
+        <div class="caption">FitHeading / FitInfo — tap the ⓘ (drawn, never the ℹ character); the bubble stays until dismissed</div>
+        <details class="fit-info">
+          <summary>SIZE <span class="info-glyph">i</span></summary>
+          <div class="bubble">The watch controls this text’s font size. Resizing its box would not resize the text.</div>
         </details>
 
         <div class="caption">FitIconButton — 38dp · default / warning-tinted</div>
@@ -982,11 +1002,13 @@
 
   <h3 id="copy-and-status">Copy and visible status</h3>
   <ul>
-    <li>Keep action meaning, scope, size limits, shared-artwork consequences, warnings, errors and recovery visible. Use plain names; record/protocol facts belong in Inspector or labelled details.</li>
+    <li>Keep visible: action meaning, values, state, edit scope (once per screen), refusals and size limits that block an action, shared-artwork consequences, warnings, errors and recovery. Behind an ⓘ: how a control works, why it is disabled, preview caveats and record/protocol facts. Use plain names.</li>
     <li>Canvas shows <strong>EDITED</strong> in its header whenever <code>snapshot.isDirty</code>, alongside Project <code>⋯</code> and app menu <code>≡</code>. Include edited status in the title's accessibility description. Background shows <strong>UNAPPLIED</strong> while an image is pending.</li>
-    <li><code>FitDetails</code> is a 48dp-minimum full-header button with action label, announced expanded state and restored state. Tap, keyboard and TalkBack open the same content; long press is never the only route. Put long expanded content in the page/sheet scroll region so pinned actions stay reachable.</li>
+    <li>The screen states; the ⓘ explains. <code>FitInfo</code> is a drawn ⓘ sized to the text it follows (12dp beside body text and in buttons, 10dp after a <code>MicroLabel</code>, 9dp in a tag; Compose widens its touch area to 48dp) labelled “About ‹topic›”. <code>FitHeading</code> is a <code>MicroLabel</code> with one, <code>FitTag</code> a badge that is its own trigger (a widget's kind, NO OUTLINE, BACKGROUND, OPAQUE, SAMPLE PREVIEW), <code>FitInfoLink</code> a text trigger for a question (“Face not changing?”), and <code>FitButton(info =)</code> puts it inside a button after the label, never beside the button. The bubble is a focusable popup anchored to its trigger: above when it fits, otherwise below; closed by an outside tap, back or the trigger, never by a timer; one open at a time. A key closes it when its subject changes. Shared controls (Position, Size, Fit, Colour) carry the same ⓘ on every page.</li>
+    <li><code>FitDetails</code> is for reference facts someone opens on purpose: the project's file details, Install's Checks and Audit, and Transfer details. It is a 48dp-minimum full-header button with action label, announced expanded state and restored state. Put long expanded content in the page/sheet scroll region so pinned actions stay reachable. Explanations do not go in drop-downs.</li>
+    <li>Gestures nothing on screen can show (hold to select several, hold to compare, pinch, drag on the face) keep a visible line through <code>rememberLearnedHint</code> until done once on the device, then that line goes. The drag line leaves a blank of the same height so the face does not resize.</li>
     <li>Use <code>styleLabel</code> from the parsed style number plus one, not a list index. Use <code>variantLabel</code> for AOD everywhere, including accessibility; raw sampler IDs remain protocol data. Removed rows retain typed category/model facts rather than preformatted technical labels, with defaults for older stored data.</li>
-    <li>A custom row <code>contentDescription</code> must include its identity and visible status, including OUTDATED. A no-outline widget's support reason appears once in its banner, not again in Record details.</li>
+    <li>A custom row <code>contentDescription</code> must include its identity and visible status, including OUTDATED. Edit widget names a widget's kind and properties as tags (kind, NO OUTLINE/BACKGROUND, OPAQUE, COPY OF #N); the kind's bubble holds the record, and a no-outline widget's support message is in its own tag, not repeated there.</li>
     <li>Persistent failures have persistent state (<code>catalogFailure</code>); a sheet shows <code>sheetError</code> because it covers the snackbar. Await <code>showSnackbar</code>, then clear in <code>finally</code>: clearing the effect's key first cancels the message.</li>
   </ul>
 
@@ -1038,7 +1060,7 @@
   <h3 id="install-and-thumbnails">Install and thumbnails</h3>
   <ul>
     <li><code>previewReviewed</code> clears on every commit; <code>InstallWorkspace</code>'s snapshot effect re-marks it. It arms sending, not a redirect to a separate Validate page. <code>validatedBytes()</code> remains the actual safety gate.</li>
-    <li>One read-only render belongs in the device card (80dp plate); status is on a line above the device name, not squeezed beside it. Checks and Audit sit directly below, above setup. Audit remains present when empty. Passing checks need no extra success banner; failed checks keep theirs.</li>
+    <li>One read-only render belongs in the device card (80dp plate); status is on a line above the device name, not squeezed beside it. The plugin is one plain line under it, then SAMPLE PREVIEW when the render is approximate, then Checks and Audit as drop-downs, above setup. Audit remains present when empty. Passing checks need no banner; failed checks open expanded with their banner.</li>
     <li>Show transfer phase/percentage; put protocol messages, windows and payload IDs in Transfer details. Completion is <strong>Request sent</strong>, with watch inspection and plugin restoration instructions.</li>
     <li>Styles owns face-picker thumbnail refresh. Compare stored before/after pictures, including actual RGB565 quantization and box-filtered output; don't compare against a scaled canvas pretending to be stored output. Refresh the active numbered style once per edit identity, clear the marker on an edit, and treat a no-op as null (<code>ThumbnailPreviewTest</code>). AOD refresh is refused in the repository.</li>
     <li>Previews render current layers, ordered and alpha-correct; unavailable content is disclosed, never replaced by invented boxes. The <a href="architecture.md#the-preview-pipeline">preview pipeline</a> defines sample readings, locale fallback and ROM-font approximations. Preview review does not establish watch-side acceptance.</li>
@@ -1114,7 +1136,7 @@
   <ul>
     <li>Platform <code>SansSerif</code>/<code>Monospace</code> replace the original Plex design; no font files are bundled. Quantities use mono labels/numeric/micro/readout (20sp). Font changes require a fresh device layout pass.</li>
     <li>Spacing is expressed by literals; unused spacing/elevation token classes were removed. Elevation uses surface colour and a 1dp border, never shadow. Tokenizing spacing or enlarging touch targets is a separate layout change, not an incidental cleanup.</li>
-    <li>Known touch-target compromise: icon actions are 38dp and chips 42dp against the 48dp guideline. <code>FitDetails</code> has a 48dp minimum. Preserve consistency until an app-wide size change is tested.</li>
+    <li>Known touch-target compromise: icon actions are 38dp and chips 42dp against the 48dp guideline. <code>FitDetails</code> has a 48dp minimum; <code>FitInfo</code> glyphs rely on Compose's 48dp touch-target expansion. Preserve consistency until an app-wide size change is tested.</li>
     <li><code>FitFaceSemanticColors</code> must be provided per theme: warning/experimental once fell back to dark colours on light backgrounds (1.50:1/1.73:1); light roles now measure 6.07:1/6.27:1. <code>SemanticColorContrastTest</code> checks values; <code>FitFaceThemeTest</code> checks the provider.</li>
     <li>Use <code>MaterialTheme.fitText.secondary</code> and <code>tertiary</code> without call-site alpha. Recorded secondary contrast is 6.52:1 dark / 6.67:1 light, tertiary 5.56:1 / 5.27:1. Extra dimming formerly reduced micro text to 4.08/3.38 and project age to 2.58. Tertiary derives from onSurfaceVariant × .90 for margin; .82 barely passed at 4.52. <code>SmallTextContrastTest</code> holds the 4.5:1 floor on all surfaces. Disabled controls retain their treatment.</li>
     <li>Open typography issue: 11sp Medium mono teal actions have 12.77:1 contrast but can still be too small; changing colour does not solve size. Micro labels are 9.5sp. Browser demos approximate phone dimensions, not Android text metrics.</li>

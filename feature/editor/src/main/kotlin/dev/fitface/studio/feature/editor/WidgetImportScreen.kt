@@ -1,6 +1,7 @@
 package dev.fitface.studio.feature.editor
 
 import android.graphics.Bitmap
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -8,7 +9,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -65,6 +65,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import dev.fitface.studio.core.model.*
 import dev.fitface.studio.core.ui.*
+import dev.fitface.studio.core.ui.FitHeading
+import dev.fitface.studio.core.ui.FitInfo
+import dev.fitface.studio.core.ui.InfoText
+import dev.fitface.studio.core.ui.LearnedGesture
+import dev.fitface.studio.core.ui.rememberLearnedHint
 import kotlin.math.roundToInt
 
 @Composable
@@ -153,10 +158,8 @@ internal fun WidgetImportRoute(initialSnapshot: EditorSnapshot, onDismiss: () ->
 }
 
 /**
- * The strip under the top bar: what is experimental, what is running, what failed.
- *
- * One line each, and none of them scroll away — a reason someone has to go looking for is
- * a reason most of them will not see.
+ * The strip under the top bar: what is running and what failed. One line each, and none of
+ * them scroll away.
  */
 @Composable
 private fun ImportNotices(
@@ -164,24 +167,6 @@ private fun ImportNotices(
     viewModel: WidgetImportViewModel,
 ) {
     Column(Modifier.padding(bottom = 4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(end = 16.dp)
-                .background(MaterialTheme.fitColors.warning.copy(alpha = .08f),
-                    RoundedCornerShape(topEnd = 9.dp, bottomEnd = 9.dp))
-                .padding(start = 14.dp, top = 8.dp, end = 14.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            MicroLabel(stringResource(R.string.widget_import_experimental_label),
-                color = MaterialTheme.fitColors.warning)
-            Text(
-                stringResource(if (state.backgroundMode) R.string.editor_bg_import_experimental
-                    else R.string.widget_import_experimental_short),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        }
         state.error?.let { error ->
             StatusBanner(FitStatus.Fail, error, Modifier.padding(top = 6.dp, end = 16.dp))
         }
@@ -382,11 +367,11 @@ private fun BackgroundDonorPage(state: WidgetImportUiState, viewModel: WidgetImp
                 Text(stringResource(R.string.editor_bg_import_missing),
                     style = MaterialTheme.typography.bodyMedium)
             } else {
-                Text(stringResource(R.string.editor_bg_import_primary),
-                    style = MaterialTheme.typography.bodyMedium)
-                if (content.fullPanelImageCount > 1) {
-                    Text(stringResource(R.string.editor_bg_import_multiple),
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+                FitHeading(stringResource(R.string.editor_bg_import_heading)) {
+                    InfoText(stringResource(R.string.editor_bg_import_primary))
+                    if (content.fullPanelImageCount > 1) {
+                        InfoText(stringResource(R.string.editor_bg_import_multiple))
+                    }
                 }
                 FitButton(stringResource(R.string.widget_import_review), viewModel::reviewBackground,
                     Modifier.fillMaxWidth(), enabled = !state.busy, loading = state.busy)
@@ -406,8 +391,13 @@ private fun BackgroundReviewPage(state: WidgetImportUiState, snapshot: EditorSna
             FitChip(stringResource(R.string.editor_bg_import_before), before, { before = true }, Modifier.weight(1f))
             FitChip(stringResource(R.string.editor_bg_import_after), !before, { before = false }, Modifier.weight(1f))
         }
-        Text(stringResource(R.string.editor_bg_import_scope, preview.changedVariants.map { backgroundVariantLabel(it) }.joinToString()),
-            style = MaterialTheme.typography.bodyMedium)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val scope = stringResource(R.string.editor_bg_import_scope,
+                preview.changedVariants.map { backgroundVariantLabel(it) }.joinToString())
+            Text(scope, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.bodyMedium)
+            // How the copied image is blended, and that the preview is a sample.
+            FitInfo(scope, stringResource(R.string.editor_bg_import_result_detail))
+        }
         if (preview.skippedVariants.isNotEmpty()) {
             Text(stringResource(R.string.editor_bg_import_skipped,
                 preview.skippedVariants.map { backgroundVariantLabel(it) }.joinToString()),
@@ -415,8 +405,6 @@ private fun BackgroundReviewPage(state: WidgetImportUiState, snapshot: EditorSna
         }
         FitButton(stringResource(if (preview.addedBackground) R.string.editor_bg_import_add else R.string.editor_bg_import_replace),
             viewModel::applyBackground, Modifier.fillMaxWidth(), enabled = !state.busy, loading = state.saving)
-        Text(stringResource(R.string.editor_bg_import_result_detail),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
     }
 }
 
@@ -664,15 +652,7 @@ private fun DonorSelectionPanel(
     /** Under the list, where the rows already carry the pick numbers and the height is theirs. */
     compact: Boolean = false,
 ) {
-    if (state.picks.isEmpty()) {
-        Text(
-            stringResource(R.string.widget_import_pick_hint),
-            modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
-        return
-    }
+    if (state.picks.isEmpty()) return
     if (state.picks.size > 1) {
         ImportSetPanel(state, content, snapshot, viewModel, modifier, compact)
         return
@@ -713,10 +693,8 @@ private fun DonorSelectionPanel(
         // The pricing failure first, because it is the exact answer and the meter's is an
         // estimate; then the estimate's own verdict; then the way on.
         ImportPanelMessage(
-            text = state.pickError ?: stringResource(
-                if (fits) R.string.widget_import_pick_hint_more else R.string.widget_import_too_big,
-            ),
-            warning = state.pickError != null || !fits,
+            text = state.pickError ?: if (fits) null else stringResource(R.string.widget_import_too_big),
+            warning = true,
         )
         FitButton(
             stringResource(R.string.widget_import_use),
@@ -764,11 +742,20 @@ private fun ImportSetPanel(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 MicroLabel(stringResource(R.string.widget_import_selected, state.picks.size))
-                Text(
-                    stringResource(R.string.widget_import_set_estimate, importBytes(floor.toLong())),
-                    style = FitFaceType.numeric,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.widget_import_set_estimate, importBytes(floor.toLong())),
+                        style = FitFaceType.numeric,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    FitInfo(
+                        stringResource(R.string.widget_import_fact_adds),
+                        stringResource(R.string.widget_import_set_floor),
+                    )
+                }
             }
             TextButton(viewModel::clearSelectedWidget, enabled = !state.saving) {
                 Text(stringResource(R.string.widget_import_clear),
@@ -795,13 +782,11 @@ private fun ImportSetPanel(
             }
         }
         ImportRoomMeter(snapshot, floor, verdict = false)
-        // Under the list only the refusal earns the height; the caveat is on the review.
+        // Only the refusal earns a line; that the figure is a floor is behind its ⓘ.
         if (!compact || !fits) {
             ImportPanelMessage(
-                text = stringResource(
-                    if (fits) R.string.widget_import_set_floor else R.string.widget_import_too_big_set,
-                ),
-                warning = !fits,
+                text = if (fits) null else stringResource(R.string.widget_import_too_big_set),
+                warning = true,
             )
         }
         FitButton(
@@ -814,17 +799,18 @@ private fun ImportSetPanel(
 }
 
 /**
- * The line under a panel's meter: the way on, or why there is none.
+ * The line under a panel's meter: why there is no way on, or nothing.
  *
- * Two lines tall whatever it says, so that swapping the hint for a refusal — which is what
- * crossing the ceiling does — does not move the face above it.
+ * One line tall whatever it says, blank included, so that a refusal appearing — which is
+ * what crossing the ceiling does — does not move the face above it. The refusals are worded
+ * to fit that line.
  */
 @Composable
-private fun ImportPanelMessage(text: String, warning: Boolean) {
+private fun ImportPanelMessage(text: String?, warning: Boolean) {
     Text(
-        text,
+        text.orEmpty(),
         modifier = Modifier.fillMaxWidth(),
-        minLines = 2,
+        minLines = 1,
         style = MaterialTheme.typography.bodySmall,
         color = if (warning) MaterialTheme.colorScheme.error else MaterialTheme.fitText.secondary,
     )
@@ -1229,7 +1215,7 @@ private fun ImportReviewPage(
             )
         },
     ) {
-        MicroLabel(stringResource(R.string.widget_import_compare), Modifier.fillMaxWidth())
+        ImportReviewNotes(stringResource(R.string.widget_import_compare))
         ImportFactCard {
             ImportFactRow(
                 stringResource(R.string.widget_import_fact_from),
@@ -1244,6 +1230,8 @@ private fun ImportReviewPage(
                 stringResource(R.string.widget_import_fact_adds),
                 importBytes(preview.addedBytes.toLong()),
                 emphasised = true,
+                info = stringResource(R.string.widget_import_review_detail,
+                    importVariantLabel(snapshot.selectedVariant)),
             )
             Box(Modifier.padding(top = 4.dp)) {
                 ImportRoomMeter(snapshot, preview.addedBytes)
@@ -1257,12 +1245,6 @@ private fun ImportReviewPage(
             enabled = !state.busy &&
                 snapshot.containerBytes + preview.addedBytes <= WATCH_CONTAINER_BYTE_CEILING,
             loading = state.saving,
-        )
-        Text(
-            stringResource(R.string.widget_import_review_detail,
-                importVariantLabel(snapshot.selectedVariant)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
         )
     }
 }
@@ -1310,7 +1292,7 @@ private fun ImportSetReviewPage(
             )
         },
     ) {
-        MicroLabel(stringResource(R.string.widget_import_compare_set), Modifier.fillMaxWidth())
+        ImportReviewNotes(stringResource(R.string.widget_import_compare_set))
         ImportFactCard {
             ImportFactRow(stringResource(R.string.widget_import_fact_from), importDonorLabel(state))
             ImportFactRow(stringResource(R.string.widget_import_fact_widgets), "${state.picks.size}")
@@ -1318,6 +1300,7 @@ private fun ImportSetReviewPage(
                 stringResource(R.string.widget_import_fact_adds),
                 stringResource(R.string.widget_import_at_least, importBytes(floor.toLong())),
                 emphasised = true,
+                info = stringResource(R.string.widget_import_review_set_detail, target),
             )
             Box(Modifier.padding(top = 4.dp)) {
                 ImportRoomMeter(snapshot, floor, set = true)
@@ -1332,12 +1315,14 @@ private fun ImportSetReviewPage(
             enabled = !state.busy && !state.saving,
             loading = state.saving,
         )
-        Text(
-            stringResource(R.string.widget_import_review_set_detail, target),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
     }
+}
+
+/** Above a review's facts: how to compare, until holding the face to compare has been done once. */
+@Composable
+private fun ImportReviewNotes(compareHint: String) {
+    val hint = rememberLearnedHint(LearnedGesture.CompareHold)
+    if (hint.shown) MicroLabel(compareHint, Modifier.fillMaxWidth())
 }
 
 /**
@@ -1428,6 +1413,7 @@ private fun ImportReviewFace(
     numbered: Boolean = false,
 ) {
     var comparing by remember { mutableStateOf(false) }
+    val compareHint = rememberLearnedHint(LearnedGesture.CompareHold)
     val afterBitmap = after.rememberImportBitmap()
     val original = before.rememberImportBitmap()
     val scrim = MaterialTheme.colorScheme.background.copy(alpha = .55f)
@@ -1449,8 +1435,10 @@ private fun ImportReviewFace(
                     detectTapGestures(
                         onPress = {
                             comparing = true
+                            val pressed = SystemClock.uptimeMillis()
                             tryAwaitRelease()
                             comparing = false
+                            if (SystemClock.uptimeMillis() - pressed >= CompareLearnedMillis) compareHint.learn()
                         },
                     )
                 },
@@ -1485,10 +1473,10 @@ private fun ImportReviewFace(
 }
 
 @Composable
-internal fun ImportFactRow(label: String, value: String, emphasised: Boolean = false) {
+internal fun ImportFactRow(label: String, value: String, emphasised: Boolean = false, info: String? = null) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically) {
-        MicroLabel(label)
+        FitHeading(label, info = info?.let { text -> { InfoText(text) } })
         Text(
             value,
             style = FitFaceType.numeric,
@@ -1592,3 +1580,6 @@ internal fun importBytes(bytes: Long): String = if (bytes >= 1L shl 20) {
 } else {
     stringResource(R.string.widget_import_kilobytes, bytes / 1024f)
 }
+
+/** How long a press on the review face must last to count as comparing, not a tap. */
+private const val CompareLearnedMillis = 400L

@@ -106,6 +106,11 @@ internal fun PictureWorkspace(
             ImportFactRow(
                 stringResource(if (animation != null) R.string.editor_moving_picture_fact else R.string.editor_picture_fact),
                 stringResource(R.string.widget_import_widget_size, size.width, size.height),
+                info = listOfNotNull(
+                    stringResource(if (animation != null) R.string.editor_moving_picture_detail else R.string.editor_picture_detail,
+                        importVariantLabel(snapshot.selectedVariant)),
+                    if (animation == null && snapshot.isAodSelected) stringResource(R.string.editor_picture_aod_note) else null,
+                ).joinToString("\n\n"),
             )
             animation?.let {
                 ImportFactRow(
@@ -113,7 +118,8 @@ internal fun PictureWorkspace(
                     stringResource(R.string.editor_moving_frames_of, it.plan.frames.size, it.source.frames.size),
                 )
                 ImportFactRow(stringResource(R.string.editor_moving_fact_loop),
-                    stringResource(R.string.editor_moving_seconds, loopSeconds(it.plan.loopMs)))
+                    stringResource(R.string.editor_moving_seconds, loopSeconds(it.plan.loopMs)),
+                    info = movingLoopNotes(snapshot, video = it.source.clip != null))
             }
             ImportFactRow(
                 stringResource(R.string.widget_import_fact_adds),
@@ -143,15 +149,6 @@ internal fun PictureWorkspace(
             animation.source.clip?.let { VideoClipControls(it, enabled, state.readingFrames, pictures.onClip) }
         }
         ImageColourControls(pending.tint, enabled = enabled, onTint = pictures.onTint, stateKey = pending.prepared.handle)
-        if (animation != null) {
-            MovingBackgroundNotes(snapshot, video = animation.source.clip != null)
-        } else if (snapshot.isAodSelected) {
-            Text(
-                stringResource(R.string.editor_picture_aod_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        }
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             FitButton(
                 stringResource(R.string.editor_bg_discard),
@@ -166,12 +163,15 @@ internal fun PictureWorkspace(
                 loading = state.isWorking,
             )
         }
-        Text(
-            stringResource(if (animation != null) R.string.editor_moving_picture_detail else R.string.editor_picture_detail,
-                importVariantLabel(snapshot.selectedVariant)),
-            modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
+        // The one thing about a moving picture that cannot wait for an ⓘ: its size is settled
+        // by this tap.
+        if (animation != null) {
+            Text(
+                stringResource(R.string.editor_moving_picture_size_now),
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
     }
 }

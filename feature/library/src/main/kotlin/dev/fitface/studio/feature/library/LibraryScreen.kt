@@ -1,9 +1,9 @@
 package dev.fitface.studio.feature.library
 
 import android.text.format.DateUtils
-import androidx.annotation.StringRes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,29 +23,29 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -76,23 +76,25 @@ import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.FaceStyleOption
 import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
-import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
+import dev.fitface.studio.core.model.isOutdated
+import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitBadge
-import dev.fitface.studio.core.ui.FitDetails
-import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitButton
-import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.FitChip
 import dev.fitface.studio.core.ui.FitDropdownMenu
-import dev.fitface.studio.core.ui.FitMenuEntry
 import dev.fitface.studio.core.ui.FitFaceType
-import dev.fitface.studio.core.ui.fitColors
-import dev.fitface.studio.core.ui.fitText
+import dev.fitface.studio.core.ui.FitHeading
+import dev.fitface.studio.core.ui.FitIconButton
+import dev.fitface.studio.core.ui.FitInfo
+import dev.fitface.studio.core.ui.FitMenuEntry
 import dev.fitface.studio.core.ui.FitStatus
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
+import dev.fitface.studio.core.ui.fitColors
+import dev.fitface.studio.core.ui.fitText
 import dev.fitface.studio.core.ui.styleLabel
 import java.io.File
 
@@ -579,12 +581,6 @@ private fun WatchFaceGrid(
                         stringResource(R.string.library_no_matches_title),
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    Text(
-                        stringResource(R.string.library_no_matches_detail),
-                        modifier = Modifier.padding(top = 7.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
                 }
             }
         } else {
@@ -907,22 +903,15 @@ private fun FaceDetailsSheet(
                     modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    MicroLabel(stringResource(R.string.library_sheet_package))
+                    FitHeading(stringResource(R.string.library_sheet_package)) {
+                        InfoText(stringResource(R.string.library_download_cache_note))
+                    }
+                    // A package already here costs nothing to open, and that is what this
+                    // line says instead of a size nobody will download.
                     Text(
-                        formatBytes(face.packageSize),
+                        if (packageOnDevice) stringResource(R.string.library_size_on_device) else formatBytes(face.packageSize),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                // Keep expanding reference inside the scroll, so the action stays reachable.
-                FitDetails(
-                    label = stringResource(R.string.library_download_details),
-                    modifier = Modifier.padding(top = 14.dp),
-                ) {
-                    Text(
-                        stringResource(R.string.library_download_cache_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary,
                     )
                 }
             }
@@ -946,17 +935,13 @@ private fun FaceDetailsSheet(
                     )
                 }
                 if (takesPhotos) {
+                    val photosNote = stringResource(R.string.library_send_photos_note)
                     FitButton(
                         text = stringResource(R.string.library_send_photos),
                         onClick = onSendPhotos,
                         modifier = Modifier.fillMaxWidth(),
                         enabled = openingProjectId == null,
-                    )
-                    Text(
-                        stringResource(R.string.library_send_photos_note),
-                        modifier = Modifier.padding(top = 10.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary,
+                        info = { InfoText(photosNote) },
                     )
                 } else FitButton(
                     // UPDATE and NEW_PROJECT run the same code — `onDownload` always fetches
@@ -991,19 +976,18 @@ private fun FaceDetailsSheet(
                         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     )
                 }
-                val actionNote = when {
-                    takesPhotos -> null
-                    action == FaceAction.UPDATE -> R.string.library_update_note
-                    packageOnDevice && action != FaceAction.NOT_EDITABLE -> R.string.library_new_project_note
-                    else -> null
-                }
-                actionNote?.let {
-                    Text(
-                        stringResource(it),
-                        modifier = Modifier.padding(top = 10.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary,
-                    )
+                // An update starts over in a new project, which is worth saying before the
+                // tap; that the old project's edits stay behind is behind its ⓘ.
+                if (!takesPhotos && action == FaceAction.UPDATE) {
+                    Row(
+                        Modifier.padding(top = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        val note = stringResource(R.string.library_update_short)
+                        Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+                        FitInfo(note, stringResource(R.string.library_update_note))
+                    }
                 }
             }
         }
@@ -1137,15 +1121,9 @@ private fun ProjectsList(
                         R.string.library_projects_local_count,
                         projects.size,
                     ),
+                    // Only once two projects share a face, which is when it can bite.
+                    sourceInfo = if (sharesAFace) stringResource(R.string.library_projects_shared_face_note) else null,
                 )
-                if (sharesAFace) {
-                    Text(
-                        stringResource(R.string.library_projects_shared_face_note),
-                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary,
-                    )
-                }
             }
         }
         // Under the controls, never above them: both pages lay their controls out in the
@@ -1162,12 +1140,6 @@ private fun ProjectsList(
                     Text(
                         stringResource(R.string.library_projects_no_matches_title),
                         style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        stringResource(R.string.library_projects_no_matches_detail),
-                        modifier = Modifier.padding(top = 7.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
@@ -1245,7 +1217,12 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
                 Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
             }
             Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
+                // Where it goes on the watch is behind the title: true, and worth knowing
+                // once, not a paragraph on the card every visit.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(title, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleMedium)
+                    FitInfo(title, slot)
+                }
                 Text(
                     detail,
                     modifier = Modifier.padding(top = 3.dp),
@@ -1283,7 +1260,6 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
                 },
             )
         }
-        Text(slot, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
     }
 }
 

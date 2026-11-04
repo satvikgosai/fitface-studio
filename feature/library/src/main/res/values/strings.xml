@@ -50,10 +50,8 @@
     <string name="library_source_live">Live catalogue</string>
     <string name="library_face_and_style_count">%1$d faces · %2$d styles</string>
     <string name="library_no_matches_title">No matching faces</string>
-    <string name="library_no_matches_detail">Try a face name or number.</string>
     <string name="library_loading_a11y">Loading the watch face catalogue</string>
     <string name="library_loading_title">Loading watch faces…</string>
-    <string name="library_loading_detail">requesting faces and style previews</string>
     <string name="library_unavailable_title">Catalogue unavailable</string>
     <!-- Only used when nothing recorded a reason; the real one is shown in its place. -->
     <string name="library_unavailable_detail">No faces returned. Try again, or use More options → Report a problem.</string>
@@ -76,7 +74,7 @@
     <string name="library_send_photos">Send photos to it</string>
     <string name="library_send_photos_note">This face has nothing to edit. It shows your own photos, which this app can send to it.</string>
     <string name="library_photos_title">Send photos to the Photos face</string>
-    <string name="library_photos_detail">Your own photos on the watch’s Photos face, up to 7.</string>
+    <string name="library_photos_detail">Up to 7 of your photos.</string>
     <plurals name="library_face_card_projects">
         <item quantity="one">%1$d project</item>
         <item quantity="other">%1$d projects</item>
@@ -105,10 +103,10 @@
     <!-- The package is cached but no project was ever kept from it, so there is nothing to
          download and no sibling for "new" to be new beside. -->
     <string name="library_open_edit">Open &amp; edit</string>
-    <string name="library_new_project_note">Already on this device. No download needed.</string>
     <!-- version name -->
     <string name="library_update_to">Update to %1$s</string>
     <string name="library_update_note">Creates a new project with the newer face. Existing projects stay unchanged; their edits cannot carry over.</string>
+    <string name="library_update_short">Starts a new project</string>
     <string name="library_project_outdated">OUTDATED</string>
     <!-- project name, style, how long ago it was edited -->
     <string name="library_sheet_project_a11y">Open %1$s, %2$s, edited %3$s</string>
@@ -131,17 +129,16 @@
     <string name="library_projects_loading_title">Loading projects…</string>
     <string name="library_projects_loading_a11y">Loading your saved projects</string>
     <string name="library_projects_empty_title">No projects yet</string>
-    <string name="library_projects_empty_detail">Download a watch face or import a project to start. The original and your applied edits are saved privately on this device.</string>
+    <string name="library_projects_empty_detail">Download a watch face or import a project to start.</string>
     <string name="library_browse">Browse watch faces</string>
     <string name="library_project_face_line">face %1$s · %2$s</string>
     <string name="library_project_face_line_plain">face %1$s</string>
     <string name="library_projects_search_placeholder">Search your projects</string>
     <string name="library_projects_no_matches_title">No matching projects</string>
-    <string name="library_projects_no_matches_detail">Try a project name or face number.</string>
     <!-- Two projects on one face are the same face to the watch, which keeps one per face. -->
     <!-- A custom face: one face's clock on an empty panel, made on the phone from the store's package. -->
     <string name="library_custom_face_title">Start a custom face</string>
-    <string name="library_custom_face_detail">A clock on an empty panel. Add your own background and widgets.</string>
+    <string name="library_custom_face_detail">A clock on an empty face, for your own background and widgets.</string>
     <string name="library_custom_face_name">Custom face</string>
     <string name="library_custom_face_download">↓ %1$s download</string>
     <string name="library_custom_face_cached">No download needed</string>
@@ -182,8 +179,8 @@
 
     <!-- Package size -->
     <string name="library_size_unavailable">size unavailable</string>
+    <string name="library_size_on_device">On this device</string>
     <string name="library_size_bytes">%1$d B</string>
     <string name="library_size_kib">%1$.1f KiB</string>
     <string name="library_size_mib">%1$.1f MiB</string>
-    <string name="library_download_details">Download details</string>
 </resources>

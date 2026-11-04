@@ -1,13 +1,14 @@
 package dev.fitface.studio.feature.editor
 
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -17,6 +18,8 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.fitface.studio.core.model.*
 import dev.fitface.studio.core.ui.*
+import dev.fitface.studio.core.ui.FitInfo
+import dev.fitface.studio.core.ui.InfoText
 
 @Composable
 internal fun StyleManagementRoute(projectId: Long, protectedVariant: String? = null,
@@ -39,12 +42,18 @@ internal fun StyleManagementRoute(projectId: Long, protectedVariant: String? = n
                     state.error?.let { StatusBanner(FitStatus.Fail, it) }
                     state.review?.let { review ->
                         val snapshot = review.snapshot
-                        Text(stringResource(R.string.editor_style_capacity_usage, mebibytes(snapshot.containerBytes)),
-                            style = MaterialTheme.typography.bodyMedium)
+                        val usage = stringResource(R.string.editor_style_capacity_usage, mebibytes(snapshot.containerBytes))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(usage, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.bodyMedium)
+                            // How the previews are drawn and what is never offered here.
+                            FitInfo(usage) {
+                                InfoText(stringResource(R.string.editor_style_previews_info))
+                                InfoText(stringResource(R.string.editor_sample_preview_info))
+                                if (snapshot.hasAod) InfoText(stringResource(R.string.editor_style_aod_kept))
+                            }
+                        }
                         capacity?.let { Text(stringResource(R.string.editor_style_capacity_deficit, it.deficit)) }
                         Text(stringResource(R.string.editor_style_delete_explanation), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.fitText.secondary)
-                        Text(stringResource(R.string.editor_aod_approximate), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.fitText.secondary)
                         val shown = if (state.confirming) snapshot.styleNames.filter { it in state.chosen } else snapshot.styleNames
                         shown.forEach { name ->
@@ -83,8 +92,6 @@ internal fun StyleManagementRoute(projectId: Long, protectedVariant: String? = n
                                 if (state.protectedVariant != null) Text(stringResource(R.string.editor_style_delete_saved))
                             }
                         }
-                        if (snapshot.hasAod) Text(stringResource(R.string.editor_style_aod_kept),
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
                     }
                 }
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

@@ -74,7 +74,6 @@ import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
 import dev.fitface.studio.core.ui.FitFaceType
 import dev.fitface.studio.core.ui.FitIconButton
-import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.fitText
 import kotlinx.coroutines.launch
 
@@ -331,10 +330,6 @@ internal fun QuickColourPage(
                 enabled = !isWorking,
             )
         }
-        MicroLabel(
-            stringResource(R.string.editor_quick_colour_hint),
-            Modifier.align(Alignment.CenterHorizontally).padding(top = TrayHintTop),
-        )
     }
     if (slidersOpen && current != null) {
         // Exactly over this page, at its size: the sliders replace the panel while they are
