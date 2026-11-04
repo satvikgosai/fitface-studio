@@ -98,6 +98,73 @@ class StylePreviewProjectTest {
         assertEquals("style2.png", File(preview).name)
     }
 
+    /**
+     * Update thumbnail puts the face-picker picture the watch will show into the projects
+     * list, and Undo, Redo and Reset keep it in step: it is read from the face being saved.
+     */
+    @Test fun theListShowsTheUpdatedPickerThumbnailAndFollowsUndoRedoAndReset() = runBlocking {
+        val opened = repository.openPackage(facePackage(styleId = 2))
+        val stock = opened.stylePreviewPaths.getValue("style2.bin")
+        fun listed() = runBlocking { repository.observeProjects().first().single().previewImagePath }
+        val picker = File(File(stock).parentFile, "picker-style2.png")
+
+        val widget = opened.widgets.first { it.canEditPosition }
+        repository.moveWidget(opened.selectedVariant.basename, widget.globalIndex, widget.type,
+            widget.sequenceId, widget.x + 3, widget.y, false, null)
+        assertEquals("an edit alone leaves the package's preview", stock, listed())
+        assertTrue(!picker.exists())
+
+        repository.refreshThumbnail()
+        assertEquals(picker.absolutePath, listed())
+        assertTrue(
+            "the picker preview is not a PNG",
+            picker.readBytes().copyOf(PngSignature.size).contentEquals(PngSignature),
+        )
+
+        repository.undo()
+        assertEquals("undoing the update puts the package's preview back", stock, listed())
+        assertTrue(!picker.exists())
+        repository.redo()
+        assertEquals(picker.absolutePath, listed())
+
+        // A later edit keeps it, as the watch's picker keeps the frame until the next update.
+        val moved = repository.openedProject(opened.projectId)!!
+        val again = moved.widgets.first { it.globalIndex == widget.globalIndex }
+        repository.moveWidget(moved.selectedVariant.basename, again.globalIndex, again.type,
+            again.sequenceId, again.x + 3, again.y, false, null)
+        assertEquals(picker.absolutePath, listed())
+
+        repository.resetEdits()
+        assertEquals(stock, listed())
+        assertTrue(!picker.exists())
+    }
+
+    /**
+     * A project whose thumbnail was updated by a version that wrote no picker preview shows
+     * the package's until it is next opened, which writes it from the face it saved; a copy
+     * carries it with the rest of the previews.
+     */
+    @Test fun anOlderProjectGetsItsPickerPreviewOnOpenAndACopyKeepsIt() = runBlocking {
+        val opened = repository.openPackage(facePackage(styleId = 2))
+        val stock = opened.stylePreviewPaths.getValue("style2.bin")
+        val widget = opened.widgets.first { it.canEditPosition }
+        repository.moveWidget(opened.selectedVariant.basename, widget.globalIndex, widget.type,
+            widget.sequenceId, widget.x + 3, widget.y, false, null)
+        repository.refreshThumbnail()
+        val picker = File(File(stock).parentFile, "picker-style2.png")
+        // As an older version left it: the saved face has the thumbnail, the folder does not.
+        assertTrue(picker.delete())
+
+        repository = newRepository()
+        assertEquals(stock, repository.observeProjects().first().single().previewImagePath)
+        repository.openProject(opened.projectId)
+        assertEquals(picker.absolutePath, repository.observeProjects().first().single().previewImagePath)
+
+        val copy = repository.duplicateProject(opened.projectId)
+        val copied = repository.observeProjects().first().single { it.id == copy.id }.previewImagePath
+        assertEquals("picker-style2.png", File(requireNotNull(copied)).name)
+    }
+
     @Test fun previewsFollowPristineIdentityAcrossRepeatedDeletionReopenCopyAndReset() = runBlocking {
         val original = repository.openPackage(facePackage(styleId = 2))
         val expected = original.stylePreviewPaths.getValue("style2.bin")

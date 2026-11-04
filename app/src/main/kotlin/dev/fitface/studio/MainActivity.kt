@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,10 +39,15 @@ class MainActivity : ComponentActivity() {
         setContent {
             FitFaceTheme {
                 val backStack = rememberNavBackStack(LibraryDestination)
+                // Counts every pop that leaves the library on top. The library stays composed
+                // while an editor's enter transition runs, so backing out during it never
+                // recomposes the library afresh; this count is what tells it it was returned to.
+                var libraryReturns by remember { mutableIntStateOf(0) }
                 val popSafely: (Int) -> Unit = { requested ->
                     repeat(requested.coerceAtMost((backStack.size - 1).coerceAtLeast(0))) {
                         backStack.removeLastOrNull()
                     }
+                    if (backStack.lastOrNull() == LibraryDestination) libraryReturns++
                 }
                 // The app menu's two dialogs are hosted here rather than in either screen.
                 // Both top bars carry the menu, so hosting them below would mean two
@@ -65,6 +71,7 @@ class MainActivity : ComponentActivity() {
                     entryProvider = entryProvider {
                         entry<LibraryDestination> {
                             LibraryRoute(
+                                returns = libraryReturns,
                                 onOpenEditor = { projectId ->
                                     backStack.add(EditorDestination(projectId))
                                 },

@@ -305,16 +305,15 @@ class LibraryViewModelTest {
     }
 
     /**
-     * A finished open closes the face sheet, the way a finished download already did.
+     * A finished open closes the face sheet, the way a finished download already did, but
+     * nothing else can open until the library is shown again.
      *
-     * The flag has to come off here — the library keeps this ViewModel while it sits under
-     * the editor, so one left set is a screen that comes back with every row dead — and the
-     * moment it does, the sheet's project rows are live again for as long as the editor
-     * takes to arrive. They are the rows under the finger, so they go with the same update
-     * rather than waiting to be tapped a second time.
+     * The editor only takes the screen once navigation gets to it. Releasing the rows the
+     * moment the open finished left them live in that gap, so a second tap opened a second
+     * project: the first editor arrived, and backing out of it landed in the second.
      */
     @Test
-    fun afinishedOpenClosesTheSheetAndReleasesTheRows() {
+    fun aFinishedOpenHoldsEveryOpenUntilTheLibraryIsShownAgain() {
         val opened = CompletableDeferred<EditorSnapshot>()
         coEvery { repository.openProject(project.id) } coAnswers { opened.await() }
         val catalog = FakeCatalog(loaded = catalogue)
@@ -335,9 +334,62 @@ class LibraryViewModelTest {
         settle()
 
         assertEquals(listOf(LibraryEvent.OpenEditor(12)), events)
+        // The sheet stays, spinning, until the editor has the screen: closed earlier, the
+        // face grid flashed between the two.
+        assertEquals(faces[0], viewModel.state.value.selectedFace)
+        assertTrue("nothing is live while the editor is on its way", viewModel.state.value.isWorking)
+        assertFalse(viewModel.state.value.canSelectFace)
+
+        // A second tap in the gap is refused: one open, one editor.
+        viewModel.openProject(project.copy(id = 13))
+        viewModel.startCustomFace("Custom face")
+        settle()
+        coVerify(exactly = 1) { repository.openProject(any()) }
+        assertEquals(listOf(LibraryEvent.OpenEditor(12)), events)
+
+        // A rotation before the editor is on the back stack: the library leaves and comes
+        // back, and the hold and the sheet both stay.
+        viewModel.onLibraryHidden()
+        viewModel.onLibraryShown()
+        assertEquals(faces[0], viewModel.state.value.selectedFace)
+        assertTrue(viewModel.state.value.isWorking)
+
+        viewModel.onEditorNavigated()
+        viewModel.onLibraryHidden()
+        assertNull("the sheet goes with the screen", viewModel.state.value.selectedFace)
+
+        // Back from the editor: the row stops spinning and the list is live again.
+        viewModel.onLibraryShown()
         assertNull("the row must not be left spinning", viewModel.state.value.openingProjectId)
-        assertNull("the rows under the finger go with it", viewModel.state.value.selectedFace)
+        assertFalse(viewModel.state.value.isWorking)
         collector.cancel()
+    }
+
+    /**
+     * Backed out of during the editor's enter transition, the library never leaves
+     * composition: it is shown again without having been hidden. That must still end the
+     * hand-off and close the sheet, or every row stays locked.
+     */
+    @Test
+    fun backingOutBeforeTheLibraryWasHiddenStillReleasesTheHold() {
+        coEvery { repository.openProject(project.id) } returns
+            mockk<EditorSnapshot>(relaxed = true) { every { projectId } returns 12 }
+        val catalog = FakeCatalog(loaded = catalogue)
+
+        val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
+        settle()
+        viewModel.selectFace(faces[0])
+        viewModel.openProject(project)
+        settle()
+        assertTrue(viewModel.state.value.isWorking)
+
+        viewModel.onEditorNavigated()
+        viewModel.onLibraryShown()
+
+        assertFalse("the list must be live again", viewModel.state.value.isWorking)
+        assertTrue(viewModel.state.value.canSelectFace)
+        assertNull("the row must not be left spinning", viewModel.state.value.openingProjectId)
+        assertNull("the sheet closes on the way back", viewModel.state.value.selectedFace)
     }
 
     /** A failure puts the rows back rather than leaving the list inert. */

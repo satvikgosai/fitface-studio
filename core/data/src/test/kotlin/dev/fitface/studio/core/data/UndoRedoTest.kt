@@ -22,7 +22,9 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -265,6 +267,25 @@ class UndoRedoTest {
         assertEquals("history is the session's, not a reopen's", EditKind.MOVE, opened.undoKind)
         assertNull(repository.openedProject(s.projectId + 1))
         assertNull(repository().openedProject(s.projectId))
+    }
+
+    /**
+     * The editor's first ask after an open takes the snapshot the open built rather than
+     * composing every preview again — once, and only while nothing has changed since.
+     */
+    @Test fun theEditorTakesTheSnapshotTheOpenBuiltOnceAndOnlyWhileUnchanged() = runBlocking {
+        val s = repository.openPackage(face("00106"))
+        val first = requireNotNull(repository.openedProject(s.projectId))
+        assertSame("handed over, not rebuilt", s.preview, first.preview)
+        val again = requireNotNull(repository.openedProject(s.projectId))
+        assertNotSame("only once", s.preview, again.preview)
+
+        val reopened = repository.openProject(s.projectId)
+        val widget = reopened.widgets.first { it.type == 5 && it.canEditPosition }
+        val moved = move(reopened, widget)
+        val afterEdit = requireNotNull(repository.openedProject(s.projectId))
+        assertNotSame("an edit since the open builds a fresh one", reopened.preview, afterEdit.preview)
+        assertEquals(moved.widgets, afterEdit.widgets)
     }
 
     @Test fun aDuplicateCopiesOnlyTheCurrentStateAndOpeningAnotherProjectDropsHistory() = runBlocking {

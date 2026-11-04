@@ -713,12 +713,31 @@ private fun EditorScreen(
     }
 }
 
+/** How long the editor waits on its first load before it shows a loading screen. */
+private const val EditorLoadingGraceMillis = 700L
+
 @Composable
 private fun EditorUnavailable(
     loading: Boolean,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // A load that finishes quickly shows nothing at all. The library has already shown its
+    // own spinner for the open, and a second loading screen flashing in for a moment between
+    // that and the editor read as the open happening twice. Only a load that is still going
+    // after [EditorLoadingGraceMillis] — the app restored straight into the editor, say —
+    // gets the placeholder and the spinner.
+    var showLoading by remember { mutableStateOf(false) }
+    if (loading) {
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(EditorLoadingGraceMillis)
+            showLoading = true
+        }
+        if (!showLoading) {
+            Box(modifier)
+            return
+        }
+    }
     Column(modifier) {
         FitTopBar(
             title = stringResource(

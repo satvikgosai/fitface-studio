@@ -33,6 +33,8 @@ Fixed:
   fonts. Imported text now shares the fonts the face already has.
 - The **Projects** tab showed **0** projects while it was still reading them. It now says
   it is loading, and projects open faster.
+- A quick second tap could open two projects at once.
+- Opening a project no longer flashes a second loading screen.
 
 Added:
 
@@ -59,6 +61,8 @@ Added:
 - Editing pages show their controls first: explanations are behind an **ⓘ** you can tap,
   and a gesture you have not used yet gets a one-line hint until you try it.
 - Adding widgets and backgrounds from other faces is no longer marked **Experimental**.
+- After **Update thumbnail**, the **Projects** list shows that project with its new
+  face-picker thumbnail, the picture the watch's face picker shows.
 
 ## 0.2.1 (code `21`) — 2026-10-07
 

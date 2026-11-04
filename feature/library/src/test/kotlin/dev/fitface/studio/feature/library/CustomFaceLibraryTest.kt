@@ -69,7 +69,15 @@ class CustomFaceLibraryTest {
         // With the catalogue's numbers, so a custom face never takes one the store uses.
         coVerify(exactly = 1) { repository.openTemplate(any(), "Custom face", setOf("00001", "00006")) }
         assertEquals(listOf<LibraryEvent>(LibraryEvent.OpenEditor(42)), events)
+        // The card keeps its bar, and nothing else opens, until the editor has come and gone.
+        assertTrue(viewModel.state.value.editorHandoff)
+        viewModel.startCustomFace("Custom face")
+        settle()
+        assertEquals(listOf(template), catalog.downloaded)
+        viewModel.onEditorNavigated()
+        viewModel.onLibraryShown()
         assertNull(viewModel.state.value.customFaceProgress)
+        assertFalse(viewModel.state.value.isWorking)
     }
 
     /** The session is single, so while one is being made nothing else may open. */

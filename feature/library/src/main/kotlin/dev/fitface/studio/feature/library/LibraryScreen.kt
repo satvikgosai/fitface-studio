@@ -47,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -100,6 +101,7 @@ import java.io.File
 
 @Composable
 fun LibraryRoute(
+    returns: Int,
     onOpenEditor: (Long) -> Unit,
     onOpenPhotos: () -> Unit,
     onAbout: () -> Unit,
@@ -109,9 +111,19 @@ fun LibraryRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
+    // Leaving composition after the editor was put on the back stack is the editor taking the
+    // screen: the sheet closes then, unseen. A rotation before that leaves it alone.
+    DisposableEffect(viewModel) { onDispose { viewModel.onLibraryHidden() } }
+    // [returns] counts pops back to the library. Usually the library has left composition and
+    // this runs as it comes back; backed out of during the editor's enter transition, it never
+    // left, and only the count changing says the hand-off is over.
+    LaunchedEffect(viewModel, returns) { viewModel.onLibraryShown() }
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
-            if (event is LibraryEvent.OpenEditor) onOpenEditor(event.projectId)
+            if (event is LibraryEvent.OpenEditor) {
+                onOpenEditor(event.projectId)
+                viewModel.onEditorNavigated()
+            }
         }
     }
     // Cleared after the snackbar has been shown: clearing first changed this effect's
@@ -1166,19 +1178,19 @@ private fun ProjectsList(
 /**
  * Starts a custom face: a face's clock on an empty panel, to build on.
  *
- * It says two things before it is tapped, because both are costs the reader should choose
- * knowingly. **Whether it downloads**: nothing ships with this app, so the face it is built
- * from comes from the store like any other, and the card says how big that is or that the
- * package is already here. **Where it goes on the watch**: each custom face gets a face
- * number of its own, so it installs beside Info_4 and the others instead of replacing them,
- * and Galaxy Wearable shows it as a blank tile.
+ * Shaped like the project rows under it — 84dp, a 38×60 plate, a title, two one-line meta
+ * lines, `›` — so the list reads as one column of the same thing, with this one tinted as the
+ * action. It says before the tap **whether it downloads**, in the line where a project shows
+ * when it was edited: nothing ships with this app, so the face it is built from comes from the
+ * store like any other. **Where it goes on the watch** — its own face number, a blank tile in
+ * Galaxy Wearable — is behind the title's ⓘ. While it runs, the two meta lines are the progress.
  */
 @Composable
 private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
     val source = state.customFaceSource
     val progress = state.customFaceProgress
     val enabled = source != null && progress == null && !state.isOpeningProject &&
-        state.downloadingProductId == null
+        state.downloadingProductId == null && !state.editorHandoff
     val sourceName = source?.name ?: stringResource(R.string.library_custom_face_source_fallback)
     val cost = when {
         source == null && state.isLoadingCatalog -> stringResource(R.string.library_custom_face_waiting)
@@ -1189,54 +1201,53 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
     val slot = stringResource(R.string.library_custom_face_slot)
     val title = stringResource(R.string.library_custom_face_title)
     val detail = stringResource(R.string.library_custom_face_detail)
-    val description = "$title. $detail $cost. $slot"
-    Column(
+    val more = stringResource(R.string.library_custom_face_info)
+    val description = "$title. $detail. $cost. $slot"
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 84.dp)
             .alpha(if (source == null) .6f else 1f)
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.primary.copy(alpha = .06f))
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .35f), MaterialTheme.shapes.medium)
             .clickable(enabled = enabled, role = Role.Button, onClick = onStart)
             .semantics { contentDescription = description }
-            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+            .padding(start = 14.dp, top = 12.dp, end = 10.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(13.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(13.dp),
+        // A project thumbnail's plate, with the mark for adding one, so the plates line up.
+        val plate = RoundedCornerShape(8.dp)
+        Box(
+            Modifier
+                .width(38.dp)
+                .height(60.dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), plate)
+                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), plate),
+            contentAlignment = Alignment.Center,
         ) {
-            // The empty state's tile, with the mark for adding one.
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), MaterialTheme.shapes.medium)
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), MaterialTheme.shapes.medium),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
-            }
-            Column(Modifier.weight(1f)) {
-                // Where it goes on the watch is behind the title: true, and worth knowing
-                // once, not a paragraph on the card every visit.
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(title, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleMedium)
-                    FitInfo(title, slot)
-                }
-                Text(
-                    detail,
-                    modifier = Modifier.padding(top = 3.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.fitText.secondary,
-                )
-            }
+            Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
         }
-        if (progress != null) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    title,
+                    Modifier.weight(1f, fill = false),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                FitInfo(title) {
+                    InfoText(more)
+                    InfoText(slot)
+                }
+            }
+            if (progress != null) {
                 if (progress.building) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 9.dp))
                 } else {
-                    LinearProgressIndicator({ progress.fraction }, Modifier.fillMaxWidth())
+                    LinearProgressIndicator({ progress.fraction }, Modifier.fillMaxWidth().padding(top = 9.dp))
                 }
                 Text(
                     if (progress.building) {
@@ -1245,21 +1256,36 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
                         stringResource(R.string.library_custom_face_downloading, sourceName,
                             (progress.fraction * 100).toInt())
                     },
+                    modifier = Modifier.padding(top = 6.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.fitText.secondary,
                 )
+            } else {
+                Text(
+                    detail,
+                    modifier = Modifier.padding(top = 3.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.fitText.secondary,
+                )
+                Text(
+                    cost,
+                    modifier = Modifier.padding(top = 3.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (state.customFaceCached && source != null) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.fitText.secondary
+                    },
+                )
             }
-        } else {
-            Text(
-                cost.uppercase(),
-                style = FitFaceType.micro,
-                color = if (state.customFaceCached && source != null) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.fitText.secondary
-                },
-            )
         }
+        ProjectRowTrailing(opening = false)
     }
 }
 
@@ -1278,7 +1304,7 @@ private fun PhotosCard(state: LibraryUiState, onOpen: () -> Unit) {
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
-            .clickable(enabled = !state.isOpeningProject, role = Role.Button, onClick = onOpen)
+            .clickable(enabled = !state.isOpeningProject && !state.editorHandoff, role = Role.Button, onClick = onOpen)
             .semantics(mergeDescendants = true) { contentDescription = "$title. $detail" }
             .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

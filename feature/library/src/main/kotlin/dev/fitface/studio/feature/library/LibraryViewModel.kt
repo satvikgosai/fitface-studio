@@ -43,6 +43,23 @@ data class LibraryUiState(
      * and then its neighbours.
      */
     val openingProjectId: Long? = null,
+    /**
+     * An editor has been asked for and the library has not been shown since.
+     *
+     * An open, a download or a custom face ends when its project is ready, but the editor
+     * only takes the screen once navigation gets to it — a moment on a fast phone, a second
+     * or more on a slow one. Clearing the busy flags at the end of the work left every row
+     * live in that gap, so a second tap opened a second project: the first editor arrived,
+     * and backing out of it landed in the second. This holds every open off until
+     * [LibraryViewModel.onLibraryShown] says the library is on screen again.
+     */
+    val editorHandoff: Boolean = false,
+    /**
+     * The editor [editorHandoff] waits for has been put on the back stack. Until it has, the
+     * library leaving and returning — a rotation, a theme change — is not the editor coming
+     * and going, and must neither release the hold nor close the sheet.
+     */
+    val editorNavigated: Boolean = false,
     val faces: List<CatalogFace> = emptyList(),
     val styleCount: Int = 0,
     val catalogFromCache: Boolean = false,
@@ -168,7 +185,7 @@ data class LibraryUiState(
 
     val isWorking: Boolean
         get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null ||
-            customFaceProgress != null
+            customFaceProgress != null || editorHandoff
 
     /**
      * Whether a tap on the grid may open the face sheet. Deliberately narrower than
@@ -182,7 +199,8 @@ data class LibraryUiState(
      * Opening a project and a download in flight do conflict, so those still refuse.
      */
     val canSelectFace: Boolean
-        get() = !isOpeningProject && downloadingProductId == null && customFaceProgress == null
+        get() = !isOpeningProject && downloadingProductId == null && customFaceProgress == null &&
+            !editorHandoff
 
     val visibleFaces: List<CatalogFace>
         get() {
@@ -371,7 +389,7 @@ class LibraryViewModel @Inject constructor(
         val current = mutableState.value
         val source = current.customFaceSource ?: return
         if (current.customFaceProgress != null || current.downloadingProductId != null) return
-        if (current.isOpeningProject) return
+        if (current.isOpeningProject || current.editorHandoff) return
         // The catalogue's own numbers are never given out, in case it grows into the range.
         val catalogueFaceIds = current.faces.mapTo(mutableSetOf(), CatalogFace::faceId)
         viewModelScope.launch {
@@ -395,8 +413,10 @@ class LibraryViewModel @Inject constructor(
                 }
                 repository.openTemplate(downloaded, name, catalogueFaceIds)
             }.onSuccess { snapshot ->
+                // The bar stays on the card until the library is shown again, so nothing is
+                // live while the editor is on its way. See [LibraryUiState.editorHandoff].
+                mutableState.update { it.copy(editorHandoff = true) }
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
-                mutableState.update { it.copy(customFaceProgress = null) }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 mutableState.update { it.copy(customFaceProgress = null, error = error.userMessage()) }
@@ -524,7 +544,7 @@ class LibraryViewModel @Inject constructor(
         // button sits under the rows that start one, live for the several seconds an open
         // takes. Two editors on the back stack was the result.
         if (mutableState.value.downloadingProductId != null) return
-        if (mutableState.value.isOpeningProject) return
+        if (mutableState.value.isOpeningProject || mutableState.value.editorHandoff) return
         if (mutableState.value.customFaceProgress != null) return
         viewModelScope.launch {
             mutableState.update {
@@ -541,15 +561,9 @@ class LibraryViewModel @Inject constructor(
                 }
                 repository.openPackage(downloaded)
             }.onSuccess { snapshot ->
-                mutableState.update {
-                    it.copy(
-                        downloadingProductId = null,
-                        downloadFraction = 0f,
-                        selectedFace = null,
-                        selectedStyleId = null,
-                        selectedFaceCached = false,
-                    )
-                }
+                // The sheet and its busy button stay until the editor has the screen; see
+                // [onLibraryHidden] and [onLibraryShown].
+                mutableState.update { it.copy(editorHandoff = true) }
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
             }.onFailure { error ->
                 // `runCatching` catches Throwable, so it catches the cancellation that
@@ -586,29 +600,64 @@ class LibraryViewModel @Inject constructor(
             mutableState.update { it.copy(openingProjectId = project.id, error = null) }
             runCatching { repository.openProject(project.id) }
                 .onSuccess { snapshot ->
-                    // The face sheet closes here, the way a finished download already
-                    // closes it. The flag has to come off — the library keeps this
-                    // ViewModel while it sits under the editor, so one left set is a
-                    // screen that comes back with every row dead — and the moment it does,
-                    // the sheet's rows are live again for as long as the editor takes to
-                    // arrive. Those are the rows under the finger, so they go with it. The
-                    // editor is asked for first for the same reason, though a buffered
-                    // channel makes that ordering a courtesy rather than a guarantee.
+                    // The row keeps its spinner, and every other row stays inert, until the
+                    // library is shown again: clearing the flag here left them live while the
+                    // editor was still on its way, and a second tap opened a second project
+                    // behind the first. [onLibraryShown] takes it off, so the screen does not
+                    // come back with every row dead.
+                    mutableState.update { it.copy(editorHandoff = true) }
                     eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
-                    mutableState.update {
-                        it.copy(
-                            openingProjectId = null,
-                            selectedFace = null,
-                            selectedStyleId = null,
-                            selectedFaceCached = false,
-                        )
-                    }
                 }
                 .onFailure { error ->
                     mutableState.update {
                         it.copy(openingProjectId = null, error = error.userMessage())
                     }
                 }
+        }
+    }
+
+    /** The editor asked for in a hand-off is on the back stack; see [LibraryUiState.editorNavigated]. */
+    fun onEditorNavigated() {
+        if (!mutableState.value.editorHandoff) return
+        mutableState.update { it.copy(editorNavigated = true) }
+    }
+
+    /**
+     * The library has left the screen for the editor it asked for. The face sheet closes now,
+     * not when the open finished or when the editor was asked for: closed at either, the
+     * library drew the face grid for a frame before the editor arrived, a flash between the
+     * sheet's spinner and the editor. Nothing else leaves the library during a hand-off;
+     * outside one, this does nothing.
+     */
+    fun onLibraryHidden() {
+        if (!mutableState.value.editorHandoff || !mutableState.value.editorNavigated) return
+        mutableState.update {
+            it.copy(selectedFace = null, selectedStyleId = null, selectedFaceCached = false, sheetError = null)
+        }
+    }
+
+    /**
+     * The library is on screen. After an editor was asked for, this is the first moment it
+     * is safe to open another: the editor has come and gone. Clears what the handed-off work
+     * left showing — the row's spinner, the custom face's bar, the sheet and its download.
+     * The sheet is usually closed already by [onLibraryHidden]; backed out of during the
+     * editor's enter transition, the library never left, and it closes here instead.
+     */
+    fun onLibraryShown() {
+        if (!mutableState.value.editorHandoff || !mutableState.value.editorNavigated) return
+        mutableState.update {
+            it.copy(
+                editorHandoff = false,
+                editorNavigated = false,
+                openingProjectId = null,
+                customFaceProgress = null,
+                downloadingProductId = null,
+                downloadFraction = 0f,
+                selectedFace = null,
+                selectedStyleId = null,
+                selectedFaceCached = false,
+                sheetError = null,
+            )
         }
     }
 

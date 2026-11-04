@@ -674,7 +674,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         loaded.projectId = projectId
         loaded.projectName = project.projectName ?: loaded.sourceName
         loaded.stylePreviewFiles = stylePreviews
-        return loaded.also(::replaceSession).snapshot()
+        return loaded.also(::replaceSession).openedSnapshot()
     }
 
     override suspend fun openProject(projectId: Long): EditorSnapshot =
@@ -707,6 +707,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // this write produces is the one the projects list draws from, and it lists
                 // the previews directory as it stands at that moment.
                 val stylePreviews = writeStylePreviews(project.id, loaded.apk)
+                // Also what a project saved by an older version is missing: its updated
+                // face-picker thumbnail, written now from the face it saved.
+                syncPickerPreviews(loaded)
                 projectDao.insert(
                     project.copy(
                         faceName = loaded.apk.faceName,
@@ -717,12 +720,17 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 loaded.projectName = project.resolvedName
                 loaded.stylePreviewFiles = stylePreviews
                 sweepCheckpoints(project.id, loaded.currentFile)
-                loaded.also(::replaceSession).snapshot()
+                loaded.also(::replaceSession).openedSnapshot()
             }
         }
 
     override suspend fun openedProject(projectId: Long): EditorSnapshot? = withContext(Dispatchers.Default) {
-        mutex.withLock { session?.takeIf { it.projectId == projectId }?.let { it.labelled(it.snapshot()) } }
+        mutex.withLock {
+            // The snapshot the open just built, when nothing has touched the session since:
+            // building it again recomposes every preview, which kept the editor on its
+            // loading screen for a second after the library's own spinner had finished.
+            session?.takeIf { it.projectId == projectId }?.let { it.labelled(it.takeOpened() ?: it.snapshot()) }
+        }
     }
 
     override suspend fun renameProject(projectId: Long, name: String) =
@@ -2695,6 +2703,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             withContext(NonCancellable) {
                 try {
                     writeAtomically(checkpoint, bytes)
+                    syncPickerPreviews(current)
                     projectDao.insert(project.copy(editedBinPath = checkpoint.absolutePath,
                         selectedStyle = current.activeStyleName, updatedAtEpochMillis = System.currentTimeMillis()))
                 } catch (error: Throwable) {
@@ -2705,6 +2714,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             return checkpoint
         }
         withContext(NonCancellable) {
+            syncPickerPreviews(current)
             projectDao.insert(project.copy(editedBinPath = null, selectedStyle = current.activeStyleName,
                 updatedAtEpochMillis = System.currentTimeMillis()))
             File(directory, "edited.bin").delete()
@@ -2792,6 +2802,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     val project = requireNotNull(projectDao.findById(current.projectId)) {
                         "This project no longer exists."
                     }
+                    syncPickerPreviews(current)
                     projectDao.insert(project.copy(editedBinPath = file?.absolutePath,
                         selectedStyle = state.activeStyleName, updatedAtEpochMillis = System.currentTimeMillis()))
                 }
@@ -3073,6 +3084,54 @@ class WatchFaceRepositoryImpl @Inject constructor(
     }
 
     /**
+     * Puts each style's face-picker thumbnail on disk as `picker-style<N>.png` while the saved
+     * face holds one that differs from the package's — which is what Update thumbnail writes —
+     * and removes it once it no longer does, after Undo or Reset. The projects list prefers it
+     * to the package's preview, so it shows what the watch's face picker shows.
+     *
+     * Derived from the face being saved rather than recorded when the thumbnail is updated,
+     * so Undo, Redo, Reset and a project saved by an older version all agree with it without
+     * a state of their own. Called before the row is written, for the reason
+     * [writeStylePreviews]'s callers give. Cosmetic, so best effort: never a reason a save fails.
+     */
+    private fun syncPickerPreviews(current: Session) {
+        if (current.projectId <= 0) return
+        runCatching {
+            val directory = previewsDirectory(current.projectId)
+            val styles = FaceResources.selectableStyles(current.currentContainer)
+            val originalStyles = FaceResources.selectableStyles(current.originalContainer).map { it.basename }
+            val originalVariants = current.lineage?.variants.orEmpty()
+            val kept = mutableSetOf<String>()
+            styles.forEachIndexed { index, entry ->
+                val frame = FaceEditor.previewThumbnail(current.currentContainer, index) ?: return@forEachIndexed
+                val originalIndex = originalStyles.indexOf(originalVariants[entry.basename] ?: entry.basename)
+                val original = originalIndex.takeIf { it >= 0 }
+                    ?.let { FaceEditor.previewThumbnail(current.originalContainer, it) }
+                if (original != null && original.width == frame.width && original.height == frame.height &&
+                    original.argb.contentEquals(frame.argb)
+                ) {
+                    return@forEachIndexed
+                }
+                val file = File(directory, "picker-style${FaceResources.styleNumber(entry.basename)}.png")
+                kept += file.name
+                // The PNG is re-encoded only when the frame is not the one already written.
+                val hash = frame.argb.contentHashCode()
+                if (file.isFile && current.pickerHashes[file.name] == hash) return@forEachIndexed
+                writeAtomically(file, frame.toPng())
+                current.pickerHashes[file.name] = hash
+            }
+            directory.listFiles().orEmpty()
+                .filter { PickerFileNamePattern.matches(it.name) && it.name !in kept }
+                .forEach {
+                    it.delete()
+                    current.pickerHashes.remove(it.name)
+                }
+        }.onFailure { error ->
+            diagnostics.warn(TAG, "Face-picker preview not written", error = error)
+        }
+    }
+
+    /**
      * The preview the projects list shows for [project]: the style it was last left
      * on, falling back to the first one the package shipped.
      */
@@ -3080,6 +3139,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
     private fun projectPreviewImage(project: ProjectEntity): String? {
         val directory = previewsDirectory(project.id)
+        // The face-picker thumbnail the user updated, for the style it was left on: what the
+        // watch's picker shows. Named by the style as it is now, so no variant mapping.
+        project.selectedStyle?.let(::styleIndexOf)
+            ?.let { File(directory, "picker-style$it.png") }
+            ?.takeIf { it.isFile && it.length() > 0 }
+            ?.let { return it.absolutePath }
         val originalVariant = project.editedBinPath?.let { path ->
             synchronized(previewVariantCache) {
                 previewVariantCache.getOrPut(path) {
@@ -3199,6 +3264,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
     private class HistoryStep(val state: HistoryState, val kind: EditKind, val group: Long?)
 
+    /** A snapshot and the session state it was built from; see [Session.takeOpened]. */
+    private class OpenedSnapshot(
+        val container: Fit3Container,
+        val variant: String?,
+        val activeStyle: String?,
+        val name: String,
+        val thumbnail: Fit3Container?,
+        val snapshot: EditorSnapshot,
+    )
+
     private data class Session(
         var projectId: Long,
         val apk: Fit3Apk,
@@ -3248,7 +3323,27 @@ class WatchFaceRepositoryImpl @Inject constructor(
         var historyGroup: Long? = null,
         /** False once a full phone has cost the session its history. */
         var historyEnabled: Boolean = true,
+        /** What the open that made this session built, for the editor to take once. See [takeOpened]. */
+        var opened: OpenedSnapshot? = null,
+        /** The frame last written to each `picker-style<N>.png`; see [syncPickerPreviews]. */
+        val pickerHashes: MutableMap<String, Int> = mutableMapOf(),
     ) {
+        /** [snapshot], kept for the editor that is about to ask for it. */
+        fun openedSnapshot(): EditorSnapshot = snapshot().also { built ->
+            opened = OpenedSnapshot(currentContainer, selectedVariantName, activeStyleName, projectName, thumbnailContainer, built)
+        }
+
+        /**
+         * The snapshot the open built, once, and only while the session is exactly as it left
+         * it: an edit replaces the container, a switch changes the variant and the installing
+         * style, a rename the name and a thumbnail update the thumbnail's container. Everything
+         * else the snapshot reads changes only with the container. Otherwise it builds afresh.
+         */
+        fun takeOpened(): EditorSnapshot? = opened?.also { opened = null }?.takeIf {
+            it.container === currentContainer && it.variant == selectedVariantName &&
+                it.activeStyle == activeStyleName && it.name == projectName && it.thumbnail === thumbnailContainer
+        }?.snapshot
+
         fun currentState() = HistoryState(currentFile, activeStyleName, selectedVariantName,
             HistoryMemory(currentContainer, lineage, importOrigins, removedWidgets.toList(),
                 thumbnailRefreshed = thumbnailContainer === currentContainer, audit = audit))
@@ -4182,6 +4277,9 @@ private const val MaxStyleId = 255
 private val StyleNamePattern = Regex("""style(\d+)\.bin""")
 
 private val PreviewFileNamePattern = Regex("""style(\d+)\.png""")
+
+/** [WatchFaceRepositoryImpl]'s face-picker thumbnails; never matched by [PreviewFileNamePattern]. */
+private val PickerFileNamePattern = Regex("""picker-style(\d+)\.png""")
 
 /** The index in `styleN.bin`, which is the index the package's previews use too. */
 /**

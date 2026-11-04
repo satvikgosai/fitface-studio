@@ -23,8 +23,8 @@ class GifFormatException(message: String) : Fit3FormatException(message)
  *
  * It reads untrusted files, so every size is bounded before anything is allocated:
  * [MAX_SIDE] a side, [MAX_FRAMES] frames, [MAX_DECODED_BYTES] for every composited frame
- * together, and LZW codes of at most 12 bits. A truncated file or an impossible code is refused
- * with a sentence, never a crash or a frame of garbage.
+ * together, no frame larger than the screen, and LZW codes of at most 12 bits. A truncated
+ * file or an impossible code is refused with a sentence, never a crash or a frame of garbage.
  */
 object GifDecoder {
     const val MAX_SIDE = 4096
@@ -104,6 +104,10 @@ object GifDecoder {
                     val top = input.u16()
                     val frameWidth = input.u16()
                     val frameHeight = input.u16()
+                    // Its index buffer is allocated at this size, so it is bounded as the screen is.
+                    if (frameWidth > MAX_SIDE || frameHeight > MAX_SIDE || frameWidth.toLong() * frameHeight > pixels) {
+                        throw GifFormatException("A frame of this GIF is ${frameWidth}×$frameHeight, larger than its ${width}×$height screen.")
+                    }
                     val flags = input.u8()
                     val local = if (flags and 0x80 != 0) input.palette(2 shl (flags and 0x07)) else null
                     val colours = local ?: global ?: throw GifFormatException("A frame of this GIF has no colours.")

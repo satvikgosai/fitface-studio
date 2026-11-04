@@ -139,6 +139,24 @@ class GifDecoderTest {
             assertThrows(GifFormatException::class.java) { GifDecoder.decode(wide) }.message)
     }
 
+    /** A frame's own size is bounded before its index buffer is allocated, not only the screen's. */
+    @Test
+    fun aFrameLargerThanItsScreenIsRefused() {
+        fun oversized(frameWidth: Int, frameHeight: Int): ByteArray {
+            val gif = TestGif.encode(1, 1, listOf(TestGif.Frame(byteArrayOf(0), 1, 1)), global = palette)
+            val descriptor = gif.indexOfFirst { it == 0x2C.toByte() }
+            return gif.copyOf().also {
+                it[descriptor + 5] = frameWidth.toByte(); it[descriptor + 6] = (frameWidth ushr 8).toByte()
+                it[descriptor + 7] = frameHeight.toByte(); it[descriptor + 8] = (frameHeight ushr 8).toByte()
+            }
+        }
+        fun refusal(bytes: ByteArray) = assertThrows(GifFormatException::class.java) { GifDecoder.decode(bytes) }.message
+        // 65535 × 65535 overflows an Int; 40000 × 40000 would ask for 1.6 GB.
+        assertEquals("A frame of this GIF is 65535×65535, larger than its 1×1 screen.", refusal(oversized(65535, 65535)))
+        assertEquals("A frame of this GIF is 40000×40000, larger than its 1×1 screen.", refusal(oversized(40000, 40000)))
+        assertEquals("A frame of this GIF is 2×1, larger than its 1×1 screen.", refusal(oversized(2, 1)))
+    }
+
     /**
      * GIFs written by another encoder (ImageMagick): one size-optimised, its later frames small
      * patches over a transparent colour, and one interlaced. Every pixel of every frame matches
