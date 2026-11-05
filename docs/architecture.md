@@ -315,7 +315,12 @@ widget with no original, like an added still background, its timing lives in the
 and nothing about the GIF or video is kept. The snapshot tells a moving picture apart from
 its record. Removing either deletes it with its frames instead of parking it under Removed.
 Video frames are read by `AndroidVideoSource` in `:core:data`, through the platform's
-`MediaMetadataRetriever`; `:core:model`'s `VideoClip` plans which.
+`MediaMetadataRetriever`, into a frame cache file under the app's cache directory
+(`VideoFrameFiles`). The editor releases every read but the one being placed whenever that
+changes, and all of them when it closes (`WatchFaceRepository.releaseVideoFrames`); a failed
+or cancelled read deletes its own file, a new read keeps only the latest finished one, so no
+more than two are ever cached, and a file being written is never deleted;
+`:core:model`'s `VideoClip` plans which.
 
 Schema 5 is schema 3 or 4 plus an added picture: a `WidgetImportOrigin` whose `kind` is
 `PICTURE`, with an empty donor face and a baseline that is one Static placed on the panel.

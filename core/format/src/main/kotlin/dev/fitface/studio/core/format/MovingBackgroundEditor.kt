@@ -1,14 +1,24 @@
 package dev.fitface.studio.core.format
 
 import dev.fitface.studio.core.model.MovingBackground
+import dev.fitface.studio.core.model.PixelBounds
 import dev.fitface.studio.core.model.WidgetPlacement
+import dev.fitface.studio.core.model.drawLeft
+import dev.fitface.studio.core.model.drawTop
 import java.io.ByteArrayOutputStream
 
 /** The edit that added an animation — a moving background or picture — and the index its record took. */
 class AnimationEdit(val edit: StructuralEdit, val globalIndex: Int)
 
 /**
- * A moving background: one type-4 Animation drawing full-panel frames, under every widget.
+ * A moving background: one type-4 Animation drawing its frames under every widget.
+ *
+ * **Its size.** Frames are stored at the rectangle the picture covers, at that rectangle's
+ * place on the panel (`+0x18/+0x1A`, as a moving picture's are); the rest of the panel is
+ * black, the still background deleted (or painted black) when one is added. One that covers the whole panel
+ * is stored exactly as before, at 0,0 with nothing else set, and is a background layer by its
+ * size. One that covers less carries [ANIMATION_BACKGROUND_TAG] in `+0x1C..+0x1F`, bytes the
+ * firmware never reads, because its size no longer says what it is.
  *
  * **What the watch showed (T1, 2026-10-14).** An Animation appended to a vendor face plays,
  * at `+0x26` milliseconds a table entry (T1a); it loops for ever whatever `+0x25` says (T1b);
@@ -60,19 +70,34 @@ object MovingBackgroundEditor {
     }
 
     /**
-     * [frames], each the panel's size, played as [table] (one frame index an entry) at
-     * [periodMs] an entry, added as [variant]'s moving background.
+     * [frames], each [bounds]' size (the panel's when null), played as [table] (one frame index
+     * an entry) at [periodMs] an entry, added as [variant]'s moving background drawing at
+     * [bounds].
      *
-     * Refuses a style that already has one, a frame of the wrong size, a table naming a frame
-     * that does not exist or leaving one out, and a container past the watch's ceiling.
+     * Refuses a style that already has one, bounds off the panel, a frame of the wrong size, a
+     * table naming a frame that does not exist or leaving one out, and a container past the
+     * watch's ceiling.
      */
-    fun insert(target: Fit3Container, variant: String, frames: List<IntArray>, table: List<Int>, periodMs: Int): AnimationEdit {
+    fun insert(
+        target: Fit3Container,
+        variant: String,
+        frames: List<IntArray>,
+        table: List<Int>,
+        periodMs: Int,
+        bounds: PixelBounds? = null,
+    ): AnimationEdit {
         StructuralEditor.requireValidAndTight(target)
         val entry = StyleWidgetMatch.requireVariantEntry(target.entryByBasename(variant))
         val panel = FaceRecordParser.panelSize(entry)
         if (panel.width <= 0 || panel.height <= 0) throw Fit3FormatException("$variant declares no panel size.")
-        require(frames.isNotEmpty() && frames.all { it.size == panel.width * panel.height }) {
-            "every frame must be the ${panel.width}x${panel.height} panel"
+        val area = bounds ?: PixelBounds(0, 0, panel.width, panel.height)
+        if (area.width <= 0 || area.height <= 0 || area.x < 0 || area.y < 0 ||
+            area.x + area.width > panel.width || area.y + area.height > panel.height) {
+            throw Fit3FormatException("A moving background must lie on the panel.")
+        }
+        val partial = area != PixelBounds(0, 0, panel.width, panel.height)
+        require(frames.isNotEmpty() && frames.all { it.size == area.width * area.height }) {
+            "every frame must be ${area.width}x${area.height}"
         }
         require(table.size in 1..255 && table.all { it in frames.indices } && table.toSet().size == frames.size) {
             "the frame table must name every frame and nothing else"
@@ -91,11 +116,16 @@ object MovingBackgroundEditor {
         }
         val at = FaceRecordParser.widgetGuides(entry).filter { it.placement == WidgetPlacement.BACKGROUND }
             .maxOfOrNull { it.globalIndex }?.plus(1) ?: 0
-        val rasters = frames.map { frameRecord(panel.width, panel.height, it) }
+        val rasters = frames.map { frameRecord(area.width, area.height, it) }
         val offsets = rasters.runningFold(header.imageBytes.toLong()) { offset, raster -> offset + raster.size }
         val record = ByteArray(HEAD + table.size * 4).also {
             it.putU32(0x00, WIDGET_ANIMATION.toLong())
             it.putU32(0x0C, (at.toLong() shl 16) or (HEAD + table.size * 4).toLong())
+            if (partial) {
+                it.putU16(0x18, area.x)
+                it.putU16(0x1A, area.y)
+                it.putU32(ANIMATION_BACKGROUND_TAG_OFFSET, ANIMATION_BACKGROUND_TAG)
+            }
             it[0x24] = table.size.toByte()
             it[0x25] = REPEAT.toByte()
             it.putU16(0x26, periodMs)
@@ -121,7 +151,7 @@ object MovingBackgroundEditor {
         val oldImages = entry.data.copyOfRange(header.storedImageOffset, entry.data.size)
         val newImages = rasters.fold(oldImages) { all, raster -> all + raster }
         val data = WidgetImporter.styleBytes(entry.data, records.toByteArray(), widgets.size + 1, newImages, header.fontBindingCount)
-        requireSound(entry, entry.copy(data = data, size = data.size), widgets, before, at, images.size, table.size)
+        requireSound(entry, entry.copy(data = data, size = data.size), widgets, before, at, images.size, table.size, area)
         return AnimationEdit(StructuralEditor.rebuild(target, mapOf(entry.index to data)), at)
     }
 
@@ -138,6 +168,7 @@ object MovingBackgroundEditor {
         at: Int,
         shippedImages: Int,
         entries: Int,
+        area: PixelBounds,
     ) {
         val records = FaceRecordParser.scanWidgets(after)
         check(records.size == widgets.size + 1 && records.map { it.globalIndex } == records.indices.toList()) {
@@ -168,12 +199,14 @@ object MovingBackgroundEditor {
         check(drawn.size == entries && drawn.all { it >= shippedImages } && drawn.toSet().size == images.size - shippedImages) {
             "the animation does not name exactly its own frames"
         }
-        check(FaceRecordParser.widgetGuides(after)[at].placement == WidgetPlacement.BACKGROUND) {
-            "the animation is not a full-panel layer"
+        val guide = FaceRecordParser.widgetGuides(after)[at]
+        check(guide.placement == WidgetPlacement.BACKGROUND) { "the animation is not a background layer" }
+        check(guide.drawLeft == area.x && guide.drawTop == area.y && guide.width == area.width && guide.height == area.height) {
+            "the moving background would not draw where it was placed"
         }
     }
 
-    /** [entry]'s moving background — its full-panel Animation — or null when it has none. */
+    /** [entry]'s moving background — its Animation under the widgets — or null when it has none. */
     fun read(entry: ContainerEntry): MovingBackground? {
         val records = FaceRecordParser.scanWidgets(entry)
         if (records.none { it.widgetType == WIDGET_ANIMATION }) return null
@@ -183,11 +216,15 @@ object MovingBackgroundEditor {
         } ?: return null
         val images = FaceRecordParser.imagesByRelativeOffset(entry)
         val frames = runCatching { FaceRecordParser.imagePointerFields(record, images) }.getOrNull() ?: return null
+        val guide = guides.getValue(record.globalIndex)
+        val panel = FaceRecordParser.panelSize(entry)
+        val bounds = PixelBounds(guide.drawLeft, guide.drawTop, guide.width, guide.height)
         return MovingBackground(
             globalIndex = record.globalIndex,
             frames = frames.map { it.image.index }.toSet().size,
             entries = frames.size,
             periodMs = entry.data.u16(record.recordOffset + 0x26),
+            bounds = bounds.takeIf { it != PixelBounds(0, 0, panel.width, panel.height) },
         )
     }
 }

@@ -64,13 +64,47 @@ class AnimationTimingTest {
     /** The smallest step that fits: whole when there is room, every 2nd when half is, none when one frame is too many. */
     @Test
     fun theStepThatFitsIsTheSmallest() {
-        val delays = List(10) { 100 }
+        val source = source(List(10) { it })
         val all = animationAddedBytes(10, 10, 256, 402).toLong()
-        assertEquals(1, animationStepThatFits(delays, all, 256, 402))
-        assertEquals(2, animationStepThatFits(delays, all - 1, 256, 402))
-        assertEquals(10, animationStepThatFits(delays, animationAddedBytes(1, 10, 256, 402).toLong(), 256, 402))
-        assertNull(animationStepThatFits(delays, 50_000, 256, 402))
+        assertEquals(1, animationStepThatFits(source, all, 256, 402))
+        assertEquals(2, animationStepThatFits(source, all - 1, 256, 402))
+        assertEquals(10, animationStepThatFits(source, animationAddedBytes(1, 10, 256, 402).toLong(), 256, 402))
+        assertNull(animationStepThatFits(source, 50_000, 256, 402))
     }
+
+    /** Frames with exactly the same pixels are one stored raster that the table names again. */
+    @Test
+    fun aRepeatedFrameIsStoredOnce() {
+        val source = source(listOf(0, 1, 2, 1, 0, 3))
+        assertEquals(listOf(0, 1, 2, 1, 0, 5), source.firstOf)
+        val plan = source.plan(1)
+        assertEquals(listOf(0, 1, 2, 5), plan.frames)
+        assertEquals(listOf(0, 1, 2, 1, 0, 3), plan.table)
+        assertEquals(6, plan.kept)
+        assertEquals(600, plan.loopMs)
+    }
+
+    /** A step keeps every 2nd frame first, then stores the kept ones that repeat once. */
+    @Test
+    fun aRepeatAmongKeptFramesIsStoredOnce() {
+        val plan = source(listOf(7, 8, 9, 8, 7, 8, 9, 8)).plan(2)
+        assertEquals(listOf(0, 2), plan.frames)
+        assertEquals(200, plan.periodMs)
+        assertEquals(listOf(0, 1, 0, 1), plan.table)
+        assertEquals(4, plan.kept)
+    }
+
+    /** Repeats leave room for more: two distinct pictures fit whole where ten frames could not. */
+    @Test
+    fun repeatsCountOnlyOnceTowardsTheRoom() {
+        val source = source(List(10) { it % 2 })
+        val two = animationAddedBytes(2, 10, 256, 402).toLong()
+        assertEquals(1, animationStepThatFits(source, two, 256, 402))
+    }
+
+    /** One 100 ms frame a shade, each solid in it: equal shades are identical frames. */
+    private fun source(shades: List<Int>) = AnimationSource("", 2, 2,
+        shades.map { shade -> PreviewFrame(2, 2, IntArray(4) { shade }) }, List(shades.size) { 100 })
 
     private tailrec fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
 }

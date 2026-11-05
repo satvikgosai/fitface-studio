@@ -14,6 +14,7 @@ import android.net.Uri
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.PreviewFrame
+import dev.fitface.studio.core.model.placedRect
 import javax.inject.Inject
 
 class AndroidImageSource @Inject constructor(
@@ -94,7 +95,10 @@ class AndroidImageSource @Inject constructor(
         } ?: throw IllegalArgumentException("The selected image could not be decoded")
         val source = upright(decoded, orientation)
         try {
-            return placed(source, width, height, placement)
+            // Only a native fit depends on the picture's own size rather than its shape.
+            val native = placement.fit == ImageFit.NATIVE
+            return placed(source, width, height, placement,
+                bounds.outWidth.takeIf { native }, bounds.outHeight.takeIf { native })
         } finally {
             source.recycle()
         }
@@ -115,29 +119,25 @@ class AndroidImageSource @Inject constructor(
     }
 
     /** [source] drawn onto a black [width] × [height] frame as [placement] says. */
-    private fun placed(source: Bitmap, width: Int, height: Int, placement: ImagePlacement): IntArray {
+    private fun placed(
+        source: Bitmap,
+        width: Int,
+        height: Int,
+        placement: ImagePlacement,
+        placedWidth: Int? = null,
+        placedHeight: Int? = null,
+    ): IntArray {
         var output: Bitmap? = null
         try {
             output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(output)
             canvas.drawColor(Color.BLACK)
             val sourceRect = Rect(0, 0, source.width, source.height)
-            val targetRect = destinationRect(
-                source.width,
-                source.height,
-                width,
-                height,
-                placement.fit,
-            )
-            val zoom = placement.zoom.coerceIn(0.25f, 8f)
-            val centerX = targetRect.centerX() + placement.offsetX.coerceIn(-2f, 2f) * width
-            val centerY = targetRect.centerY() + placement.offsetY.coerceIn(-2f, 2f) * height
-            val transformed = RectF(
-                centerX - targetRect.width() * zoom / 2f,
-                centerY - targetRect.height() * zoom / 2f,
-                centerX + targetRect.width() * zoom / 2f,
-                centerY + targetRect.height() * zoom / 2f,
-            )
+            // Measured on the picture as placed, not on the bitmap decoded from it, which a
+            // sampled decode may have made smaller.
+            val placed = placedRect(placedWidth ?: source.width, placedHeight ?: source.height,
+                width.toFloat(), height.toFloat(), placement)
+            val transformed = RectF(placed.left, placed.top, placed.right, placed.bottom)
             canvas.drawBitmap(
                 source,
                 sourceRect,
@@ -291,30 +291,6 @@ class AndroidImageSource @Inject constructor(
             }
         }
         return output
-    }
-
-    private fun destinationRect(
-        sourceWidth: Int,
-        sourceHeight: Int,
-        targetWidth: Int,
-        targetHeight: Int,
-        fit: ImageFit,
-    ): RectF {
-        if (fit == ImageFit.STRETCH) {
-            return RectF(0f, 0f, targetWidth.toFloat(), targetHeight.toFloat())
-        }
-        val widthScale = targetWidth.toFloat() / sourceWidth
-        val heightScale = targetHeight.toFloat() / sourceHeight
-        val scale = if (fit == ImageFit.CONTAIN) {
-            minOf(widthScale, heightScale)
-        } else {
-            maxOf(widthScale, heightScale)
-        }
-        val width = sourceWidth * scale
-        val height = sourceHeight * scale
-        val left = (targetWidth - width) / 2f
-        val top = (targetHeight - height) / 2f
-        return RectF(left, top, left + width, top + height)
     }
 }
 

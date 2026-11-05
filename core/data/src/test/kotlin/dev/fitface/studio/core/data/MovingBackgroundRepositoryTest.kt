@@ -6,17 +6,25 @@ import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.fitface.studio.core.data.db.FitFaceDatabase
+import dev.fitface.studio.core.format.CustomFaceTemplate
 import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.Fit3CapacityException
 import dev.fitface.studio.core.format.Fit3Container
+import dev.fitface.studio.core.format.StructuralEditor
+import dev.fitface.studio.core.model.AnimationParts
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.FacePackage
+import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.MovingBackground
+import dev.fitface.studio.core.model.PixelBounds
+import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.WatchFaceException
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.animationAddedBytes
+import dev.fitface.studio.core.model.drawLeft
+import dev.fitface.studio.core.model.drawTop
 import dev.fitface.studio.core.model.animationStepThatFits
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -107,13 +115,15 @@ class MovingBackgroundRepositoryTest {
         assertEquals(32 to 50, source.width to source.height)
         assertEquals(listOf(100, 200, 100), source.delaysMs)
 
+        assertTrue("the page counts the still one it replaces as free", s.stillBackgroundBytes > 0)
         val added = repository.addMovingBackground(source, ImagePlacement(), frameStep = 1)
-        assertEquals(animationAddedBytes(3, 4, 256, 402), added.containerBytes - s.containerBytes)
-        // 00112's style 0 has its still background at index 0, so this goes directly above it.
-        assertEquals(MovingBackground(globalIndex = 1, frames = 3, entries = 4, periodMs = 100), added.movingBackground)
+        assertEquals(animationAddedBytes(3, 4, 256, 402) - s.stillBackgroundBytes, added.containerBytes - s.containerBytes)
+        // 00112's style 0 had its still background at index 0, deleted with it, so this goes first.
+        assertEquals(MovingBackground(globalIndex = 0, frames = 3, entries = 4, periodMs = 100), added.movingBackground)
         assertEquals(added.movingBackground, added.activeMovingBackground)
-        assertTrue("the still background is still the one a replacement edits", "style0.bin" in added.backgroundStyles)
-        assertTrue("it replaced the still one, which is painted black", stillIsBlack("style0.bin"))
+        assertFalse("it replaced the still one, which is deleted", "style0.bin" in added.backgroundStyles)
+        assertFalse(hasStill("style0.bin"))
+        assertEquals(0, added.stillBackgroundBytes)
         assertTrue(added.selectedBackgroundShown)
         assertEquals(EditKind.MOVING_BACKGROUND, added.undoKind)
         // Nothing new to remember: an added widget with no original, as an added background is.
@@ -127,7 +137,7 @@ class MovingBackgroundRepositoryTest {
 
     /**
      * Deleted, not parked under Removed, with every frame: the face is left as Remove background
-     * leaves it — no background, the still one it replaced painted black — and Undo brings it back.
+     * leaves it — no background, the still one it replaced deleted too — and Undo brings it back.
      */
     @Test fun removingItTakesEveryFrameAndUndoBringsItBack() = runBlocking {
         val expected = noBackground("00112")
@@ -182,16 +192,101 @@ class MovingBackgroundRepositoryTest {
             val preview = repository.previewBackgroundImport(handle, "style0.bin", opened, "style0.bin", thisStyleOnly = true)
             repository.importBackground(preview.ticket)
         }
-        importInto(repository.openPackage(face("00112")).projectId)
-        val expected = bytes()
+        val expected = importInto(repository.openPackage(face("00112")).projectId)
 
         val opened = repository.openPackage(face("00112"))
         repository.addMovingBackground(repository.readAnimation(gif("three.gif")), ImagePlacement(), 1)
         val imported = importInto(opened.projectId)
         assertNull(imported.movingBackground)
         assertTrue(imported.selectedBackgroundShown)
-        assertArrayEquals(expected, bytes())
+        // Its still one went with the moving one, so the donor's is added rather than written over it.
+        assertArrayEquals(expected.composedPreview.argb, imported.composedPreview.argb)
+        assertTrue(imported.validationErrors.isEmpty())
         assertNotNull("one undo step", repository.undo().movingBackground)
+    }
+
+    /**
+     * At NATIVE the 32 × 50 GIF is stored at its own rectangle, centred, and every edit a
+     * full-panel one takes treats it the same: it is still the background layer, it survives
+     * Undo, Redo and a reopen, Remove leaves what removing a full-panel one leaves, and a
+     * full-panel moving or a still background replaces it as either replaces a full-panel one.
+     */
+    @Test fun aSmallerOneTakesEveryEditAFullPanelOneDoes() = runBlocking {
+        val expectedNone = noBackground("00112")
+        val opened = repository.openPackage(face("00112"))
+        val before = bytes()
+        val three = repository.readAnimation(gif("three.gif"))
+
+        val added = repository.addMovingBackground(three, ImagePlacement(fit = ImageFit.NATIVE), 1)
+        val bounds = PixelBounds((256 - 32) / 2, (402 - 50) / 2, 32, 50)
+        assertEquals(MovingBackground(globalIndex = 0, frames = 3, entries = 4, periodMs = 100, bounds = bounds),
+            added.movingBackground)
+        assertEquals(animationAddedBytes(3, 4, 32, 50) - opened.stillBackgroundBytes, added.containerBytes - opened.containerBytes)
+        assertTrue(added.validationErrors.isEmpty())
+        assertEquals(WidgetPlacement.BACKGROUND, added.widgets.single { it.globalIndex == 0 }.placement)
+        assertFalse("the still background is deleted", hasStill("style0.bin"))
+        val withIt = bytes()
+
+        assertNull(repository.undo().movingBackground)
+        assertArrayEquals(before, bytes())
+        assertEquals(added.movingBackground, repository.redo().movingBackground)
+        assertArrayEquals(withIt, bytes())
+
+        // History lasts while the project is open; what reopens is the face as it was left.
+        repository = repository()
+        val reopened = repository.openProject(opened.projectId)
+        assertEquals(added.movingBackground, reopened.movingBackground)
+        assertArrayEquals(withIt, bytes())
+
+        assertNull(repository.removeMovingBackground().movingBackground)
+        assertArrayEquals(expectedNone, bytes())
+        assertEquals(added.movingBackground, repository.undo().movingBackground)
+
+        val full = repository.addMovingBackground(three, ImagePlacement(), 1)
+        assertEquals(MovingBackground(globalIndex = 0, frames = 3, entries = 4, periodMs = 100), full.movingBackground)
+        assertEquals(animationAddedBytes(3, 4, 256, 402) - opened.stillBackgroundBytes, full.containerBytes - opened.containerBytes)
+        assertEquals(added.movingBackground, repository.undo().movingBackground)
+
+        val still = repository.replaceBackground(png(), ImagePlacement())
+        assertNull(still.movingBackground)
+        assertTrue(still.validationErrors.isEmpty())
+        assertTrue(still.selectedBackgroundShown)
+        assertEquals(added.movingBackground, repository.undo().movingBackground)
+    }
+
+    /**
+     * A face with no still background, filled by a moving one so no other raster fits beside
+     * it, still offers a background: one replaces the moving one in the same commit, its room
+     * counted free, so the page must not say there is no room for one.
+     */
+    @Test fun aFaceFullOfAMovingBackgroundStillOffersOneInItsPlace() = runBlocking {
+        // The custom face: a clock on black, with room for a few full-panel frames.
+        val custom = CustomFaceTemplate.strip(Fit3Container.parse(originalBytes("00006"))).toByteArray()
+        val name = "SM-R390_00006_256x402"
+        val fresh = repository.openPackage(FacePackage(FacePackage.sourceKey("test-custom", 1, 0), "SM-R390_00006.apk",
+            "00006", 0, 1, ByteArrayOutputStream().also { bytes ->
+                ZipOutputStream(bytes).use { zip ->
+                    zip.putNextEntry(ZipEntry("assets/$name.bin")); zip.write(custom); zip.closeEntry()
+                }
+            }.toByteArray()))
+        assumeTrue("the custom face draws onto black", fresh.backgroundStyles.isEmpty())
+        // Every frame of the longest part that fits, as the editor opens it: less than a frame is left.
+        val forty = repository.readAnimation(gif("forty.gif"))
+        val part = requireNotNull(AnimationParts.longestGifPart(forty, 0, 1,
+            (WATCH_CONTAINER_BYTE_CEILING - fresh.containerBytes).toLong(), 256, 402))
+        val full = repository.addMovingBackground(requireNotNull(AnimationParts.cut(forty, part)), ImagePlacement(), 1)
+        assertTrue("no room for a still background beside it",
+            WATCH_CONTAINER_BYTE_CEILING - full.containerBytes < StructuralEditor.addedBackgroundBytes(256, 402))
+        assertTrue(full.canAddBackground)
+        assertFalse(full.backgroundWouldNotFit)
+        assertTrue(full.canPlaceBackground(thisStyleOnly = true))
+
+        // Given one, as the page's add does on a face with none: the moving one goes in the same commit.
+        val still = repository.addBackground(png(), ImagePlacement())
+        assertNull(still.movingBackground)
+        assertTrue(still.validationErrors.isEmpty())
+        assertTrue(still.selectedBackgroundShown)
+        assertTrue(still.containerBytes <= WATCH_CONTAINER_BYTE_CEILING)
     }
 
     /** 00112 with the selected style's background removed: what a removed moving one leaves. */
@@ -201,11 +296,8 @@ class MovingBackgroundRepositoryTest {
         return bytes()
     }
 
-    private suspend fun stillIsBlack(variant: String): Boolean {
-        val entry = Fit3Container.parse(bytes()).entryByBasename(variant)
-        val raster = requireNotNull(FaceRecordParser.backgroundImage(entry))
-        return FaceRecordParser.decodeImage(entry, raster).argb.all { it and 0xFFFFFF == 0 }
-    }
+    private suspend fun hasStill(variant: String): Boolean =
+        FaceRecordParser.backgroundImage(Fit3Container.parse(bytes()).entryByBasename(variant)) != null
 
     /**
      * On a style with no still background it goes under every widget and the style still reads
@@ -246,17 +338,26 @@ class MovingBackgroundRepositoryTest {
         assertTrue("the face itself still shows it", !opened.composedPreview.argb.contentEquals(added.composedPreview.argb))
     }
 
-    /** A same-size replacement over a moving background removes it too, in one undo step. */
+    /**
+     * A whole-face replacement over a moving background removes it too, in one undo step, and
+     * gives its style — whose still one went with it — the picture again: it draws what replacing
+     * them all on a fresh face draws, and the other styles come out byte for byte the same.
+     */
     @Test fun aStillReplacementTakesTheMovingBackgroundsPlace() = runBlocking {
         repository.openPackage(face("00112"))
-        repository.replaceBackground(png(), ImagePlacement())
-        val expected = bytes()
+        val fresh = repository.replaceBackground(png(), ImagePlacement())
+        val expected = Fit3Container.parse(bytes())
 
         repository.openPackage(face("00112"))
         val added = repository.addMovingBackground(repository.readAnimation(gif("three.gif")), ImagePlacement(), 1)
         val replaced = repository.replaceBackground(png(), ImagePlacement())
         assertNull(replaced.movingBackground)
-        assertArrayEquals(expected, bytes())
+        assertEquals(fresh.backgroundStyles.toSet(), replaced.backgroundStyles.toSet())
+        assertArrayEquals(fresh.composedPreview.argb, replaced.composedPreview.argb)
+        val actual = Fit3Container.parse(bytes())
+        expected.entries.filter { it.basename != "style0.bin" }.forEach { entry ->
+            assertArrayEquals(entry.basename, entry.data, actual.entryByBasename(entry.basename).data)
+        }
 
         val undone = repository.undo()
         assertEquals(added.movingBackground, undone.movingBackground)
@@ -277,20 +378,46 @@ class MovingBackgroundRepositoryTest {
 
         val fresh = repository.openPackage(face("00112"))
         val forty = repository.readAnimation(gif("forty.gif"))
-        val step = requireNotNull(animationStepThatFits(forty.delaysMs,
+        val step = requireNotNull(animationStepThatFits(forty,
             (WATCH_CONTAINER_BYTE_CEILING - fresh.containerBytes).toLong(), 256, 402))
         val first = repository.addMovingBackground(forty, ImagePlacement(), step)
-        assertTrue("no room for the same again beside it",
-            first.containerBytes + first.containerBytes - fresh.containerBytes > WATCH_CONTAINER_BYTE_CEILING)
+        val plan = forty.plan(step)
+        assertTrue("no room for the same again beside it", first.containerBytes +
+            animationAddedBytes(plan.frames.size, plan.table.size, 256, 402) > WATCH_CONTAINER_BYTE_CEILING)
         val again = repository.addMovingBackground(forty, ImagePlacement(), step)
         assertEquals(first.movingBackground, again.movingBackground)
         assertEquals(first.containerBytes, again.containerBytes)
 
         val second = repository.addMovingBackground(repository.readAnimation(gif("three.gif")), ImagePlacement(), 1)
-        assertEquals(MovingBackground(globalIndex = 1, frames = 3, entries = 4, periodMs = 100), second.movingBackground)
+        assertEquals(MovingBackground(globalIndex = 0, frames = 3, entries = 4, periodMs = 100), second.movingBackground)
         assertArrayEquals(expected, bytes())
         assertEquals(EditKind.MOVING_BACKGROUND, second.undoKind)
         assertEquals(first.movingBackground, repository.undo().movingBackground)
+    }
+
+    /**
+     * Remove background takes one of the rasters the face shipped with, and nothing after it is
+     * mistaken for one: a moving picture added and deleted again leaves no frame behind. A
+     * widget parked under Removed beforehand, positioned against the deleted background, is
+     * restored where it was.
+     */
+    @Test fun aRemovedBackgroundLeavesNothingStrandedOrMisplaced() = runBlocking {
+        val opened = repository.openPackage(face("00112"))
+        val widget = opened.widgets.last { it.canEditPosition }
+        val parked = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, false, false, null).removedWidgets.single()
+        repository.removeBackground(thisStyleOnly = true)
+        val bare = bytes()
+
+        val withPicture = repository.addMovingPicture(repository.readAnimation(gif("three.gif")), 1, 32, 50, 20, 20)
+        val picture = withPicture.widgets.last()
+        repository.removeWidget("style0.bin", picture.globalIndex, picture.type, picture.sequenceId,
+            picture.x, picture.y, false, false, null)
+        assertArrayEquals("every frame went with it", bare, bytes())
+
+        val restored = repository.restoreWidget(parked.id).widgets.last()
+        assertEquals(widget.drawLeft to widget.drawTop, restored.drawLeft to restored.drawTop)
+        assertTrue(repository.currentSnapshot().validationErrors.isEmpty())
     }
 
     /** A widget parked under Removed survives the replacement and is restored where it was. */
@@ -318,7 +445,7 @@ class MovingBackgroundRepositoryTest {
         assertTrue(runCatching { repository.addMovingBackground(forty, ImagePlacement(), 1) }.exceptionOrNull()
             is Fit3CapacityException)
         // The step the page offers is the smallest that fits, and it does.
-        val step = requireNotNull(animationStepThatFits(forty.delaysMs,
+        val step = requireNotNull(animationStepThatFits(forty,
             (WATCH_CONTAINER_BYTE_CEILING - fresh.containerBytes).toLong(), 256, 402))
         assertTrue("00112 has room for a few frames, not forty", step > 1)
         assertNotNull(repository.addMovingBackground(forty, ImagePlacement(), step).movingBackground)

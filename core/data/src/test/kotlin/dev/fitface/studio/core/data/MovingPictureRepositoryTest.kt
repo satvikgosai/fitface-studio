@@ -198,23 +198,44 @@ class MovingPictureRepositoryTest {
         return uri to source
     }
 
+    /** A GIF is not a video: there is nothing to probe, and it is read whole. */
+    @Test fun aGifHasNoVideoToProbe() = runBlocking {
+        repository.openPackage(face("00112"))
+        assertNull(repository.probeVideo(gif("three.gif")))
+    }
+
     /** A 1.25 s landscape clip: thirteen frames, 100 ms each, read just large enough to cover the panel. */
     @Test fun aVideoIsReadTenFramesASecondCoveringThePanel() = runBlocking {
         val opened = repository.openPackage(face("00112"))
         val (uri, source) = video("landscape.mp4", 1250, 1280, 720, 0)
+        // Each frame a shade bluer on its right, so no two are the same picture.
         repeat(13) { ShadowMediaMetadataRetriever.addScaledFrame(source, it * 100_000L, 715, 402,
-            bitmap(715, 402, 0xFFFF0000.toInt(), 0xFF0000FF.toInt())) }
+            bitmap(715, 402, 0xFFFF0000.toInt(), 0xFF0000F0.toInt() + it)) }
         val read = repository.readAnimation(uri, VideoClip.opening(1250))
         assertEquals(715 to 402, read.width to read.height)
         assertEquals(13, read.frames.size)
         assertEquals(List(13) { 100 }, read.delaysMs)
-        assertEquals(VideoClip(1250, 0, 1250), read.clip)
+        // The clip read back carries the longest that 64 MiB of 715 × 402 frames holds.
+        assertEquals(VideoClip(1250, 0, 1250, VideoClip.maxLengthMs(715, 402)), read.clip)
         assertEquals(0xFFFF0000.toInt(), read.frames[0].argb[200 * 715 + 100])
 
         // As a moving picture it costs what a GIF of the same frames would: every 2nd frame
         // kept is seven frames, each shown for two 100 ms entries but the last.
         val added = repository.addMovingPicture(read, frameStep = 2, width = 128, height = 72, x = 64, y = 160)
         assertEquals(animationAddedBytes(7, 13, 128, 72), added.containerBytes - opened.containerBytes)
+    }
+
+    /** Frames that are the same picture are stored once, and the table names it for each. */
+    @Test fun repeatedFramesAreStoredOnce() = runBlocking {
+        val opened = repository.openPackage(face("00112"))
+        val (uri, source) = video("still.mp4", 1250, 1280, 720, 0)
+        repeat(13) { ShadowMediaMetadataRetriever.addScaledFrame(source, it * 100_000L, 715, 402,
+            bitmap(715, 402, 0xFFFF0000.toInt(), 0xFF0000FF.toInt())) }
+        val read = repository.readAnimation(uri, VideoClip.opening(1250))
+        assertEquals(List(13) { 0 }, read.firstOf)
+        val added = repository.addMovingPicture(read, frameStep = 1, width = 128, height = 72, x = 64, y = 160)
+        assertEquals(animationAddedBytes(1, 13, 128, 72), added.containerBytes - opened.containerBytes)
+        assertTrue(added.validationErrors.isEmpty())
     }
 
     /** A phone held upright stores its video sideways with a rotation; the frames come out upright. */

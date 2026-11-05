@@ -12,6 +12,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.data.db.ProjectDao
 import dev.fitface.studio.core.data.db.ProjectEntity
+import dev.fitface.studio.core.format.BackgroundDeletion
 import dev.fitface.studio.core.format.BackgroundImporter
 import dev.fitface.studio.core.format.BackgroundImportEdit
 import dev.fitface.studio.core.model.drawLeft
@@ -64,13 +65,15 @@ import dev.fitface.studio.core.model.AOD_ENTRY_NAME
 import dev.fitface.studio.core.model.AddedWidgetKind
 import dev.fitface.studio.core.model.AnimationPlan
 import dev.fitface.studio.core.model.AnimationSource
-import dev.fitface.studio.core.model.AnimationTiming
 import dev.fitface.studio.core.model.animationAddedBytes
+import dev.fitface.studio.core.model.movingBackgroundBounds
+import dev.fitface.studio.core.model.PixelBounds
 import dev.fitface.studio.core.model.PreparedPicture
 import dev.fitface.studio.core.model.pictureBaselineSize
 import dev.fitface.studio.core.model.pictureSizes
 import dev.fitface.studio.core.model.tinted
 import dev.fitface.studio.core.model.VideoClip
+import dev.fitface.studio.core.model.VideoProbe
 import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
@@ -163,6 +166,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
     private class Picture(val handle: String, val width: Int, val height: Int, val argb: IntArray)
     private var picture: Picture? = null
     private val videoSource = AndroidVideoSource(context)
+    private val videoFrameFiles = VideoFrameFiles(File(context.cacheDir, "video-frames"))
 
     override suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = withContext(Dispatchers.Default) {
         // This must not call openPackage: inspecting a donor never replaces the active project.
@@ -1257,6 +1261,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                             "replace — it draws its widgets straight onto black.",
                         "no styleN.bin carries a panel-sized raster",
                     )
+                val replacing = movingBackgroundDeletion(current)
+                val base = replacing?.edit?.container ?: current.currentContainer
                 PreparedBackground(
                     session = current,
                     container = current.currentContainer,
@@ -1264,7 +1270,14 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     height = image.height,
                     styleNames = targets.filter { FaceRecordParser.backgroundImage(it) != null }
                         .map { it.basename },
-                    replacing = movingBackgroundDeletion(current),
+                    replacing = replacing,
+                    // A whole-face replacement writes every style, as it always did: one whose own
+                    // was removed, or that shipped painting onto black, is given one where it fits.
+                    bare = if (current.scopedToStyle(thisStyleOnly)) emptyList() else targets.map { it.basename }.filter { name ->
+                        val entry = base.entryByBasename(name)
+                        FaceRecordParser.backgroundImage(entry) == null &&
+                            FaceRecordParser.panelSize(entry).let { it.width == image.width && it.height == image.height }
+                    },
                 )
             }
         }
@@ -1292,26 +1305,32 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 prepared.height,
                 pixels,
             )
+            // The bare styles are given one, as many as fit, the selected first; each one's
+            // Static goes in at index 0, as [addBackground] puts it.
+            val added = StructuralEditor.backgroundStylesThatFit(edit.container, prepared.bare, current.selectedVariantName)
+                .takeIf { it.isNotEmpty() }
+                ?.let { StructuralEditor.addBackgrounds(edit.container, it, prepared.width, prepared.height, pixels) }
+            val addedStyles = added?.changedStyles.orEmpty()
             val audit = EditAuditSummary(
-                edit.changedPayloadBytes,
-                edit.changedStyles,
-                operation = "Manual background placement",
+                edit.changedPayloadBytes + (added?.changedPayloadBytes ?: 0),
+                (edit.changedStyles + addedStyles).distinct(),
+                operation = "Manual background placement" + if (addedStyles.isEmpty()) "" else ", added to ${addedStyles.joinToString()}",
+                // The moving background's deletion, if any, adds its own in [AnimationDeletion.before].
+                sizeDelta = (added?.container ?: edit.container).fileSize - edit.container.fileSize,
             )
-            if (replacing == null) {
-                commit(current, edit.container, audit, kind = EditKind.BACKGROUND)
-            } else {
-                // Pixels patched in place move nothing, so the deletion's renumbering is the edit's.
-                commit(
-                    current,
-                    edit.container,
-                    replacing.before(audit),
-                    importOrigins = current.importOrigins?.renumber(replacing.variant, replacing.mapping),
-                    droppedImages = replacing.edit.droppedImages,
-                    lineage = current.identities().remap(replacing.variant, replacing.mapping),
-                    indexMappings = replacing.indexMappings(),
-                    kind = EditKind.BACKGROUND,
-                )
-            }
+            val start = replacing?.let { current.importOrigins?.renumber(it.variant, it.mapping) } ?: current.importOrigins
+            val from = replacing?.let { current.identities().remap(it.variant, it.mapping) } ?: current.identities()
+            // Pixels patched in place move nothing, so the deletion's renumbering is the edit's, and an addition's.
+            commit(
+                current,
+                added?.container ?: edit.container,
+                replacing?.before(audit) ?: audit,
+                importOrigins = addedStyles.fold(start) { saved, variant -> saved?.renumber(variant) { it + 1 } },
+                droppedImages = replacing?.edit?.droppedImages.orEmpty(),
+                lineage = current.withAddedBackgrounds(addedStyles, from),
+                indexMappings = replacing?.indexMappings { index -> if (replacing.variant in addedStyles) index + 1 else index }.orEmpty(),
+                kind = EditKind.BACKGROUND,
+            )
             }
         }
         runCatching { setImageFit(placement.fit) }
@@ -1319,46 +1338,60 @@ class WatchFaceRepositoryImpl @Inject constructor(
     }
 
     /**
-     * See [WatchFaceRepository.removeBackground]. Black pixels through the same-size
-     * replacement, not a deleted record: the Static is often the alignment target of the
-     * widgets above it, and a raster left with nothing drawing it would be the one the next
-     * replacement wrote, invisibly.
+     * See [WatchFaceRepository.removeBackground]. Each still background goes with its Static,
+     * as on a face that ships without one ([StructuralEditor.deleteBackground]), its room free;
+     * one that cannot go that way — drawn twice, or offset — is painted black through the
+     * same-size replacement instead, as it always was.
      */
     override suspend fun removeBackground(thisStyleOnly: Boolean): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
             val replacing = movingBackgroundDeletion(current)
-            val base = replacing?.edit?.container ?: current.currentContainer
-            val stills = current.backgroundScope(thisStyleOnly).map { base.entryByBasename(it.basename) }
-                .filter { entry -> FaceRecordParser.backgroundImage(entry)?.let { !drawsOnlyBlack(entry, it) } == true }
-            if (replacing == null && stills.isEmpty()) throw WatchFaceException("There is no background here to remove.")
-            val edit = stills.firstOrNull()?.let { entry ->
-                val image = requireNotNull(FaceRecordParser.backgroundImage(entry))
-                FaceEditor.replaceBackgrounds(base, stills.map { it.basename }, image.width, image.height,
+            val deletions = Deletions(current.currentContainer)
+            replacing?.let(deletions::add)
+            var container = replacing?.edit?.container ?: current.currentContainer
+            val painted = mutableListOf<String>()
+            current.backgroundScope(thisStyleOnly).map { it.basename }.forEach { variant ->
+                val entry = container.entryByBasename(variant)
+                val image = FaceRecordParser.backgroundImage(entry) ?: return@forEach
+                val deletion = current.stillBackgroundDeletion(container, variant, replacing.takeIf { it?.variant == variant })
+                if (deletion != null) {
+                    deletions.add(variant, deletion)
+                    container = deletion.edit.container
+                } else if (!drawsOnlyBlack(entry, image)) {
+                    painted += variant
+                }
+            }
+            if (deletions.isEmpty() && painted.isEmpty()) throw WatchFaceException("There is no background here to remove.")
+            val paint = painted.firstOrNull()?.let { first ->
+                val image = requireNotNull(FaceRecordParser.backgroundImage(container.entryByBasename(first)))
+                FaceEditor.replaceBackgrounds(container, painted, image.width, image.height,
                     IntArray(image.width * image.height) { BLACK })
             }
-            val audit = EditAuditSummary(edit?.changedPayloadBytes ?: 0, edit?.changedStyles.orEmpty(),
-                operation = "Background removed (painted black)")
-            if (replacing == null) {
-                commit(current, requireNotNull(edit).container, audit, kind = EditKind.BACKGROUND)
-            } else {
-                commit(
-                    current,
-                    edit?.container ?: base,
-                    replacing.before(audit),
-                    importOrigins = current.importOrigins?.renumber(replacing.variant, replacing.mapping),
-                    droppedImages = replacing.edit.droppedImages,
-                    lineage = current.identities().remap(replacing.variant, replacing.mapping),
-                    indexMappings = replacing.indexMappings(),
-                    kind = EditKind.BACKGROUND,
-                )
-            }
+            container = paint?.container ?: container
+            val audit = EditAuditSummary(
+                deletions.payloadBytes + (paint?.changedPayloadBytes ?: 0),
+                (deletions.styles + paint?.changedStyles.orEmpty()).distinct(),
+                operation = "Background removed" + (if (painted.isEmpty()) "" else " (painted black in ${painted.joinToString()})"),
+                sizeDelta = container.fileSize - current.currentContainer.fileSize,
+            )
+            commit(
+                current,
+                container,
+                audit,
+                importOrigins = deletions.renumber(current.importOrigins),
+                droppedImages = deletions.droppedImages(),
+                lineage = deletions.remap(current.identities()),
+                indexMappings = deletions.indexMappings(),
+                kind = EditKind.BACKGROUND,
+            )
         }
     }
 
     /**
-     * [container] with [variant]'s still background painted black, as Remove leaves it, or as it
-     * is when it has none or is black already: what a moving background added there replaces.
+     * [container] with [variant]'s still background painted black, or as it is when it has none
+     * or is black already: under a moving background added there when the still one cannot be
+     * deleted outright ([Session.stillBackgroundDeletion]), as Remove background leaves it then.
      */
     private fun withStillBackgroundBlack(container: Fit3Container, variant: String): Fit3Container {
         val entry = container.entryByBasename(variant)
@@ -1510,22 +1543,49 @@ class WatchFaceRepositoryImpl @Inject constructor(
             gif.frames.map { PreviewFrame(gif.width, gif.height, it.argb) }, gif.frames.map { it.delayMs })
     }
 
+    override fun releaseVideoFrames(keep: AnimationSource?) {
+        val file = (keep?.frames as? CachedVideoFrames)?.file
+        housekeeping.launch { videoFrameFiles.releaseExcept(file) }
+    }
+
+    override suspend fun probeVideo(imageUri: String): VideoProbe? {
+        if (contentResolver.getType(Uri.parse(imageUri))?.startsWith("video/") != true) return null
+        val panel = selectedPanel()
+        return withContext(Dispatchers.IO) {
+            val video = videoSource.probe(imageUri)
+            val (width, height) = VideoClip.frameSize(video.width, video.height,
+                panel.width.coerceAtLeast(1), panel.height.coerceAtLeast(1))
+            VideoProbe(video.durationMs, width, height, VideoClip.maxLengthMs(width, height))
+        }
+    }
+
+    private suspend fun selectedPanel() = mutex.withLock {
+        val current = requireSession()
+        FaceRecordParser.panelSize(current.currentContainer.entryByBasename(
+            current.selectedVariantName ?: current.styleEntries().first().basename))
+    }
+
     /**
      * A video's [requested] clip, or its first seconds, at the size that covers the selected
      * variant's panel: ten frames a second, each shown 100 ms, from then on a GIF's frames.
      */
     private suspend fun readVideo(imageUri: String, requested: VideoClip?): AnimationSource {
-        val panel = mutex.withLock {
-            val current = requireSession()
-            FaceRecordParser.panelSize(current.currentContainer.entryByBasename(
-                current.selectedVariantName ?: current.styleEntries().first().basename))
-        }
+        val panel = selectedPanel()
         return withContext(Dispatchers.IO) {
             val video = videoSource.probe(imageUri)
-            val clip = requested?.takeIf { it.durationMs == video.durationMs } ?: VideoClip.opening(video.durationMs)
             val (width, height) = VideoClip.frameSize(video.width, video.height,
                 panel.width.coerceAtLeast(1), panel.height.coerceAtLeast(1))
-            val frames = videoSource.frames(imageUri, video, clip, width, height)
+            val longest = VideoClip.maxLengthMs(width, height)
+            val clip = requested?.takeIf { it.durationMs == video.durationMs }
+                ?.let { it.copy(lengthMs = minOf(it.lengthMs, longest), maxLengthMs = longest) }
+                ?: VideoClip.opening(video.durationMs, longest)
+            val file = videoFrameFiles.next()
+            var read = false
+            val frames = try {
+                videoSource.frames(imageUri, video, clip, width, height, file).also { read = true }
+            } finally {
+                videoFrameFiles.finished(file, read)
+            }
             AnimationSource(imageUri, width, height, frames, List(frames.size) { VideoClip.FRAME_MS }, clip)
         }
     }
@@ -1540,13 +1600,80 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val plan: AnimationPlan,
         /** The moving background this one replaces. */
         val replacing: AnimationDeletion?,
+        /** The panel rectangle the frames cover, and are stored at. */
+        val bounds: PixelBounds,
     )
+
+    /**
+     * Records deleted one after another in one edit — a variant's moving background, then still
+     * backgrounds — and what the commit needs of them: where each of [before]'s indices lands,
+     * the rasters gone as indices into [before]'s entries, and where saved removals' references
+     * go. A still background's Static was the whole face's rectangle, so what named it names
+     * the whole face ([WidgetImporter.ROOT_TARGET]) afterwards.
+     */
+    private class Deletions(private val before: Fit3Container) {
+        /** Per variant, each deleted index in the numbering the deletions before it left. */
+        private val records = linkedMapOf<String, MutableList<Int>>()
+        private val rasters = linkedMapOf<String, MutableSet<Int>>()
+        private val faceSized = mutableMapOf<String, MutableSet<Int>>()
+        var payloadBytes = 0
+            private set
+
+        val styles: List<String> get() = records.keys.toList()
+
+        fun isEmpty() = records.isEmpty()
+
+        fun add(deletion: AnimationDeletion) =
+            add(deletion.variant, deletion.deleted, deletion.edit, faceRelative = false)
+
+        fun add(variant: String, deletion: BackgroundDeletion) =
+            add(variant, deletion.globalIndex, deletion.edit, faceRelative = true)
+
+        private fun add(variant: String, globalIndex: Int, edit: StructuralEdit, faceRelative: Boolean) {
+            val earlier = records.getOrPut(variant) { mutableListOf() }
+            // Back to [before]'s numbering: past every earlier deletion, latest first.
+            val original = earlier.foldRight(globalIndex) { deleted, index -> if (index >= deleted) index + 1 else index }
+            if (faceRelative) faceSized.getOrPut(variant) { mutableSetOf() } += original
+            earlier += globalIndex
+            val gone = rasters.getOrPut(variant) { sortedSetOf() }
+            // This edit's raster indices are into the entry the earlier ones left; carry them back too.
+            val survivors = FaceRecordParser.scanImages(before.entryByBasename(variant)).indices.filter { it !in gone }
+            gone += edit.droppedImages[variant].orEmpty().map(survivors::get)
+            payloadBytes += edit.changedPayloadBytes
+        }
+
+        /** Where [variant]'s record at [index] in [before] lands; null for one deleted. */
+        fun mapping(variant: String): (Int) -> Int? = { index ->
+            records[variant].orEmpty().fold<Int, Int?>(index) { at, deleted ->
+                at?.let { if (it == deleted) null else if (it > deleted) it - 1 else it }
+            }
+        }
+
+        fun droppedImages(): Map<String, Set<Int>> = rasters.filterValues { it.isNotEmpty() }
+
+        fun remap(lineage: SessionLineage): SessionLineage =
+            records.keys.fold(lineage) { next, variant -> next.remap(variant, mapping(variant)) }
+
+        fun renumber(origins: WidgetImportOrigins?): WidgetImportOrigins? =
+            records.keys.fold(origins) { next, variant -> next?.renumber(variant, mapping(variant)) }
+
+        /** Old indices to new, [then] — an edit after these — applied; a deleted background's Static to the whole face. */
+        fun indexMappings(then: (String, Int) -> Int = { _, index -> index }): Map<String, Map<Int, Int>> =
+            records.keys.associateWith { variant ->
+                val faceRelative = faceSized[variant].orEmpty()
+                FaceRecordParser.scanWidgets(before.entryByBasename(variant)).mapNotNull { record ->
+                    val old = record.globalIndex
+                    mapping(variant)(old)?.let { old to then(variant, it) }
+                        ?: (old to WidgetImporter.ROOT_TARGET).takeIf { old in faceRelative }
+                }.toMap()
+            }
+    }
 
     /** An added animation deleted from [variant] but not yet committed; see [animationDeletion]. */
     private class AnimationDeletion(
         val variant: String,
         val edit: StructuralEdit,
-        private val deleted: Int,
+        val deleted: Int,
         /** The variant's record indices before the deletion. */
         private val existing: List<Int>,
     ) {
@@ -1590,15 +1717,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         "This face declares no panel geometry, so there is no size to add a background at.",
                     )
                 }
+                // Frames are stored at the rectangle the picture covers; the rest stays black.
+                val bounds = movingBackgroundBounds(source.width, source.height, panel.width, panel.height, placement)
+                    ?: throw WatchFaceException("The picture is placed entirely off the face. Move it back onto the face.")
                 // One a variant: a second takes the first one's place, and its frames' room.
                 val replacing = movingBackgroundDeletion(current)
-                val plan = AnimationTiming.plan(source.delaysMs, frameStep)
+                val plan = source.plan(frameStep)
                 val size = current.currentContainer.fileSize
-                val proposed = (replacing?.edit?.container?.fileSize ?: size) +
-                    animationAddedBytes(plan.frames.size, plan.table.size, panel.width, panel.height)
+                // So is the still background's, which goes with it.
+                val base = replacing?.edit?.container ?: current.currentContainer
+                val proposed = base.fileSize - current.stillBackgroundBytes(base, variant, replacing) +
+                    animationAddedBytes(plan.frames.size, plan.table.size, bounds.width, bounds.height)
                 if (proposed > WATCH_CONTAINER_BYTE_CEILING) throw Fit3CapacityException(size, proposed)
                 PreparedMovingBackground(current, current.currentContainer, variant, panel.width, panel.height, plan,
-                    replacing)
+                    replacing, bounds)
             }
         }
         val frames = withContext(Dispatchers.Default) {
@@ -1606,6 +1738,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 currentCoroutineContext().ensureActive()
                 imageSource.decode(source.frames[index], prepared.width, prepared.height, placement)
                     .let { pixels -> placement.tint?.let { tinted(pixels, it) } ?: pixels }
+                    .let { pixels -> cropped(pixels, prepared.width, prepared.bounds) }
             }
         }
         return withContext(Dispatchers.Default) {
@@ -1617,25 +1750,39 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 val variant = prepared.variant
                 val plan = prepared.plan
                 val replacing = prepared.replacing
+                // The moving background it replaces goes, and the still one with its Static, as
+                // Remove background takes it; one that cannot go that way is painted black.
+                val deletions = Deletions(current.currentContainer)
+                replacing?.let(deletions::add)
+                val base = replacing?.edit?.container ?: current.currentContainer
+                val still = current.stillBackgroundDeletion(base, variant, replacing)
+                still?.let { deletions.add(variant, it) }
                 val result = MovingBackgroundEditor.insert(
-                    withStillBackgroundBlack(replacing?.edit?.container ?: current.currentContainer, variant),
-                    variant, frames, plan.table, plan.periodMs)
+                    still?.edit?.container ?: withStillBackgroundBlack(base, variant),
+                    variant, frames, plan.table, plan.periodMs, prepared.bounds)
                 val at = result.globalIndex
                 val shift = { index: Int -> if (index >= at) index + 1 else index }
-                // Each record's old index to its new one: past the deleted background, if any, then the insert.
-                val moved: (Int) -> Int? = if (replacing == null) shift else { index -> replacing.mapping(index)?.let(shift) }
+                // Each record's old index to its new one: past the deleted backgrounds, if any, then the insert.
+                val moved: (Int) -> Int? = { index -> deletions.mapping(variant)(index)?.let(shift) }
                 val existing = FaceRecordParser.scanWidgets(prepared.container.entryByBasename(variant)).map { it.globalIndex }
-                val audit = result.edit.audit("Added a moving background to $variant: ${plan.frames.size} frames, " +
-                    "${plan.table.size} steps of ${plan.periodMs} ms")
+                val audit = result.edit.audit("Added a moving background to $variant: ${plan.kept} frames, ${plan.frames.size} stored, " +
+                    "of ${prepared.bounds.width}x${prepared.bounds.height} at ${prepared.bounds.x},${prepared.bounds.y}, " +
+                    "${plan.table.size} steps of ${plan.periodMs} ms" +
+                    (if (replacing != null) ", replacing $variant's moving background" else "") +
+                    (if (still != null) ", its still background deleted" else ""))
                 commit(
                     current,
                     result.edit.container,
-                    replacing?.before(audit) ?: audit,
+                    audit.copy(
+                        changedPayloadBytes = audit.changedPayloadBytes + deletions.payloadBytes,
+                        sizeDelta = result.edit.container.fileSize - current.currentContainer.fileSize,
+                    ),
                     variant,
                     importOrigins = current.importOrigins?.renumber(variant, moved),
-                    droppedImages = replacing?.edit?.droppedImages.orEmpty(),
+                    droppedImages = deletions.droppedImages(),
                     lineage = current.identities().remap(variant, moved).append(variant, at, NativeWidgetOrigin()),
-                    indexMappings = replacing?.indexMappings(shift) ?: mapOf(variant to existing.associateWith(shift)),
+                    indexMappings = if (deletions.isEmpty()) mapOf(variant to existing.associateWith(shift))
+                    else deletions.indexMappings { _, index -> shift(index) },
                     kind = EditKind.MOVING_BACKGROUND,
                 )
             }
@@ -1677,7 +1824,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 if (width !in 1..panel.width || height !in 1..panel.height || (width >= panel.width && height >= panel.height)) {
                     throw WatchFaceException("A moving picture must fit on the face without covering all of it.")
                 }
-                val plan = AnimationTiming.plan(source.delaysMs, frameStep)
+                val plan = source.plan(frameStep)
                 val size = current.currentContainer.fileSize
                 val proposed = size + animationAddedBytes(plan.frames.size, plan.table.size, width, height)
                 if (proposed > WATCH_CONTAINER_BYTE_CEILING) throw Fit3CapacityException(size, proposed)
@@ -1703,7 +1850,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 commit(
                     current,
                     result.edit.container,
-                    result.edit.audit("Added a moving picture to $variant: ${width}x$height, ${plan.frames.size} frames, " +
+                    result.edit.audit("Added a moving picture to $variant: ${width}x$height, ${plan.kept} frames, ${plan.frames.size} stored, " +
                         "${plan.table.size} steps of ${plan.periodMs} ms"),
                     variant,
                     lineage = current.identities().append(variant, result.globalIndex, NativeWidgetOrigin()),
@@ -1743,33 +1890,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
      * deletes it, but not committed: on its own, or as the first half of an edit that puts a new
      * background in its place.
      */
-    private fun animationDeletion(current: Session, variant: String, globalIndex: Int): AnimationDeletion {
-        val entry = current.currentContainer.entryByBasename(variant)
-        val record = FaceRecordParser.scanWidgets(entry).single { it.globalIndex == globalIndex }
-        val edit = StructuralEditor.deleteWidget(
-            source = current.currentContainer,
-            entryBasename = variant,
-            globalIndex = globalIndex,
-            widgetType = record.widgetType,
-            sequenceId = record.sequenceId,
-            x = record.x,
-            y = record.y,
-            shippedImageCount = FaceRecordParser.scanImages(current.originalEntry(variant)).size,
-            retained = current.removedWidgets.mapNotNull { it.recordsByVariant[variant] },
-        )
-        return AnimationDeletion(variant, edit, globalIndex, FaceRecordParser.scanWidgets(entry).map { it.globalIndex })
-    }
+    private fun animationDeletion(current: Session, variant: String, globalIndex: Int): AnimationDeletion =
+        current.animationDeletion(variant, globalIndex)
 
-    /**
-     * The selected variant's moving background deleted, uncommitted, or null when it has none.
-     * A new background, still or moving, replaces it in the same commit — one undo step — since
-     * its frames are opaque and nothing under it would show.
-     */
-    private fun movingBackgroundDeletion(current: Session): AnimationDeletion? {
-        val variant = current.selectedVariantName ?: current.styleEntries().first().basename
-        val moving = MovingBackgroundEditor.read(current.currentContainer.entryByBasename(variant)) ?: return null
-        return animationDeletion(current, variant, moving.globalIndex)
-    }
+    /** See [Session.movingBackgroundDeletion]. */
+    private fun movingBackgroundDeletion(current: Session): AnimationDeletion? = current.movingBackgroundDeletion()
 
     /** A picked file's bytes, refusing to read past [limit] whatever the provider says its length is. */
     private fun readPicked(uri: String, limit: Int, what: String): ByteArray {
@@ -2182,9 +2307,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         sequenceId = sequenceId,
                         x = x,
                         y = y,
-                        shippedImageCount = FaceRecordParser.scanImages(
-                            current.originalEntry(styleName),
-                        ).size,
+                        shippedImageCount = current.shippedImageCount(styleName),
                         retained = current.removedWidgets.mapNotNull { it.recordsByVariant[styleName] },
                     )
                 } else {
@@ -3875,6 +3998,78 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }.mapTo(mutableSetOf()) { it.globalIndex }
         }
 
+        /**
+         * [variant]'s animation at [globalIndex] deleted with its frames, as deleting it does,
+         * but not committed: on its own, or as the first half of an edit that puts a new
+         * background in its place.
+         */
+        fun animationDeletion(variant: String, globalIndex: Int): AnimationDeletion {
+            val entry = currentContainer.entryByBasename(variant)
+            val record = FaceRecordParser.scanWidgets(entry).single { it.globalIndex == globalIndex }
+            val edit = StructuralEditor.deleteWidget(
+                source = currentContainer,
+                entryBasename = variant,
+                globalIndex = globalIndex,
+                widgetType = record.widgetType,
+                sequenceId = record.sequenceId,
+                x = record.x,
+                y = record.y,
+                shippedImageCount = shippedImageCount(variant),
+                retained = removedWidgets.mapNotNull { it.recordsByVariant[variant] },
+            )
+            return AnimationDeletion(variant, edit, globalIndex, FaceRecordParser.scanWidgets(entry).map { it.globalIndex })
+        }
+
+        /**
+         * How many of [variant]'s rasters from the package are still in it, ahead of everything
+         * added: all of them, less its background's once Remove background deleted that with its
+         * Static ([StructuralEditor.deleteBackground]). Only that leaves the Static neither on the
+         * face nor under Removed; when in doubt the count stays whole, which keeps a raster
+         * rather than deleting one the face shipped with.
+         */
+        fun shippedImageCount(variant: String): Int {
+            val pristine = originalEntry(variant)
+            val count = FaceRecordParser.scanImages(pristine).size
+            val (static, _) = StructuralEditor.deletableBackground(pristine) ?: return count
+            val live = identities().widgets[variant].orEmpty().values.any { it.originalIndex == static.globalIndex }
+            val removed = removedWidgets.any { removed ->
+                variant in removed.recordsByVariant &&
+                    (!removed.nativeIdentityRecorded || removed.nativeSourceIndices[variant] == static.globalIndex)
+            }
+            return if (live || removed) count else count - 1
+        }
+
+        /**
+         * [variant]'s still background deleted from [container] — the current one, or what
+         * [replacing] leaves — with its Static and raster, uncommitted; null when it has none or
+         * cannot go that way, and is painted black instead. See [StructuralEditor.deleteBackground].
+         */
+        fun stillBackgroundDeletion(container: Fit3Container, variant: String, replacing: AnimationDeletion?): BackgroundDeletion? =
+            StructuralEditor.deleteBackground(container, variant, retainedIn(container, variant, replacing))
+
+        /** What [stillBackgroundDeletion] would free in [variant], counted without building it. */
+        fun stillBackgroundBytes(container: Fit3Container, variant: String, replacing: AnimationDeletion?): Int =
+            StructuralEditor.deletedBackgroundBytes(container.entryByBasename(variant), retainedIn(container, variant, replacing))
+
+        /** Saved removals' records against [variant] as they read in [container], past [replacing]'s dropped frames. */
+        private fun retainedIn(container: Fit3Container, variant: String, replacing: AnimationDeletion?): List<ByteArray> =
+            removedWidgets.mapNotNull { it.recordsByVariant[variant] }.map { raw ->
+                if (replacing?.variant != variant) raw
+                else StructuralEditor.relocateSavedWidget(currentContainer.entryByBasename(variant),
+                    container.entryByBasename(variant), raw, replacing.edit.droppedImages[variant].orEmpty())
+            }
+
+        /**
+         * The selected variant's moving background deleted, uncommitted, or null when it has
+         * none. A new background, still or moving, replaces it in the same commit — one undo
+         * step — since its frames are opaque and nothing under it would show.
+         */
+        fun movingBackgroundDeletion(): AnimationDeletion? {
+            val variant = selectedVariantName ?: styleEntries().first().basename
+            val moving = MovingBackgroundEditor.read(currentContainer.entryByBasename(variant)) ?: return null
+            return animationDeletion(variant, moving.globalIndex)
+        }
+
         fun snapshot(requestedStyle: String? = null): EditorSnapshot {
             val styles = styleEntries()
             if (styles.isEmpty()) throw IllegalArgumentException("No editable style entries found")
@@ -3895,6 +4090,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // conditional the whole isolation model rests on.
             if (selected.basename != AOD_ENTRY_NAME) activeStyleName = selected.basename
             val isAod = selected.basename == AOD_ENTRY_NAME
+            // A new background deletes the selected variant's moving one in the same commit, so
+            // the room for one is measured without it, as adding one measures it; built only
+            // when a room question is asked.
+            val replacingMoving by lazy(LazyThreadSafetyMode.NONE) { movingBackgroundDeletion() }
+            val roomBase by lazy(LazyThreadSafetyMode.NONE) { replacingMoving?.edit?.container ?: currentContainer }
             val images = FaceRecordParser.scanImages(selected)
             val originalStyle = originalEntry(selected.basename)
             // The canvas is the panel the watch renders, which is not the same thing
@@ -4042,12 +4242,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 selectedCanTakeBackground = selectedVariantName.let { selected ->
                     selected != null && selected != AOD_ENTRY_NAME && selected !in backgrounds &&
                         StructuralEditor.backgroundStylesThatFit(
-                            source = currentContainer,
+                            source = roomBase,
                             entryBasenames = listOf(selected),
                             preferred = selected,
                         ).isNotEmpty()
                 },
                 movingBackground = MovingBackgroundEditor.read(selected),
+                stillBackgroundBytes = stillBackgroundBytes(roomBase, selected.basename, replacingMoving),
                 selectedBackgroundShown = MovingBackgroundEditor.read(selected) != null ||
                     FaceRecordParser.backgroundImage(selected)?.let { !drawsOnlyBlack(selected, it) } == true,
                 activeMovingBackground = styles.firstOrNull { it.basename == (activeStyleName ?: styles.first().basename) }
@@ -4057,14 +4258,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 widgetAnimations = composition.animations,
                 aodCanTakeBackground = aodEntry != null &&
                     StructuralEditor.backgroundStylesThatFit(
-                        source = currentContainer,
+                        source = roomBase,
                         entryBasenames = listOf(AOD_ENTRY_NAME),
                         preferred = AOD_ENTRY_NAME,
                     ).isNotEmpty(),
                 // Only worth costing where there is nothing to replace: a face that has a
                 // background anywhere takes the same-size replacement, which grows nothing.
                 backgroundAddTargets = if (backgrounds.isEmpty()) {
-                    backgroundAddTargets()
+                    backgroundAddTargets(roomBase)
+                } else {
+                    emptyList()
+                },
+                // A whole-face replacement gives the bare styles one too, as many as fit.
+                replacementAddTargets = if (backgrounds.isNotEmpty() && backgrounds.size < styles.size) {
+                    backgroundAddTargets(roomBase)
                 } else {
                     emptyList()
                 },
@@ -4119,6 +4326,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val styleNames: List<String>? = null,
         /** The selected variant's moving background, which the new still one replaces. */
         val replacing: AnimationDeletion? = null,
+        /** Styles in a whole-face replacement with no background, to be given one where it fits. */
+        val bare: List<String> = emptyList(),
     )
 }
 
@@ -4231,6 +4440,16 @@ private data class StoredRemovedWidget(
 /** [RemovedWidget.globalIndex] for a session that predates the field. */
 private const val UnknownGlobalIndex = -1
 private const val MAX_CHECKPOINT_BYTES = 13 * 1024 * 1024
+
+/** The [bounds] of a [width]-wide frame of [pixels], row by row; the frame itself when they are all of it. */
+internal fun cropped(pixels: IntArray, width: Int, bounds: PixelBounds): IntArray {
+    if (bounds.x == 0 && bounds.y == 0 && bounds.width == width && bounds.width * bounds.height == pixels.size) return pixels
+    val out = IntArray(bounds.width * bounds.height)
+    for (row in 0 until bounds.height) {
+        System.arraycopy(pixels, (bounds.y + row) * width + bounds.x, out, row * bounds.width, bounds.width)
+    }
+    return out
+}
 
 /** A GIF larger than this is refused before decoding; the decoder bounds what it decodes too. */
 private const val MAX_GIF_BYTES = 32 * 1024 * 1024

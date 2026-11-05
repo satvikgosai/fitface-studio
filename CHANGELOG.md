@@ -40,11 +40,11 @@ Added:
 
 - **Undo** and **Redo** under the face, one step for each change, kept until you leave
   the project.
-- **Add an image, GIF or video**, on the **Widgets** page or as a background. GIFs and
-  short video clips play on the Canvas as they will on the watch, with as many frames as
-  fit.
-- **Remove background**. Any new background now replaces the current one, moving or
-  still.
+- **Add an image, GIF or video**, on the **Widgets** page or as a background. It plays on
+  the Canvas as on the watch, keeping every frame of the longest part that fits; choose the
+  part, fewer frames, or **NATIVE** size to fit more.
+- **Remove background**, freeing its room. Any new background now replaces the current
+  one, moving or still.
 - Choose **This style only** or **All styles** when replacing, adding or importing a
   background.
 - Swipe the controls under a selected widget for two more pages: **Colour**, with

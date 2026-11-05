@@ -4,8 +4,11 @@ import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.model.AnimationSource
 import dev.fitface.studio.core.model.VideoClip
+import dev.fitface.studio.core.model.VideoProbe
+import dev.fitface.studio.core.model.AnimationParts
 import dev.fitface.studio.core.model.animationAddedBytes
 import dev.fitface.studio.core.model.animationStepThatFits
+import dev.fitface.studio.core.model.movingBackgroundBounds
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.EditKind
@@ -139,11 +142,169 @@ class EditorViewModelTest {
         List(frames) { index -> PreviewFrame(10, 10, IntArray(100) { index }) }, List(frames) { 100 })
 
     /**
-     * A GIF is placed as a still background is, with as many frames as fit: on a face with
-     * about 680 KB to spare, 1 in every 4 of twenty. Add takes the placement, colour and step.
+     * Larger and a pinch stop at the largest size that still fits — for a still picture its
+     * pixels, for a moving one a single frame — as a widget's Larger stops at the ceiling, so
+     * nothing being placed outgrows the room left; Smaller and Reset still work from there.
      */
     @Test
-    fun aGifIsPlacedLikeABackgroundKeepingTheFramesThatFit() {
+    fun aPictureStopsGrowingWhereTheFaceIsFull() {
+        fun grownAsFarAsItGoes(viewModel: EditorViewModel): PendingPicture {
+            repeat(60) { viewModel.stepPictureSize(grow = true) }
+            val stepped = requireNotNull(viewModel.state.value.pendingPicture)
+            viewModel.transformPicture(8f, 0f, 0f)
+            val pinched = requireNotNull(viewModel.state.value.pendingPicture)
+            assertEquals("a pinch stops there too", stepped.size, pinched.size)
+            return pinched
+        }
+        val room = 30_000
+        val full = snapshot(widgets).copy(containerBytes = WATCH_CONTAINER_BYTE_CEILING - room)
+
+        val still = EditorViewModel(FakeRepository(full, commitImmediately = true).apply { prepared = picture() },
+            installer, DiagnosticsLog(), reporter())
+        still.loadProject(1)
+        settle()
+        still.preparePicture("content://picture")
+        settle()
+        val picture = grownAsFarAsItGoes(still)
+        assertTrue(picture.addedBytes <= room)
+        val next = picture.prepared.ladder.first { it.percentOfOriginal > picture.size.percentOfOriginal }
+        assertTrue("one rung more would not fit", pictureAddedBytes(next.width, next.height, opaque = false) > room)
+        still.stepPictureSize(grow = false)
+        assertTrue(requireNotNull(still.state.value.pendingPicture).size.percentOfOriginal < picture.size.percentOfOriginal)
+
+        val source = AnimationSource("content://gif", 120, 90,
+            List(20) { index -> PreviewFrame(120, 90, IntArray(120 * 90) { index }) }, List(20) { 100 })
+        val moving = EditorViewModel(FakeRepository(full, commitImmediately = true).apply { animation = source },
+            installer, DiagnosticsLog(), reporter())
+        moving.loadProject(1)
+        settle()
+        moving.prepareMovingPicture("content://gif")
+        settle()
+        val gif = grownAsFarAsItGoes(moving)
+        assertTrue("its part fitted again to a frame or more", requireNotNull(gif.animation?.part).lengthMs >= 100)
+        assertTrue(gif.addedBytes <= room)
+        val larger = gif.prepared.ladder.firstOrNull { it.percentOfOriginal > gif.size.percentOfOriginal }
+        if (larger != null) assertTrue(animationAddedBytes(1, 1, larger.width, larger.height) > room)
+        moving.resetPicturePlacement()
+        assertTrue(requireNotNull(moving.state.value.pendingPicture).addedBytes <= room)
+    }
+
+    /**
+     * A moving background's Larger, pinch, Reset and fit stop where not a frame of it would fit
+     * what it covers, as Longer stops at the longest part; a drag still moves it, and a step
+     * that makes it smaller is always taken.
+     */
+    @Test
+    fun aMovingBackgroundStopsGrowingWhereNotAFrameFits() {
+        // One 256 × 256 frame (CONTAIN on this panel) fits; one covering the whole panel does not.
+        val room = 80_000
+        val repository = FakeRepository(snapshot(widgets).copy(containerBytes = WATCH_CONTAINER_BYTE_CEILING - room),
+            commitImmediately = true).apply { animation = gif() }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.selectFit(ImageFit.CONTAIN)
+        viewModel.prepareMovingBackground("content://gif")
+        settle()
+        val snapshot = requireNotNull(viewModel.state.value.snapshot)
+        fun covered() = requireNotNull(movingBackgroundBounds(10, 10, PanelWidth, PanelHeight, viewModel.state.value.placement))
+        fun cost() = covered().let { animationAddedBytes(1, 1, it.width, it.height) }
+        assertNotNull(viewModel.state.value.pendingAnimation?.part)
+
+        repeat(60) { viewModel.stepImageZoom(grow = true) }
+        val zoom = viewModel.state.value.placement.zoom
+        assertTrue("it grew as far as fits", zoom > 1f && cost() <= room)
+        val pending = requireNotNull(viewModel.state.value.pendingAnimation)
+        assertFalse("and Larger is greyed out there", snapshot.movingBackgroundMayGo(pending, viewModel.state.value.placement,
+            viewModel.state.value.placement.copy(zoom = steppedZoom(zoom, grow = true))))
+        viewModel.transformImage(2f, 0.05f, 0f)
+        assertEquals("a pinch past it keeps its pan alone", zoom, viewModel.state.value.placement.zoom)
+        assertEquals(0.05f, viewModel.state.value.placement.offsetX, 0.0001f)
+
+        viewModel.selectFit(ImageFit.COVER)
+        assertEquals("COVER covers the whole panel, past the room", ImageFit.CONTAIN, viewModel.state.value.placement.fit)
+        assertFalse(snapshot.movingBackgroundMayGo(pending, viewModel.state.value.placement, ImagePlacement(fit = ImageFit.COVER)))
+
+        viewModel.stepImageZoom(grow = false)
+        assertTrue(viewModel.state.value.placement.zoom < zoom)
+        viewModel.resetImagePlacement()
+        assertEquals("Reset to a size that fits is taken", 1f, viewModel.state.value.placement.zoom)
+        assertTrue(cost() <= room)
+    }
+
+    /**
+     * NATIVE is a moving background's own fit: choosing it prices the frames at the GIF's own
+     * 10 × 10, so the whole GIF fits at every frame, and it is never saved as the fit new
+     * pictures open at. Reset keeps it; a still fit chosen after it is saved, and fits the
+     * longest part again at what its frames cost.
+     */
+    @Test
+    fun nativeIsAMovingBackgroundsOwnFitAndPricesItsFramesAgain() {
+        val source = gif()
+        val repository = FakeRepository(snapshot(widgets).copy(containerBytes = 3_500_000), commitImmediately = true)
+            .apply { animation = source }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingBackground("content://gif")
+        settle()
+        assertEquals(VideoClip(2000, 0, 600), viewModel.state.value.pendingAnimation?.part)
+        val opensAt = viewModel.state.value.fit
+
+        viewModel.selectFit(ImageFit.NATIVE)
+        settle()
+        assertEquals(ImageFit.NATIVE, viewModel.state.value.placement.fit)
+        assertEquals("not remembered", opensAt, viewModel.state.value.fit)
+        assertEquals(1, viewModel.state.value.pendingAnimation?.step)
+        assertEquals("all of it", VideoClip(2000, 0, 2000), viewModel.state.value.pendingAnimation?.part)
+        viewModel.resetImagePlacement()
+        assertEquals(ImageFit.NATIVE, viewModel.state.value.placement.fit)
+        assertTrue(repository.savedFits.isEmpty())
+
+        viewModel.selectFit(ImageFit.CONTAIN)
+        settle()
+        val room = (WATCH_CONTAINER_BYTE_CEILING - 3_500_000).toLong()
+        val contained = requireNotNull(movingBackgroundBounds(10, 10, PanelWidth, PanelHeight, ImagePlacement(fit = ImageFit.CONTAIN)))
+        assertEquals(AnimationParts.longestGifPart(source, 0, 1, room, contained.width, contained.height),
+            viewModel.state.value.pendingAnimation?.part)
+        assertEquals(VideoClip(2000, 0, 1000), viewModel.state.value.pendingAnimation?.part)
+        assertEquals(ImageFit.CONTAIN, viewModel.state.value.fit)
+        assertEquals(listOf(ImageFit.CONTAIN), repository.savedFits)
+    }
+
+    /**
+     * A moving background's frames cost the area they cover, so zooming it out fits a longer
+     * part and zooming back in a shorter one, as Fewer and More do, and Longer follows.
+     */
+    @Test
+    fun resizingABackgroundFitsItsPartAgain() {
+        val source = gif()
+        val repository = FakeRepository(snapshot(widgets).copy(containerBytes = 3_500_000), commitImmediately = true)
+            .apply { animation = source }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingBackground("content://gif")
+        settle()
+        viewModel.selectFit(ImageFit.CONTAIN)
+        assertEquals(VideoClip(2000, 0, 1000), viewModel.state.value.pendingAnimation?.part)
+        viewModel.transformImage(0.5f, 0f, 0f)
+        assertEquals("half the size, all of it", VideoClip(2000, 0, 2000), viewModel.state.value.pendingAnimation?.part)
+        viewModel.transformImage(2f, 0f, 0f)
+        assertEquals(VideoClip(2000, 0, 1000), viewModel.state.value.pendingAnimation?.part)
+        assertEquals(1000, viewModel.state.value.pendingAnimation?.longestMs)
+        viewModel.transformImage(0.5f, 0f, 0f)
+        viewModel.resetImagePlacement()
+        assertEquals("Reset is a resize too", VideoClip(2000, 0, 1000), viewModel.state.value.pendingAnimation?.part)
+    }
+
+    /**
+     * A GIF is placed as a still background is, keeping every frame of the longest part that
+     * fits: on a face with about 680 KB to spare, six full-panel frames of twenty, 0.6 s.
+     * Fewer frames make room for a longer part; Add takes the placement, colour, step and part.
+     */
+    @Test
+    fun aGifIsPlacedLikeABackgroundKeepingTheLongestPartThatFits() {
         val source = gif()
         val repository = FakeRepository(snapshot(widgets).copy(containerBytes = 3_500_000), commitImmediately = true)
             .apply { animation = source }
@@ -153,16 +314,21 @@ class EditorViewModelTest {
         viewModel.prepareMovingBackground("content://gif")
         settle()
         val pending = requireNotNull(viewModel.state.value.pendingAnimation)
-        assertEquals(4, pending.step)
-        assertEquals(4, pending.fittingStep)
-        assertEquals(listOf(0, 4, 8, 12, 16), pending.plan.frames)
+        assertEquals(1, pending.step)
+        assertEquals(VideoClip(2000, 0, 600), pending.part)
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), pending.plan.frames)
         assertSame("the face shows the first frame where the still picture would be",
             source.frames.first(), viewModel.state.value.pendingImage?.preview)
 
         viewModel.setMovingBackgroundStep(3)
         assertEquals(3, viewModel.state.value.pendingAnimation?.step)
+        assertEquals("1 in 3 of 18 frames is six again", VideoClip(2000, 0, 1800), viewModel.state.value.pendingAnimation?.part)
         viewModel.setMovingBackgroundStep(0)
         assertEquals("below every frame is not a step", 3, viewModel.state.value.pendingAnimation?.step)
+        viewModel.setMovingBackgroundStep(4)
+        assertEquals(VideoClip(2000, 0, 2000), viewModel.state.value.pendingAnimation?.part)
+        viewModel.setMovingBackgroundStep(1)
+        assertEquals("More shrinks the part to fit", VideoClip(2000, 0, 600), viewModel.state.value.pendingAnimation?.part)
         viewModel.setMovingBackgroundStep(4)
         viewModel.transformImage(1f, 0.1f, 0f)
         viewModel.setBackgroundTint(0xFFFF0000.toInt())
@@ -171,6 +337,7 @@ class EditorViewModelTest {
 
         val (placement, step) = repository.addedMoving.single()
         assertEquals(4, step)
+        assertEquals(20, repository.addedMovingSources.single().frames.size)
         assertEquals(0.1f, placement.offsetX)
         assertEquals(0xFFFF0000.toInt(), placement.tint)
         assertNull(viewModel.state.value.pendingAnimation)
@@ -286,6 +453,8 @@ class EditorViewModelTest {
         assertEquals(1000L + freed, full.roomForMovingBackground())
         assertEquals("nothing to replace, nothing freed", 1000L,
             full.copy(movingBackground = null).roomForMovingBackground())
+        assertEquals("the still background deleted with it is room too", 1000L + freed + 205_880,
+            full.copy(stillBackgroundBytes = 205_880).roomForMovingBackground())
 
         val source = gif()
         val repository = FakeRepository(full, commitImmediately = true).apply { animation = source }
@@ -296,7 +465,9 @@ class EditorViewModelTest {
         settle()
         assertNull(viewModel.state.value.error)
         val pending = requireNotNull(viewModel.state.value.pendingAnimation)
-        assertEquals(animationStepThatFits(source.delaysMs, 1000L + freed, PanelWidth, PanelHeight), pending.step)
+        assertEquals(1, pending.step)
+        assertEquals(AnimationParts.longestGifPart(source, 0, 1, 1000L + freed, PanelWidth, PanelHeight), pending.part)
+        assertEquals("five full-panel frames in the old one's room", VideoClip(2000, 0, 500), pending.part)
         viewModel.applyBackground()
         settle()
         assertEquals(pending.step, repository.addedMoving.single().second)
@@ -322,10 +493,12 @@ class EditorViewModelTest {
 
     /**
      * A GIF placed as a moving picture starts where a still picture would, at its own size
-     * here, keeping as many frames as fit at that size; Add sends the frames, not a picture.
+     * here, keeping every frame of the longest part that fits at that size: seven of twenty on
+     * a face this full. Fewer fits a longer part at the size it has then; Add sends that part's
+     * frames, not a picture.
      */
     @Test
-    fun aGifIsPlacedLikeAPictureKeepingTheFramesThatFitAtItsSize() {
+    fun aGifIsPlacedLikeAPictureKeepingTheLongestPartThatFitsAtItsSize() {
         val source = AnimationSource("content://gif", 120, 90,
             List(20) { index -> PreviewFrame(120, 90, IntArray(120 * 90) { index }) }, List(20) { 100 })
         val repository = FakeRepository(snapshot(widgets).copy(containerBytes = 4_100_000), commitImmediately = true)
@@ -339,56 +512,188 @@ class EditorViewModelTest {
         val animation = requireNotNull(pending.animation)
         assertEquals(120 to 90, pending.size.width to pending.size.height)
         val room = (WATCH_CONTAINER_BYTE_CEILING - 4_100_000).toLong()
-        assertEquals(animationStepThatFits(source.delaysMs, room, 120, 90), animation.step)
-        assertTrue("a face this full keeps some frames, not all", animation.step > 1)
+        assertEquals(1, animation.step)
+        assertEquals(VideoClip(2000, 0, 700), animation.part)
         assertSame(source.frames.first(), pending.prepared.preview)
-        assertEquals(animationAddedBytes(animation.plan.frames.size, animation.plan.table.size, 120, 90), pending.addedBytes)
+        assertEquals(animationAddedBytes(7, 7, 120, 90), pending.addedBytes)
 
         viewModel.stepPictureSize(grow = false)
         val smaller = requireNotNull(viewModel.state.value.pendingPicture)
         assertTrue(smaller.size.width < 120)
-        viewModel.setMovingPictureStep(animation.step - 1)
+        assertEquals("a smaller picture fits a longer part at once",
+            AnimationParts.longestGifPart(source, 0, 1, room, smaller.size.width, smaller.size.height), smaller.animation?.part)
+        assertTrue(requireNotNull(smaller.animation?.part).lengthMs > 700)
+        assertEquals("and Longer goes that far", smaller.animation?.part?.lengthMs, smaller.animation?.longestMs)
+        viewModel.setMovingPictureStep(2)
+        val part = requireNotNull(AnimationParts.longestGifPart(source, 0, 2, room, smaller.size.width, smaller.size.height))
+        assertEquals(part, viewModel.state.value.pendingPicture?.animation?.part)
+        assertTrue("fewer frames, a longer part", part.lengthMs > 700)
         viewModel.setPictureTint(0xFF00FF00.toInt())
         viewModel.addPicture()
         settle()
-        assertEquals(listOf(listOf<Any?>(animation.step - 1, smaller.size.width, smaller.size.height,
+        assertEquals(listOf(listOf<Any?>(2, smaller.size.width, smaller.size.height,
             smaller.left, smaller.top, 0xFF00FF00.toInt())), repository.addedMovingPictures)
+        assertEquals(part.lengthMs / 100, repository.addedMovingPictureSources.single().frames.size)
         assertTrue("no still picture was added", repository.addedPictures.isEmpty())
         assertNull(viewModel.state.value.pendingPicture)
         assertEquals(9, viewModel.state.value.selectedWidgetIndex)
     }
 
-    /** A video's clip is read again when it is moved, keeping the step and the place. */
+    /**
+     * A video is read once, all one read takes from its start, and every change after that is
+     * cut from those frames: the longest part that fits keeping every frame, a moved start,
+     * Shorter and Longer, and Fewer and More, without reading it again.
+     */
     @Test
-    fun aVideosClipIsReadAgainWhenItIsMovedOrStretched() {
-        val clip = VideoClip.opening(8000)
-        val source = AnimationSource("content://video", 64, 36,
-            List(clip.frames) { index -> PreviewFrame(64, 36, IntArray(64 * 36) { index }) }, List(clip.frames) { 100 }, clip)
-        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply { animation = source }
+    fun aVideoIsReadOnceAndEveryChangeIsCutFromIt() {
+        val longest = VideoClip.maxLengthMs(64, 36)
+        val frames = List(80) { index -> PreviewFrame(64, 36, IntArray(64 * 36) { index }) }
+        val whole = VideoClip(8000, 0, 8000, longest)
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply {
+            animation = AnimationSource("content://video", 64, 36, frames, List(80) { 100 }, whole)
+            video = VideoProbe(8000, 64, 36, longest)
+        }
         val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
         viewModel.loadProject(1)
         settle()
         viewModel.prepareMovingPicture("content://video")
         settle()
+        assertEquals("all of it, read once", listOf(whole), repository.clipsRead)
+        assertEquals("a small picture fits all of it", whole, viewModel.state.value.pendingPicture?.animation?.part)
         viewModel.setMovingPictureStep(2)
         viewModel.transformPicture(1f, 0.05f, 0f)
         val placed = requireNotNull(viewModel.state.value.pendingPicture)
-        viewModel.setVideoClip(requireNotNull(clip.later()))
+        viewModel.setAnimationPart(requireNotNull(whole.later()))
         settle()
-        assertEquals(listOf(VideoClip(8000, 500, 3000)), repository.clipsRead)
         val moved = requireNotNull(viewModel.state.value.pendingPicture)
-        assertEquals(VideoClip(8000, 500, 3000), moved.animation?.source?.clip)
+        assertEquals(VideoClip(8000, 500, 7500, longest), moved.animation?.part)
+        assertEquals(75, moved.animation?.source?.frames?.size)
         assertEquals(2, moved.animation?.step)
         assertEquals(placed.centreX, moved.centreX)
 
-        // The same control on a moving background.
+        // A full-panel background has room for a few seconds of it.
         viewModel.discardPicture()
         viewModel.prepareMovingBackground("content://video")
         settle()
-        viewModel.setVideoClip(requireNotNull(clip.longer()))
+        val room = snapshot(widgets).roomForMovingBackground()
+        val read = AnimationSource("content://video", 64, 36, frames, List(80) { 100 }, whole)
+        fun fitting(step: Int) = requireNotNull(AnimationParts.fittingFrames(read, step, room, PanelWidth, PanelHeight)) * 100
+        val fits = whole.copy(lengthMs = fitting(1))
+        assertTrue(fits.lengthMs < 8000)
+        assertEquals(fits, viewModel.state.value.pendingAnimation?.part)
+        viewModel.setAnimationPart(requireNotNull(fits.shorter()))
+        viewModel.setAnimationPart(requireNotNull(requireNotNull(viewModel.state.value.pendingAnimation?.part).longer()))
+        assertEquals("Longer stops at the longest that fits", fits, viewModel.state.value.pendingAnimation?.part)
+        viewModel.setAnimationPart(requireNotNull(fits.longer()))
+        assertEquals(fits, viewModel.state.value.pendingAnimation?.part)
+        viewModel.setMovingBackgroundStep(2)
         settle()
-        assertEquals(VideoClip(8000, 0, 3500), viewModel.state.value.pendingAnimation?.source?.clip)
-        assertEquals(35, viewModel.state.value.pendingAnimation?.source?.frames?.size)
+        assertEquals("fewer frames, a longer part", whole.copy(lengthMs = fitting(2)), viewModel.state.value.pendingAnimation?.part)
+        assertTrue(fitting(2) > fits.lengthMs)
+        viewModel.setMovingBackgroundStep(1)
+        assertEquals(fits, viewModel.state.value.pendingAnimation?.part)
+        viewModel.transformImage(0.5f, 0f, 0f)
+        assertTrue("smaller, a longer part, cut from what is read",
+            requireNotNull(viewModel.state.value.pendingAnimation?.part).lengthMs > fits.lengthMs)
+        assertEquals("two picks, two reads: nothing else reads", listOf(whole, whole), repository.clipsRead)
+    }
+
+    /**
+     * A video's cached frames are released whenever the read being placed changes: kept while
+     * it is placed, released when it is discarded or added, and all of them when the editor
+     * closes. The first release, before anything is placed, clears what an earlier editor left.
+     */
+    @Test
+    fun cachedVideoFramesAreReleasedWhenNothingUsesThem() {
+        val longest = VideoClip.maxLengthMs(64, 36)
+        val frames = List(80) { index -> PreviewFrame(64, 36, IntArray(64 * 36) { index }) }
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply {
+            animation = AnimationSource("content://video", 64, 36, frames, List(80) { 100 }, VideoClip(8000, 0, 8000, longest))
+            video = VideoProbe(8000, 64, 36, longest)
+        }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        assertEquals("nothing placed yet: clear what was left", listOf<AnimationSource?>(null), repository.releasedFrames)
+
+        viewModel.prepareMovingBackground("content://video")
+        settle()
+        val placed = requireNotNull(viewModel.state.value.pendingAnimation).read
+        assertSame("kept while placed", placed, repository.releasedFrames.last())
+        viewModel.setMovingBackgroundStep(2)
+        settle()
+        assertSame("a cut from the same read releases nothing", placed, repository.releasedFrames.last())
+        viewModel.cancelBackground()
+        settle()
+        assertNull("discarded: released", repository.releasedFrames.last())
+
+        viewModel.prepareMovingPicture("content://video")
+        settle()
+        assertSame(requireNotNull(viewModel.state.value.pendingPicture?.animation).read, repository.releasedFrames.last())
+        viewModel.addPicture()
+        settle()
+        assertNull("added: released", repository.releasedFrames.last())
+        val before = repository.releasedFrames.size
+
+        viewModel.prepareMovingBackground("content://video")
+        settle()
+        viewModel.applyBackground()
+        settle()
+        assertNull("applied: released", repository.releasedFrames.last())
+        assertEquals("one keep and one release for that add", before + 2, repository.releasedFrames.size)
+    }
+
+    /**
+     * A GIF's part starts on a frame, and Later and Earlier aim at the half seconds, so with
+     * 120 ms frames they step 0, 0.48, 0.96 s and back the same way rather than drifting.
+     */
+    @Test
+    fun laterAndEarlierStepAGifEvenly() {
+        val source = AnimationSource("content://gif", 10, 10,
+            List(40) { index -> PreviewFrame(10, 10, IntArray(100) { index }) }, List(40) { 120 })
+        val repository = FakeRepository(snapshot(widgets).copy(containerBytes = 3_500_000), commitImmediately = true)
+            .apply { animation = source }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingBackground("content://gif")
+        settle()
+        fun part() = requireNotNull(viewModel.state.value.pendingAnimation?.part)
+        val starts = mutableListOf(part().startMs)
+        repeat(2) { viewModel.setAnimationPart(requireNotNull(part().later())); starts += part().startMs }
+        repeat(2) { viewModel.setAnimationPart(requireNotNull(part().earlier())); starts += part().startMs }
+        assertEquals(listOf(0, 480, 960, 480, 0), starts)
+    }
+
+    /**
+     * A video with still moments repeats frames, which are stored once, so it is cut exactly:
+     * more of it fits than if every frame were new, and Longer goes as far as that.
+     */
+    @Test
+    fun aVideoWithRepeatsFitsLongerThanItsFrameCountSuggests() {
+        val longest = VideoClip.maxLengthMs(64, 36)
+        // Eight pictures, each held ten frames: an 8 s video of eighty frames.
+        val frames = List(80) { index -> PreviewFrame(64, 36, IntArray(64 * 36) { index / 10 }) }
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply {
+            animation = AnimationSource("content://video", 64, 36, frames, List(80) { 100 }, VideoClip(8000, 0, 8000, longest))
+            video = VideoProbe(8000, 64, 36, longest)
+        }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.prepareMovingBackground("content://video")
+        settle()
+        val room = snapshot(widgets).roomForMovingBackground()
+        val distinct = List(80) { index -> PreviewFrame(64, 36, IntArray(64 * 36) { index }) }
+        val ifAllNew = requireNotNull(AnimationParts.fittingFrames(AnimationSource("v", 64, 36, distinct, List(80) { 100 }),
+            1, room, PanelWidth, PanelHeight)) * 100
+        val pending = requireNotNull(viewModel.state.value.pendingAnimation)
+        val part = requireNotNull(pending.part)
+        assertTrue("${part.lengthMs} ms against $ifAllNew", part.lengthMs > ifAllNew)
+        assertEquals(1, repository.clipsRead.size)
+        val plan = pending.plan
+        assertTrue("it fits", animationAddedBytes(plan.frames.size, plan.table.size, PanelWidth, PanelHeight) <= room)
+        assertEquals("Longer goes no further", part.lengthMs, pending.longestMs)
     }
 
     /** A pinch lands on a rung; a drag past the edge stops where a widget drag would. */
@@ -1103,8 +1408,30 @@ class EditorViewModelTest {
         override suspend fun prepareReplacementImage(imageUri: String) = ReplacementImage(imageUri, frame())
 
         var animation: AnimationSource? = null
+
+        /** Every fit saved as the one new pictures open at. */
+        val savedFits = mutableListOf<ImageFit>()
+
+        override suspend fun setImageFit(value: ImageFit) {
+            savedFits += value
+        }
         /** Each moving background added: its placement and frame step. */
         val addedMoving = mutableListOf<Pair<ImagePlacement, Int>>()
+
+        /** The frames each Add sent: the part kept, not the whole GIF. */
+        val addedMovingSources = mutableListOf<AnimationSource>()
+
+        /** What [probeVideo] answers: null, a GIF, unless a test gives a video. */
+        var video: VideoProbe? = null
+
+        override suspend fun probeVideo(imageUri: String): VideoProbe? = video
+
+        /** Every release of cached video frames, by the read kept (null for none). */
+        val releasedFrames = mutableListOf<AnimationSource?>()
+
+        override fun releaseVideoFrames(keep: AnimationSource?) {
+            releasedFrames += keep
+        }
 
         /** Each clip a video was read again over. */
         val clipsRead = mutableListOf<VideoClip>()
@@ -1113,21 +1440,25 @@ class EditorViewModelTest {
             val source = requireNotNull(animation)
             if (clip == null) return source
             clipsRead += clip
+            val first = clip.startMs / 100
             return AnimationSource(source.uri, source.width, source.height,
-                List(clip.frames) { source.frames[it % source.frames.size] }, List(clip.frames) { 100 }, clip)
+                List(clip.frames) { source.frames[(first + it) % source.frames.size] }, List(clip.frames) { 100 }, clip)
         }
 
         override suspend fun addMovingBackground(source: AnimationSource, placement: ImagePlacement, frameStep: Int): EditorSnapshot {
             addedMoving += placement to frameStep
+            addedMovingSources += source
             return current
         }
 
         /** Each moving picture added: its frame step, size, top-left and colour. */
         val addedMovingPictures = mutableListOf<List<Any?>>()
+        val addedMovingPictureSources = mutableListOf<AnimationSource>()
 
         override suspend fun addMovingPicture(source: AnimationSource, frameStep: Int, width: Int, height: Int,
             x: Int, y: Int, tint: Int?): EditorSnapshot {
             addedMovingPictures += listOf(frameStep, width, height, x, y, tint)
+            addedMovingPictureSources += source
             current = current.copy(widgets = current.widgets + widget(globalIndex = 9, x = x, y = y))
             return current
         }

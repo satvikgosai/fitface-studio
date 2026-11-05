@@ -115,11 +115,11 @@ internal fun PictureWorkspace(
             animation?.let {
                 ImportFactRow(
                     stringResource(R.string.editor_moving_fact_frames),
-                    stringResource(R.string.editor_moving_frames_of, it.plan.frames.size, it.source.frames.size),
+                    stringResource(R.string.editor_moving_frames_of, it.plan.kept, it.source.frames.size),
                 )
                 ImportFactRow(stringResource(R.string.editor_moving_fact_loop),
                     stringResource(R.string.editor_moving_seconds, loopSeconds(it.plan.loopMs)),
-                    info = movingLoopNotes(snapshot, video = it.source.clip != null))
+                    info = movingLoopNotes(snapshot, video = it.isVideo))
             }
             ImportFactRow(
                 stringResource(R.string.widget_import_fact_adds),
@@ -140,13 +140,13 @@ internal fun PictureWorkspace(
             onStepZoom = pictures.onStepSize,
             onResetPlacement = pictures.onReset,
             minZoomPercent = pending.prepared.ladder.first().percentOfOriginal,
-            maxZoomPercent = pending.prepared.ladder.last().percentOfOriginal,
+            // Larger stops where the face is full, as a widget's does.
+            maxZoomPercent = pending.largestFittingPercent(snapshot.roomForPicture()),
             stepPercent = WidgetResizeStepPercent,
         )
         if (animation != null) {
-            FrameStepControls(animation, animation.source.frames.size, enabled,
-                animationFrameBytes(size.width, size.height), pictures.onStep)
-            animation.source.clip?.let { VideoClipControls(it, enabled, state.readingFrames, pictures.onClip) }
+            FrameStepControls(animation, enabled, animationFrameBytes(size.width, size.height), pictures.onStep)
+            PartControls(animation, enabled, state.readingFrames, pictures.onClip)
         }
         ImageColourControls(pending.tint, enabled = enabled, onTint = pictures.onTint, stateKey = pending.prepared.handle)
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {

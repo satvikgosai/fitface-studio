@@ -110,9 +110,13 @@ class GifDecoderTest {
         assertEquals("This GIF is cut short.", refusal(good.copyOf(30)))
         assertEquals("This file is not a GIF.", refusal(good.copyOf(5)))
         assertEquals("This GIF is cut short.", refusal(good.copyOf(9)))
-        // A screen past the limit is refused from its header, before anything is allocated.
-        val huge = good.copyOf().also { it[6] = 0x88.toByte(); it[7] = 0x13 }
-        assertEquals("This GIF is 5000×3; at most 4096×4096 can be read.", refusal(huge))
+        // A screen one frame of which would pass the limit is refused from its header, before
+        // anything is allocated; a wide but short one is not.
+        val huge = good.copyOf().also { it[6] = 0xFF.toByte(); it[7] = 0xFF.toByte(); it[8] = 0xFF.toByte(); it[9] = 0x01 }
+        assertEquals("This GIF is 65535×511; one frame of it needs more than 64 MB.", refusal(huge))
+        val wide = TestGif.encode(5000, 3, listOf(TestGif.Frame(solid(1, 1, 0), 1, 1)), global = palette)
+        assertEquals(5000, GifDecoder.decode(wide).width)
+        assertEquals("This GIF is damaged.", refusal(good.copyOf().also { it[6] = 0; it[7] = 0 }))
         assertEquals("A frame of this GIF has no colours.", refusal(noColours()))
         assertEquals("This GIF has no frames.", refusal(TestGif.encode(2, 2, emptyList(), global = palette)))
     }
@@ -128,11 +132,11 @@ class GifDecoderTest {
     }
 
     @Test
-    fun tooManyFramesOrTooMuchDecodedImageIsRefused() {
+    fun anyNumberOfFramesIsReadButNotMoreDecodedImageThanTheLimit() {
         val tiny = TestGif.Frame(byteArrayOf(0), 1, 1)
-        val flood = TestGif.encode(1, 1, List(GifDecoder.MAX_FRAMES + 1) { tiny }, global = palette)
-        assertEquals("This GIF has more than 512 frames.",
-            assertThrows(GifFormatException::class.java) { GifDecoder.decode(flood) }.message)
+        // Frames are bounded by what they need in memory together, not by a count.
+        val long = TestGif.encode(1, 1, List(1200) { tiny }, global = palette)
+        assertEquals(1200, GifDecoder.decode(long).frames.size)
         // Two frames of a 4096 × 4096 screen need 128 MB; each frame is a single pixel in the file.
         val wide = TestGif.encode(4096, 4096, List(2) { tiny }, global = palette)
         assertEquals("This GIF is too large to read: its frames would need more than 64 MB.",

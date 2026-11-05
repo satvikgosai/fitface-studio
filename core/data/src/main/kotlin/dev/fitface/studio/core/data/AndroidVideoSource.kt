@@ -12,6 +12,8 @@ import android.net.Uri
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.VideoClip
 import dev.fitface.studio.core.model.WatchFaceException
+import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
 
@@ -19,10 +21,13 @@ import kotlinx.coroutines.ensureActive
  * Frames of a picked video, read with the platform's retriever: no codec of our own, and the
  * file is read through its descriptor rather than copied.
  *
- * Each frame is the one nearest its time ([MediaMetadataRetriever.OPTION_CLOSEST]), upright
- * as the video's rotation says, at [VideoClip.frameSize]. Fewer frames are read rather than
- * more memory used: [VideoClip.maxFrames] stops the clip once its frames would pass the
- * GIF decoder's own 64 MiB.
+ * Read in one pass where the video says how many frames it has: runs of consecutive frames
+ * ([MediaMetadataRetriever.getFramesAtIndex], [VideoFramePlan]), keeping the one nearest each
+ * sample time. Otherwise, or if that fails, one frame at a time, the one nearest its time
+ * ([MediaMetadataRetriever.OPTION_CLOSEST]), which decodes from a keyframe for every frame
+ * and is several times slower. Either way each frame is upright as the video's rotation says,
+ * at [VideoClip.frameSize], and written to a cache file ([CachedVideoFrames]); a clip is
+ * never longer than [VideoClip.maxLengthMs], and [VideoClip.maxFrames] stops the read there.
  */
 internal class AndroidVideoSource(private val context: Context) {
     /** What the video is, read before any frame: its upright size and its length. */
@@ -48,23 +53,90 @@ internal class AndroidVideoSource(private val context: Context) {
     }
 
     /**
-     * [clip]'s frames, each [width] × [height]: what [VideoClip.frameSize] chose for the
-     * panel. Stops at [VideoClip.maxFrames]; throws when not one frame could be decoded.
+     * [clip]'s frames, each [width] × [height] — what [VideoClip.frameSize] chose for the panel
+     * — one for every sample time, cached in [cache]. A frame that cannot be decoded repeats
+     * the one before it, so positions still say times. Stops at [VideoClip.maxFrames]; throws
+     * when not one frame could be decoded.
      */
-    suspend fun frames(uri: String, video: Video, clip: VideoClip, width: Int, height: Int): List<PreviewFrame> =
+    suspend fun frames(uri: String, video: Video, clip: VideoClip, width: Int, height: Int, cache: File): List<PreviewFrame> =
         retriever(uri).useRetriever { retriever ->
-            val frames = mutableListOf<PreviewFrame>()
-            for (time in clip.sampleTimesUs.take(VideoClip.maxFrames(width, height))) {
-                coroutineContext.ensureActive()
-                val bitmap = retriever.getScaledFrameAtTime(time, MediaMetadataRetriever.OPTION_CLOSEST, width, height)
-                    ?: continue
-                frames += upright(bitmap, video, width, height)
-            }
-            if (frames.isEmpty()) {
-                throw WatchFaceException("No frame of this video could be read.", "video: no frames decoded")
-            }
-            frames
+            val times = clip.sampleTimesUs.take(VideoClip.maxFrames(width, height))
+            inOnePass(retriever, video, times, width, height, cache)
+                ?: oneAtATime(retriever, video, times, width, height, cache)
         }
+
+    /** [times] read in runs of consecutive frames, or null where the video does not say its frame count or the read fails. */
+    private suspend fun inOnePass(
+        retriever: MediaMetadataRetriever,
+        video: Video,
+        times: List<Long>,
+        width: Int,
+        height: Int,
+        cache: File,
+    ): List<PreviewFrame>? {
+        val count = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull()
+            ?.takeIf { it > 1 } ?: return null
+        val indexes = VideoFramePlan.frameIndexes(times, video.durationMs, count)
+        val params = MediaMetadataRetriever.BitmapParams().apply { preferredConfig = Bitmap.Config.RGB_565 }
+        val writer = CachedVideoFrames.Writer(cache, width, height)
+        try {
+            var sample = 0
+            for (run in VideoFramePlan.runs(indexes, VideoFramePlan.batch(video.width, video.height, BATCH_BYTES))) {
+                coroutineContext.ensureActive()
+                val bitmaps = retriever.getFramesAtIndex(run.first, run.last - run.first + 1, params)
+                try {
+                    if (bitmaps.size != run.last - run.first + 1) return null
+                    bitmaps.forEachIndexed { offset, bitmap ->
+                        val index = run.first + offset
+                        if (sample >= indexes.size || indexes[sample] != index) return@forEachIndexed
+                        val frame = upright(bitmap, video, width, height)
+                        while (sample < indexes.size && indexes[sample] == index) {
+                            writer.add(frame)
+                            sample++
+                        }
+                    }
+                } finally {
+                    bitmaps.forEach { if (!it.isRecycled) it.recycle() }
+                }
+            }
+            return if (sample == indexes.size) writer.finish() else null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            // Some devices and files cannot be read this way; one frame at a time still can.
+            return null
+        } finally {
+            writer.close()
+        }
+    }
+
+    /** [times] read one frame at a time, each from the keyframe before it. */
+    private suspend fun oneAtATime(
+        retriever: MediaMetadataRetriever,
+        video: Video,
+        times: List<Long>,
+        width: Int,
+        height: Int,
+        cache: File,
+    ): List<PreviewFrame> = CachedVideoFrames.Writer(cache, width, height).use { writer ->
+        var missing = 0
+        var last: PreviewFrame? = null
+        for (time in times) {
+            coroutineContext.ensureActive()
+            val bitmap = retriever.getScaledFrameAtTime(time, MediaMetadataRetriever.OPTION_CLOSEST, width, height)
+            val frame = bitmap?.let { upright(it, video, width, height) } ?: last
+            if (frame == null) {
+                missing++
+                continue
+            }
+            // Frames that could not be read before the first that could take its picture.
+            repeat(missing + 1) { writer.add(frame) }
+            missing = 0
+            last = frame
+        }
+        if (last == null) throw WatchFaceException("No frame of this video could be read.", "video: no frames decoded")
+        writer.finish()
+    }
 
     /**
      * [bitmap] turned upright and scaled to exactly [width] × [height], recycling it. The
@@ -105,4 +177,9 @@ internal class AndroidVideoSource(private val context: Context) {
 
     private inline fun <T> MediaMetadataRetriever.useRetriever(block: (MediaMetadataRetriever) -> T): T =
         try { block(this) } finally { release() }
+
+    private companion object {
+        /** Full-size frames one run may hold together while it is read. */
+        const val BATCH_BYTES = 32L * 1024 * 1024
+    }
 }

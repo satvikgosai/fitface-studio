@@ -71,7 +71,11 @@
     <string name="editor_subtitle_background_no_room">%1$s · no room for one</string>
     <string name="editor_subtitle_background_none">no background</string>
     <string name="editor_subtitle_background_idle">choose an image</string>
-    <string name="editor_subtitle_background_moving">moving · %1$d frames · %2$s s</string>
+    <!-- A saved moving background counts the pictures it stores: a frame shown again is one picture, so this can be fewer than the frames that play. -->
+    <plurals name="editor_subtitle_background_moving">
+        <item quantity="one">moving · %1$d picture · %2$s s</item>
+        <item quantity="other">moving · %1$d pictures · %2$s s</item>
+    </plurals>
     <plurals name="editor_subtitle_styles">
         <item quantity="one">%1$d style</item>
         <item quantity="other">%1$d styles</item>
@@ -444,7 +448,10 @@
     <!-- A custom face with a number of its own: its package still names Info_4, which it no longer replaces. -->
     <string name="editor_device_face_custom">Custom face %1$d · %2$s</string>
     <!-- Install card: the preview shows the first frame, so this says the background moves. -->
-    <string name="editor_device_moving">Moving background: %1$d frames, %2$s s loop</string>
+    <plurals name="editor_device_moving">
+        <item quantity="one">Moving background: %1$d picture, %2$s s loop</item>
+        <item quantity="other">Moving background: %1$d pictures, %2$s s loop</item>
+    </plurals>
     <plurals name="editor_device_moving_pictures">
         <item quantity="one">%1$d moving picture plays on top</item>
         <item quantity="other">%1$d moving pictures play on top</item>
@@ -618,13 +625,17 @@
     <string name="editor_moving_every_nth">1 in every %1$d frames</string>
     <string name="editor_moving_fewer">Fewer</string>
     <string name="editor_moving_more">More</string>
-    <string name="editor_moving_frames_hint">Each frame takes about %1$s. Fewer frames take less room and play less smoothly.</string>
+    <string name="editor_moving_fit_info">NATIVE shows the GIF or video at its own size. A moving background stores only the part of the face it covers, so a smaller one keeps more frames; the rest of the face is black.</string>
+    <string name="editor_moving_frames_hint">Each frame takes about %1$s. Fewer frames take less room and play less smoothly. The watch plays at most 255 frames in one animation, so a longer one keeps every 2nd frame or fewer. Frames that repeat exactly are stored once.</string>
     <string name="editor_moving_loops">It plays in a loop on the watch. A GIF’s own loop count is not kept.</string>
     <string name="editor_moving_loops_video">It plays in a loop on the watch, without sound.</string>
     <string name="editor_moving_loops_added">It plays in a loop on the watch.</string>
     <string name="editor_moving_aod">On the always-on display it plays about three times slower, and moving all the time can use more battery.</string>
     <string name="editor_moving_heading">Moving background</string>
-    <string name="editor_moving_summary">%1$d frames · %2$s s loop</string>
+    <plurals name="editor_moving_summary">
+        <item quantity="one">%1$d picture · %2$s s loop</item>
+        <item quantity="other">%1$d pictures · %2$s s loop</item>
+    </plurals>
     <string name="editor_moving_present_detail">It plays under every widget. A new background replaces it; Remove leaves none.</string>
     <string name="editor_moving_replaced">Replaces the current background</string>
     <string name="editor_moving_scope">Applies to %1$s only. A moving background is added one style at a time: each frame takes about 100 KB in every style it is in.</string>
@@ -632,14 +643,17 @@
 
     <!-- A video read as a moving background or picture: which part of it. -->
     <string name="editor_video_heading">Part of the video</string>
+    <string name="editor_gif_part_heading">Part of the GIF</string>
+    <string name="editor_gif_part_hint">The GIF is %1$s s long.</string>
+    <string name="editor_part_fit_hint">It opens at the longest part from its start that fits keeping every frame, and the part grows or shrinks to fit again when you change the frames kept, the fit, the size or where it starts. Fewer frames or a smaller picture make room for a longer part.</string>
     <string name="editor_reading_frames">Reading the frames…</string>
-    <string name="editor_video_start">Starts at %1$s s</string>
-    <string name="editor_video_length">Lasts %1$s s</string>
+    <string name="editor_video_start">Start: %1$s s</string>
+    <string name="editor_video_length">Length: %1$s s</string>
     <string name="editor_video_earlier">Earlier</string>
     <string name="editor_video_later">Later</string>
     <string name="editor_video_shorter">Shorter</string>
     <string name="editor_video_longer">Longer</string>
-    <string name="editor_video_hint">Read at 10 frames a second. The video is %1$s s long; up to 6 seconds of it can be used.</string>
+    <string name="editor_video_hint">Read once when you pick it, at 10 frames a second: the video is %1$s s long and up to %2$s s of it is read, so changing the part, the frames kept or the fit afterwards is quick. The face\'s space decides how many of those frames are kept.</string>
 
     <!-- Canvas page, under the face, when the style has something that moves. -->
     <string name="editor_canvas_pause">Pause animation</string>

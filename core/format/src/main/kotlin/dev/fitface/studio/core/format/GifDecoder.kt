@@ -22,13 +22,12 @@ class GifFormatException(message: String) : Fit3FormatException(message)
  * browsers' rule for very short ones belongs to [dev.fitface.studio.core.model.AnimationTiming].
  *
  * It reads untrusted files, so every size is bounded before anything is allocated:
- * [MAX_SIDE] a side, [MAX_FRAMES] frames, [MAX_DECODED_BYTES] for every composited frame
- * together, no frame larger than the screen, and LZW codes of at most 12 bits. A truncated
+ * [MAX_DECODED_BYTES] for every composited frame together (so for one screen, however wide
+ * or long the GIF), no frame larger than the screen, and LZW codes of at most 12 bits. How
+ * many frames or seconds that is depends only on the screen's size. A truncated
  * file or an impossible code is refused with a sentence, never a crash or a frame of garbage.
  */
 object GifDecoder {
-    const val MAX_SIDE = 4096
-    const val MAX_FRAMES = 512
     const val MAX_DECODED_BYTES = 64L * 1024 * 1024
 
     private const val MAX_CODE_BITS = 12
@@ -41,8 +40,10 @@ object GifDecoder {
         input.skip(6)
         val width = input.u16()
         val height = input.u16()
-        if (width !in 1..MAX_SIDE || height !in 1..MAX_SIDE) {
-            throw GifFormatException("This GIF is ${width}×$height; at most ${MAX_SIDE}×$MAX_SIDE can be read.")
+        if (width == 0 || height == 0) throw GifFormatException("This GIF is damaged.")
+        if (width.toLong() * height * 4 > MAX_DECODED_BYTES) {
+            throw GifFormatException("This GIF is ${width}×$height; one frame of it needs more than " +
+                "${MAX_DECODED_BYTES / (1024 * 1024)} MB.")
         }
         val screenFlags = input.u8()
         input.u8() // Background colour index: browsers composite over transparency, not it.
@@ -92,9 +93,6 @@ object GifDecoder {
                     else -> input.skipSubBlocks()
                 }
                 0x2C -> {
-                    if (frames.size == MAX_FRAMES) {
-                        throw GifFormatException("This GIF has more than $MAX_FRAMES frames.")
-                    }
                     decodedBytes += pixels * 4L
                     if (decodedBytes > MAX_DECODED_BYTES) {
                         throw GifFormatException("This GIF is too large to read: its frames would need more than " +
@@ -105,7 +103,7 @@ object GifDecoder {
                     val frameWidth = input.u16()
                     val frameHeight = input.u16()
                     // Its index buffer is allocated at this size, so it is bounded as the screen is.
-                    if (frameWidth > MAX_SIDE || frameHeight > MAX_SIDE || frameWidth.toLong() * frameHeight > pixels) {
+                    if (frameWidth.toLong() * frameHeight > pixels) {
                         throw GifFormatException("A frame of this GIF is ${frameWidth}×$frameHeight, larger than its ${width}×$height screen.")
                     }
                     val flags = input.u8()

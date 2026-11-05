@@ -7,6 +7,65 @@ enum class ImageFit {
     CONTAIN,
     COVER,
     STRETCH,
+    /**
+     * The picture's own pixels, one to one with the panel's at zoom 1. Offered for a moving
+     * background only, whose frames are stored at the size they cover, so a small GIF costs
+     * what its own pixels do; never remembered as the preferred fit.
+     */
+    NATIVE,
+    ;
+
+    companion object {
+        /** The fits a still background or photo offers: it is stored full-panel whatever the fit. */
+        val STILL = listOf(CONTAIN, COVER, STRETCH)
+    }
+}
+
+/** Where a placed picture's rectangle lands, in the pixels of the frame it is placed on. */
+data class PlacedRect(val left: Float, val top: Float, val width: Float, val height: Float) {
+    val right: Float get() = left + width
+    val bottom: Float get() = top + height
+}
+
+/** The zoom a placement may take, as the pinch and the drawing both clamp it. */
+const val MIN_PLACEMENT_ZOOM = 0.25f
+const val MAX_PLACEMENT_ZOOM = 8f
+/** How far, in frames, a placed picture's centre may move from the frame's. */
+const val MAX_PLACEMENT_OFFSET = 2f
+
+/**
+ * Where [placement] draws a [sourceWidth] × [sourceHeight] picture on a [targetWidth] ×
+ * [targetHeight] frame: fitted, zoomed about its centre, then moved by a share of the frame.
+ * The one geometry the decoder draws with and the editor previews and prices with.
+ */
+fun placedRect(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    targetWidth: Float,
+    targetHeight: Float,
+    placement: ImagePlacement,
+): PlacedRect {
+    require(sourceWidth > 0 && sourceHeight > 0) { "a placed picture needs a size" }
+    val widthScale = targetWidth / sourceWidth
+    val heightScale = targetHeight / sourceHeight
+    val (baseWidth, baseHeight) = when (placement.fit) {
+        ImageFit.CONTAIN -> minOf(widthScale, heightScale).let { sourceWidth * it to sourceHeight * it }
+        ImageFit.COVER -> maxOf(widthScale, heightScale).let { sourceWidth * it to sourceHeight * it }
+        ImageFit.STRETCH -> targetWidth to targetHeight
+        ImageFit.NATIVE -> sourceWidth.toFloat() to sourceHeight.toFloat()
+    }
+    val zoom = placement.zoom.coerceIn(MIN_PLACEMENT_ZOOM, MAX_PLACEMENT_ZOOM)
+    val width = baseWidth * zoom
+    val height = baseHeight * zoom
+    val centerX = targetWidth / 2f + placement.offsetX.coerceIn(-MAX_PLACEMENT_OFFSET, MAX_PLACEMENT_OFFSET) * targetWidth
+    val centerY = targetHeight / 2f + placement.offsetY.coerceIn(-MAX_PLACEMENT_OFFSET, MAX_PLACEMENT_OFFSET) * targetHeight
+    if (placement.fit == ImageFit.NATIVE) {
+        // On whole pixels, so its own pixels land on the panel's one to one rather than
+        // filtered across two: an odd size centred would sit half a pixel off.
+        return PlacedRect(kotlin.math.floor(centerX - width / 2f + 0.5f), kotlin.math.floor(centerY - height / 2f + 0.5f),
+            width, height)
+    }
+    return PlacedRect(centerX - width / 2f, centerY - height / 2f, width, height)
 }
 
 /**
@@ -947,6 +1006,12 @@ data class EditorSnapshot(
      */
     val backgroundAddTargets: List<String> = emptyList(),
     /**
+     * On a face with a background in some styles but not all, the bare styles a whole-face
+     * replacement gives one to as well — a style whose own was removed, or one that shipped
+     * painting onto black — in the order it writes them, as many as fit under the ceiling.
+     */
+    val replacementAddTargets: List<String> = emptyList(),
+    /**
      * The same two facts for the always-on display, which the style lists above say
      * nothing about: 32 of the corpus's 99 carry a panel raster and the rest compose over
      * black, independently of what their styles do.
@@ -967,10 +1032,16 @@ data class EditorSnapshot(
     val movingBackground: MovingBackground? = null,
     /**
      * Whether the selected variant shows a background: a moving one, or a still one that draws
-     * more than black. A removed background is painted black, so this, not
-     * [selectedVariantHasBackground], is what decides whether Remove is offered.
+     * more than black. A background that could not be removed outright was painted black, so
+     * this, not [selectedVariantHasBackground], is what decides whether Remove is offered.
      */
     val selectedBackgroundShown: Boolean = false,
+    /**
+     * What the selected variant's still background takes — its Static and raster — which a
+     * moving background added there deletes, so its room is the new one's; 0 when it has none
+     * or it would be painted black instead.
+     */
+    val stillBackgroundBytes: Int = 0,
     /** The active style's moving background: what Install says will play on the watch. */
     val activeMovingBackground: MovingBackground? = null,
     /**
@@ -1303,11 +1374,26 @@ interface WatchFaceRepository {
         throw UnsupportedOperationException()
 
     /**
+     * What a picked video is before any frame is read — its length, the size [readAnimation]
+     * reads its frames at and the longest part it reads — or null when [imageUri] is not a
+     * video. Refused, as [readAnimation] refuses it, when it is a video that cannot be read.
+     */
+    suspend fun probeVideo(imageUri: String): VideoProbe? = throw UnsupportedOperationException()
+
+    /**
+     * Deletes the cached frames of every video read but [keep]'s — the read a moving background
+     * or picture being placed still uses — in the background. Null keeps none: nothing is being
+     * placed, or the editor is closing. A read still in progress keeps its file.
+     */
+    fun releaseVideoFrames(keep: AnimationSource?) {}
+
+    /**
      * [source] as the selected variant's moving background: every [frameStep]th frame, each
      * placed by [placement] (and coloured by its tint) the way a still background is, played
      * as [AnimationTiming.plan] times it. It replaces the variant's background in the same edit:
-     * a moving one is deleted, its room counted free, and a still one painted black, so removing
-     * the moving one later leaves none. Refused when it would not fit under the watch's ceiling.
+     * a moving one is deleted, its room counted free, and a still one deleted as Remove background
+     * deletes it ([EditorSnapshot.stillBackgroundBytes] free too), so removing the moving one later
+     * leaves none. Refused when it would not fit under the watch's ceiling.
      */
     suspend fun addMovingBackground(source: AnimationSource, placement: ImagePlacement, frameStep: Int): EditorSnapshot =
         throw UnsupportedOperationException()
@@ -1403,9 +1489,10 @@ interface WatchFaceRepository {
 
     /**
      * Takes the background away in the styles [replaceBackground] would write: the selected
-     * variant's moving background is deleted and every still one painted black — what the watch
-     * shows where a face has none — in one edit. A still raster stays, so a later picture still
-     * replaces it, and Undo or Reset brings everything back. Refused when there is nothing to take.
+     * variant's moving background is deleted and every still one deleted with its Static, as on
+     * a face that ships without one, so its room is free and a later picture is added rather than
+     * replaced; one that cannot go that way is painted black, which the watch shows where there
+     * is none. One edit: Undo or Reset brings everything back. Refused when there is nothing to take.
      */
     suspend fun removeBackground(thisStyleOnly: Boolean = false): EditorSnapshot =
         throw UnsupportedOperationException()

@@ -5,6 +5,8 @@ import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.WIDGET_EXTENT_CEILING
 import dev.fitface.studio.core.model.WidgetResizeKind
 import dev.fitface.studio.core.model.artworkBounds
+import dev.fitface.studio.core.model.drawLeft
+import dev.fitface.studio.core.model.drawTop
 import dev.fitface.studio.core.model.normalizedRotation
 import dev.fitface.studio.core.model.widgetResizeLadder
 import dev.fitface.studio.core.model.widgetResizeLimit
@@ -39,6 +41,9 @@ data class StructuralEdit(
 data class WidgetPristine(val entry: ContainerEntry, val sources: Map<Int, Int>)
 
 data class WidgetReorderEdit(val edit: StructuralEdit, val indices: Map<Int, Int>)
+
+/** A style's still background deleted by [StructuralEditor.deleteBackground]: the edit, and the index its Static had. */
+data class BackgroundDeletion(val edit: StructuralEdit, val globalIndex: Int)
 
 object StructuralEditor {
     /** Record order is drawing order. Preserve artwork, geometry and resolved referents. */
@@ -208,6 +213,68 @@ object StructuralEditor {
             removedRecords = removal.removedRecords,
             droppedImages = mapOf(entryBasename to orphaned),
         )
+    }
+
+    /**
+     * Deletes [entryBasename]'s still background — the Static drawing it and its raster — so
+     * the style paints straight onto the watch's black panel, as the faces that ship without
+     * one do, and its bytes are free. Null when it cannot go that way ([deletableBackground]).
+     *
+     * Widgets positioned against it are positioned against a panel-sized rectangle at the
+     * panel's origin, which is where the whole face is, so they are pointed at
+     * [WidgetImporter.ROOT_TARGET] — nothing, which falls back to the whole face — and land
+     * where they were. Its raster is the face's own, unlike [deleteWidget]'s, but nothing is
+     * restored from it: Undo and Reset bring the bytes back, and the Static is never parked
+     * under Removed.
+     */
+    fun deleteBackground(
+        source: Fit3Container,
+        entryBasename: String,
+        /** Saved removals' records against this entry: a raster one still names stays. */
+        retained: List<ByteArray> = emptyList(),
+    ): BackgroundDeletion? {
+        val entry = source.entryByBasename(entryBasename)
+        val (static, image) = deletableBackground(entry, retained) ?: return null
+        val (output, _) = removeWidgetEntry(entry, static, requireFinal = false, orphanTo = WidgetImporter.ROOT_TARGET)
+        val removal = rebuild(source, mapOf(entry.index to output))
+        val purge = dropImages(removal.container, entryBasename, setOf(image.index), shippedImageCount = 0)
+        return BackgroundDeletion(
+            purge.copy(
+                changedPayloadBytes = removal.changedPayloadBytes + purge.changedPayloadBytes,
+                changedStyles = listOf(entryBasename),
+                sizeDelta = removal.sizeDelta + purge.sizeDelta,
+                droppedImages = mapOf(entryBasename to setOf(image.index)),
+            ),
+            static.globalIndex,
+        )
+    }
+
+    /**
+     * The Static drawing [entry]'s still background and its raster, when they can be deleted
+     * outright: the one widget drawing that raster is a Static at the panel's origin, and no
+     * saved removal in [retained] names the raster. Anything else — a raster drawn twice, or
+     * offset — is left for the caller to paint black.
+     */
+    fun deletableBackground(entry: ContainerEntry, retained: List<ByteArray> = emptyList()): Pair<WidgetRecord, ImageRecord>? {
+        val image = FaceRecordParser.backgroundImage(entry) ?: return null
+        val relative = FaceRecordParser.imagesByRelativeOffset(entry)
+        val drawers = FaceRecordParser.scanWidgets(entry).filter { record ->
+            record.widgetType in FaceRecordParser.POINTER_BEARING_TYPES &&
+                FaceRecordParser.imagePointerFields(record, relative).any { it.image.index == image.index }
+        }
+        val static = drawers.singleOrNull()?.takeIf { it.widgetType == StaticWidgetType } ?: return null
+        if (retained.any { image.index in savedWidgetImages(entry, it) }) return null
+        val guide = FaceRecordParser.widgetGuides(entry).single { it.globalIndex == static.globalIndex }
+        if (guide.drawLeft != 0 || guide.drawTop != 0) return null
+        return static to image
+    }
+
+    /** What [deleteBackground] frees from [entry]: the Static and its raster record, or 0 when it would paint black. */
+    fun deletedBackgroundBytes(entry: ContainerEntry, retained: List<ByteArray> = emptyList()): Int {
+        val (static, image) = deletableBackground(entry, retained) ?: return 0
+        val images = FaceRecordParser.scanImages(entry)
+        val end = images.getOrNull(image.index + 1)?.recordOffset ?: entry.data.size
+        return static.recordSize + end - image.recordOffset
     }
 
     /**
@@ -2275,6 +2342,11 @@ object StructuralEditor {
         entry: ContainerEntry,
         target: WidgetRecord,
         requireFinal: Boolean,
+        /**
+         * Where references to [target] go instead, for a target whose rectangle is the whole
+         * face's ([deleteBackground]); null refuses to remove a widget anything is positioned against.
+         */
+        orphanTo: Int? = null,
     ): Pair<ByteArray, ByteArray> {
         val widgets = FaceRecordParser.scanWidgets(entry)
         val images = FaceRecordParser.scanImages(entry)
@@ -2289,7 +2361,7 @@ object StructuralEditor {
         // practice this is the style's background, which every aligned widget on the
         // face refers to.
         val dependents = dependentsOf(survivors, globalIndex)
-        if (dependents.isNotEmpty()) {
+        if (dependents.isNotEmpty() && orphanTo == null) {
             val names = dependents.take(3).joinToString { "widget ${it.globalIndex}" }
             throw Fit3WidgetIsAnchorException(
                 globalIndex = globalIndex,
@@ -2317,6 +2389,7 @@ object StructuralEditor {
             remapAlignmentTarget(raw, widget) { old ->
                 when {
                     old !in existingIndices -> null
+                    old == globalIndex -> orphanTo
                     old > globalIndex -> old - 1
                     else -> old
                 }
@@ -2349,6 +2422,7 @@ object StructuralEditor {
             requireSurvivorsUnchanged(entry, it, survivors) { old ->
                 when {
                     old !in existingIndices -> old
+                    old == globalIndex -> orphanTo ?: old
                     old > globalIndex -> old - 1
                     else -> old
                 }

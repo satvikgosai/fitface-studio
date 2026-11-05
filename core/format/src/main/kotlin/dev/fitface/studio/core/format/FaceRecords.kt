@@ -51,6 +51,14 @@ const val WIDGET_FIXED_SIZE = 36
 
 const val WIDGET_STATIC = 1
 const val WIDGET_ANIMATION = 4
+
+/**
+ * An Animation's `+0x1C..+0x1F`, which the firmware's constructor and timer never read, as
+ * "BKGD": this app's mark on a moving background whose frames cover less than the panel. A
+ * full-panel one needs none; its size says it is a background layer.
+ */
+const val ANIMATION_BACKGROUND_TAG_OFFSET = 0x1C
+const val ANIMATION_BACKGROUND_TAG = 0x44474B42L
 const val WIDGET_VECTOR_ARC = 6
 const val WIDGET_SOURCE_GROUP = 9
 const val WIDGET_HAND = 2
@@ -494,6 +502,11 @@ object FaceRecordParser {
             it.width == panel.width && it.height == panel.height && it.recordOffset !in frames
         }
     }
+
+    /** Whether [record] is an Animation carrying [ANIMATION_BACKGROUND_TAG]. */
+    fun isTaggedBackground(entry: ContainerEntry, record: WidgetRecord): Boolean =
+        record.widgetType == WIDGET_ANIMATION && record.recordSize >= ANIMATION_BACKGROUND_TAG_OFFSET + 4 &&
+            entry.data.u32(record.recordOffset + ANIMATION_BACKGROUND_TAG_OFFSET) == ANIMATION_BACKGROUND_TAG
 
     /** Record offsets of the rasters an Animation draws and nothing else does. */
     private fun animationOnlyImages(entry: ContainerEntry, images: List<ImageRecord>): Set<Int> {
@@ -955,6 +968,9 @@ object FaceRecordParser {
             val drawOffsetY = extent.offsetY
             val placement = when {
                 paintsBackground -> WidgetPlacement.BACKGROUND
+                // A moving background stored at the rectangle it covers: under every widget, so
+                // a background layer, whatever its size.
+                isTaggedBackground(entry, it) && visualWidth > 0 && visualHeight > 0 -> WidgetPlacement.BACKGROUND
                 // The watch rotates a Hand about the pivot in its `+0x20`, so its
                 // artwork bounds are not where it appears. Reporting the size is
                 // useful; outlining a rectangle there would be a lie.

@@ -75,6 +75,59 @@ class CanvasIntegrityTest {
         }
     }
 
+    /**
+     * Remove background deletes a still background with its Static wherever it can, and the
+     * face then draws exactly what painting it black drew — every widget positioned against it
+     * lands where it was — from fewer bytes: its Static and raster, no more, and nothing else in
+     * the container changes.
+     */
+    @Test fun deletingABackgroundDrawsWhatPaintingItBlackDrew() {
+        var deleted = 0
+        var painted = 0
+        val failures = mutableListOf<String>()
+        containers.forEach { path ->
+            val source = Fit3Container.parse(Files.readAllBytes(path))
+            dev.fitface.studio.core.format.FaceResources.variantEntries(source).forEach entry@{ entry ->
+                val image = FaceRecordParser.backgroundImage(entry) ?: return@entry
+                val label = "${path.fileName}/${entry.basename}"
+                val deletion = StructuralEditor.deleteBackground(source, entry.basename)
+                if (deletion == null) {
+                    painted++
+                    return@entry
+                }
+                deleted++
+                val after = deletion.edit.container
+                val afterEntry = after.entryByBasename(entry.basename)
+                val freed = StructuralEditor.deletedBackgroundBytes(entry)
+                if (!after.validate().isValid) failures += "$label: invalid"
+                if (after.fileSize != source.fileSize - freed || deletion.edit.sizeDelta != -freed) {
+                    failures += "$label: freed ${source.fileSize - after.fileSize}, counted $freed"
+                }
+                if (FaceRecordParser.scanImages(afterEntry).size != FaceRecordParser.scanImages(entry).size - 1 ||
+                    FaceRecordParser.scanWidgets(afterEntry).size != FaceRecordParser.scanWidgets(entry).size - 1) {
+                    failures += "$label: not exactly one Static and one raster"
+                }
+                source.entries.filter { it.basename != entry.basename }.forEach { other ->
+                    if (!other.data.contentEquals(after.entryByBasename(other.basename).data)) failures += "$label: ${other.basename} changed"
+                }
+                // A background that is black already is what painting it black leaves.
+                val black = runCatching {
+                    FaceEditor.replaceBackgrounds(source, listOf(entry.basename), image.width, image.height,
+                        IntArray(image.width * image.height) { 0xFF000000.toInt() }).container
+                }.getOrElse { source }
+                val expected = WidgetPreviewComposer.compose(black.entryByBasename(entry.basename), black.entries).composed
+                val actual = WidgetPreviewComposer.compose(afterEntry, after.entries).composed
+                if (!expected.argb.contentEquals(actual.argb)) {
+                    val differing = expected.argb.indices.count { expected.argb[it] != actual.argb[it] }
+                    failures += "$label: $differing pixels differ from painting it black"
+                }
+            }
+        }
+        println("Backgrounds deleted outright: $deleted; left to paint black: $painted")
+        assertTrue(failures.take(25).joinToString("\n"), failures.isEmpty())
+        assertTrue("no background was deleted", deleted > 0)
+    }
+
     @Test fun reorderingOpaqueOverlappingWidgetsChangesCoverageWithoutChangingAnyArtwork() {
         val path = containers.first { it.fileName.toString().contains("00112") }
         val source = Fit3Container.parse(Files.readAllBytes(path))

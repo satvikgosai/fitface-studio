@@ -44,15 +44,29 @@ internal fun ControlCard(
  * does, on every page that places one. [info] is what only that page adds.
  */
 @Composable
-internal fun FitControls(fit: ImageFit, enabled: Boolean, onFit: (ImageFit) -> Unit, info: String? = null) {
+internal fun FitControls(
+    fit: ImageFit,
+    enabled: Boolean,
+    onFit: (ImageFit) -> Unit,
+    info: String? = null,
+    options: List<ImageFit> = ImageFit.STILL,
+    /** Whether a fit other than the current one can be chosen: a moving background's that leaves no room cannot. */
+    available: (ImageFit) -> Boolean = { true },
+) {
     ControlCard {
         FitHeading(stringResource(R.string.editor_bg_fit_heading)) {
             InfoText(stringResource(R.string.editor_bg_fit_info))
             info?.let { InfoText(it) }
         }
-        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ImageFit.entries.forEach { option ->
-                FitChip(option.name, fit == option, { onFit(option) }, Modifier.weight(1f), enabled)
+        // Three fit on a phone's row; four break their names mid-word, so they go two by two.
+        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.chunked(if (options.size > 3) 2 else options.size).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { option ->
+                        FitChip(option.name, fit == option, { onFit(option) }, Modifier.weight(1f),
+                            enabled && (fit == option || available(option)))
+                    }
+                }
             }
         }
     }

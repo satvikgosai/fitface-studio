@@ -13,6 +13,8 @@ import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.WatchFaceException
+import dev.fitface.studio.core.model.drawLeft
+import dev.fitface.studio.core.model.drawTop
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
@@ -140,44 +142,54 @@ class BackgroundScopeRepositoryTest {
     }
 
     /**
-     * Remove background paints it black, in the scope chosen, keeping its raster: the size does
-     * not change, a second Remove is refused, Undo brings it back and a picture still replaces it.
+     * Remove background deletes it, in the scope chosen, as on a face that ships without one:
+     * its Static and raster go and their room is free, every widget stays where it was, a second
+     * Remove is refused and Undo brings it back. A picture is then added there, and All styles
+     * gives the bare style one with its siblings' replacements; All styles removes every one.
      */
-    @Test fun removingABackgroundPaintsItBlackInTheScopeChosen() = runBlocking {
+    @Test fun removingABackgroundDeletesItInTheScopeChosen() = runBlocking {
         val opened = repository.openPackage(face("00043"))
-        repository.currentSnapshot("style1.bin")
+        val selected = repository.currentSnapshot("style1.bin")
         val before = entries()
         val removed = repository.removeBackground(thisStyleOnly = true)
-        assertEquals(opened.containerBytes, removed.containerBytes)
-        assertTrue("it still has a raster a picture can replace", "style1.bin" in removed.backgroundStyles)
-        assertFalse("but shows none, so Remove is not offered again", removed.selectedBackgroundShown)
+        assertTrue("its room is free", removed.containerBytes < opened.containerBytes)
+        assertFalse("no raster is left for a picture to replace", "style1.bin" in removed.backgroundStyles)
+        assertFalse("Remove is not offered again", removed.selectedBackgroundShown)
+        assertTrue("so a picture is added there", removed.backgroundAdds(thisStyleOnly = true))
+        assertEquals("and All styles gives it one with the rest", listOf("style1.bin"), removed.replacementAddTargets)
+        assertTrue(removed.validationErrors.isEmpty())
         val container = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
-        val entry = container.entryByBasename("style1.bin")
-        val raster = requireNotNull(FaceRecordParser.backgroundImage(entry))
-        assertTrue(FaceRecordParser.decodeImage(entry, raster).argb.all { it and 0xFFFFFF == 0 })
+        assertEquals(null, FaceRecordParser.backgroundImage(container.entryByBasename("style1.bin")))
         val after = entries()
         (before.keys - "style1.bin").forEach { name ->
             assertArrayEquals("$name kept its background", before.getValue(name), after.getValue(name))
         }
+        fun placed(snapshot: dev.fitface.studio.core.model.EditorSnapshot) = snapshot.widgets
+            .filter { it.placement != dev.fitface.studio.core.model.WidgetPlacement.BACKGROUND }
+            .map { listOf(it.type, it.sequenceId, it.drawLeft, it.drawTop, it.width, it.height) }
+        assertEquals("every widget stays where it was", placed(selected), placed(removed))
 
         val again = runCatching { repository.removeBackground(thisStyleOnly = true) }.exceptionOrNull()
         assertEquals("There is no background here to remove.", (again as WatchFaceException).userMessage)
-        assertFalse(repository.currentSnapshot().selectedBackgroundShown)
 
         repository.undo()
         assertArrayEquals(before.getValue("style1.bin"), entries().getValue("style1.bin"))
         repository.removeBackground(thisStyleOnly = true)
-        repository.replaceBackground(png(), ImagePlacement(fit = ImageFit.STRETCH), thisStyleOnly = true)
-        assertFalse(after.getValue("style1.bin").contentEquals(entries().getValue("style1.bin")))
+        val added = repository.addBackground(png(), ImagePlacement(fit = ImageFit.STRETCH), thisStyleOnly = true)
+        assertTrue("style1.bin" in added.backgroundStyles)
+        assertEquals("every widget stays where it was", placed(selected), placed(added))
+        repository.undo()
 
-        // All styles paints every style's.
-        repository.removeBackground()
-        val all = Fit3Container.parse(repository.prepareDirectInstall().copyBytes())
-        opened.backgroundStyles.forEach { name ->
-            val styled = all.entryByBasename(name)
-            val image = requireNotNull(FaceRecordParser.backgroundImage(styled))
-            assertTrue("$name is black", FaceRecordParser.decodeImage(styled, image).argb.all { it and 0xFFFFFF == 0 })
-        }
+        // All styles replaces the siblings' and gives the bare one its own again.
+        val all = repository.replaceBackground(png(), ImagePlacement(fit = ImageFit.STRETCH))
+        assertEquals(opened.backgroundStyles.toSet(), all.backgroundStyles.toSet())
+        assertTrue(all.validationErrors.isEmpty())
+
+        // All styles removes every style's.
+        val none = repository.removeBackground()
+        assertTrue(none.backgroundStyles.isEmpty())
+        assertTrue(none.validationErrors.isEmpty())
+        assertEquals("every widget stays where it was", placed(selected), placed(repository.currentSnapshot("style1.bin")))
     }
 
     private suspend fun entries(): Map<String, ByteArray> =

@@ -1,6 +1,7 @@
 package dev.fitface.studio.core.format
 
 import dev.fitface.studio.core.model.MovingBackground
+import dev.fitface.studio.core.model.PixelBounds
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.animationAddedBytes
@@ -61,6 +62,45 @@ class MovingBackgroundEditorTest {
         assertTrue(frames.all { it.format == IMAGE_INDEXED8 && it.width == 256 && it.height == 402 })
 
         assertArrayEquals(template.toByteArray(), removed(result.edit.container, template, style, 0).toByteArray())
+    }
+
+    /**
+     * Placed smaller than the panel, it is stored at the rectangle it covers, drawn there,
+     * tagged in the four bytes the firmware never reads, and still the background: under the
+     * widgets, pinned, never a moving picture, and removed byte for byte.
+     */
+    @Test
+    fun placedSmallerItIsStoredAtItsRectangleAndStaysTheBackground() {
+        listOf(CustomFaceTemplate.strip(face(CustomFaceTemplate.FACE_ID)), face("00046")).forEach { source ->
+            val bounds = PixelBounds(78, 163, 100, 75)
+            fun small(color: Int) = IntArray(100 * 75) { color }
+            val result = MovingBackgroundEditor.insert(source, style, listOf(small(red), small(green)),
+                table = listOf(0, 1, 1), periodMs = 100, bounds = bounds)
+            val after = result.edit.container.entryByBasename(style)
+            val record = FaceRecordParser.scanWidgets(after)[result.globalIndex]
+
+            assertEquals(MovingBackground(result.globalIndex, frames = 2, entries = 3, periodMs = 100, bounds = bounds),
+                MovingBackgroundEditor.read(after))
+            assertEquals(animationAddedBytes(2, 3, 100, 75), result.edit.container.fileSize - source.fileSize)
+            assertEquals(78, after.data.u16(record.recordOffset + 0x18))
+            assertEquals(163, after.data.u16(record.recordOffset + 0x1A))
+            assertEquals("BKGD", String(after.data.copyOfRange(record.recordOffset + 0x1C, record.recordOffset + 0x20), Charsets.US_ASCII))
+            assertEquals(WidgetPlacement.BACKGROUND, FaceRecordParser.widgetGuides(after)[result.globalIndex].placement)
+            assertEquals(0, MovingPicture.countOnTop(after))
+            assertTrue(FaceRecordParser.resourceImages(after, record).all { it.width == 100 && it.height == 75 })
+            assertArrayEquals(source.toByteArray(),
+                removed(result.edit.container, source, style, result.globalIndex).toByteArray())
+        }
+        val template = CustomFaceTemplate.strip(face(CustomFaceTemplate.FACE_ID))
+        assertThrows(Fit3FormatException::class.java) {
+            MovingBackgroundEditor.insert(template, style, listOf(IntArray(100 * 75)), listOf(0), 100,
+                PixelBounds(200, 0, 100, 75))
+        }
+        // The whole panel given as bounds is the full-panel record, untagged, exactly as without.
+        val full = MovingBackgroundEditor.insert(template, style, listOf(solid(red)), listOf(0), 100,
+            PixelBounds(0, 0, 256, 402))
+        assertArrayEquals(MovingBackgroundEditor.insert(template, style, listOf(solid(red)), listOf(0), 100)
+            .edit.container.toByteArray(), full.edit.container.toByteArray())
     }
 
     /** Above every still background layer, which keeps being the one a replacement edits. */

@@ -133,6 +133,7 @@ import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
+import dev.fitface.studio.core.model.placedRect
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.ReplacementImage
@@ -363,12 +364,12 @@ fun EditorRoute(
             onDiscard = viewModel::discardPicture,
             onAdd = viewModel::addPicture,
             onAddedShown = viewModel::clearPictureAdded,
-            onClip = viewModel::setVideoClip,
+            onClip = viewModel::setAnimationPart,
         ),
         moving = MovingBackgroundActions(
             onStep = viewModel::setMovingBackgroundStep,
             onRemoveBackground = viewModel::removeBackground,
-            onClip = viewModel::setVideoClip,
+            onClip = viewModel::setAnimationPart,
         ),
         onReset = viewModel::reset,
         onRename = viewModel::renameProject,
@@ -888,7 +889,7 @@ private fun EditorHeader(
             pendingImage -> stringResource(R.string.editor_subtitle_background_positioning)
             // The page is about the moving background alone while there is one.
             snapshot.movingBackground != null -> snapshot.movingBackground?.let { moving ->
-                stringResource(R.string.editor_subtitle_background_moving, moving.frames, loopSeconds(moving.loopMs))
+                pluralStringResource(R.plurals.editor_subtitle_background_moving, moving.frames, moving.frames, loopSeconds(moving.loopMs))
             }.orEmpty()
             snapshot.canAddBackground ->
                 stringResource(R.string.editor_subtitle_background_can_add)
@@ -3740,8 +3741,10 @@ private fun AddBackgroundNotice(snapshot: EditorSnapshot, thisStyleOnly: Boolean
  * Which styles a replacement will actually land on, when it is not all of them.
  *
  * Face `00011` style0 and `00108` styles 0–3 paint onto black while their siblings do
- * carry a background, so an edit made from one of those styles changes the container
- * without changing the canvas in front of you. Saying so beats looking inert.
+ * carry a background, as does a style whose background was removed. A whole-face
+ * replacement gives those one too while they fit ([EditorSnapshot.replacementAddTargets]),
+ * so only the styles the size ceiling leaves out are named here: an edit that skips the one
+ * on the canvas changes the container without changing it, and saying so beats looking inert.
  */
 @Composable
 private fun PartialBackgroundNotice(snapshot: EditorSnapshot) {
@@ -3749,13 +3752,15 @@ private fun PartialBackgroundNotice(snapshot: EditorSnapshot) {
     // notice above has already said so, and this rendered as "the image lands on ."
     // with an empty list.
     if (snapshot.backgroundStyles.isEmpty()) return
-    if (snapshot.backgroundStyles.size == snapshot.styleNames.size) return
+    // A bare style is given one too, where it fits, so only the ones left out make it partial.
+    val written = snapshot.styleNames.filter { it in snapshot.backgroundStyles || it in snapshot.replacementAddTargets }
+    if (written.size == snapshot.styleNames.size) return
     // "Partial" is about the style group: some carry a panel raster and some do not. An
     // AOD edit writes one entry, so which styles carry one says nothing about it.
     if (snapshot.isAodSelected) return
-    val targets = variantLabels(snapshot.backgroundStyles)
+    val targets = variantLabels(written)
     Text(
-        if (snapshot.selectedVariantHasBackground) {
+        if (snapshot.selectedVariant.basename in written) {
             stringResource(R.string.editor_bg_partial_applies, targets)
         } else {
             stringResource(R.string.editor_bg_partial_elsewhere, targets)
@@ -3793,6 +3798,10 @@ internal fun PlacementControls(
     stepPercent: Int = ZoomStepPercent,
     /** A line under the size, such as a picture's pixels. */
     sizeDetail: String? = null,
+    /** False greys out Larger: one step larger would leave no room on the face. */
+    canGrow: Boolean = true,
+    /** False greys out Reset: it would make a moving background larger than there is room for. */
+    canReset: Boolean = true,
 ) {
     val width = panelWidth.coerceAtLeast(1).toFloat()
     val height = panelHeight.coerceAtLeast(1).toFloat()
@@ -3815,13 +3824,13 @@ internal fun PlacementControls(
             detail = sizeDetail,
             enabled = enabled,
             canShrink = percent > minZoomPercent,
-            canGrow = percent < maxZoomPercent,
+            canGrow = percent < maxZoomPercent && canGrow,
             onStep = onStepZoom,
             info = { InfoText(placementHint) },
             infoKey = entryKey,
         ) {
             if (pinchHint.shown) MicroLabel(placementHint, Modifier.padding(top = 10.dp))
-            TextButton(onClick = onResetPlacement, enabled = enabled) {
+            TextButton(onClick = onResetPlacement, enabled = enabled && canReset) {
                 Text(
                     stringResource(R.string.editor_placement_reset),
                     style = MaterialTheme.typography.labelMedium,
@@ -4802,6 +4811,7 @@ internal fun DirectWatchCanvas(
                 targetWidth = size.width,
                 targetHeight = size.height,
                 placement = placement,
+                panelWidth = snapshot.preview.width,
             )
             clipRect {
                 drawImage(
@@ -5171,7 +5181,7 @@ private fun DeviceStatusRow(
             // The preview beside this shows its first frame; say that it moves.
             snapshot.activeMovingBackground?.let { moving ->
                 Text(
-                    stringResource(R.string.editor_device_moving, moving.frames, loopSeconds(moving.loopMs)),
+                    pluralStringResource(R.plurals.editor_device_moving, moving.frames, moving.frames, loopSeconds(moving.loopMs)),
                     modifier = Modifier.padding(top = 3.dp),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -6099,25 +6109,12 @@ internal fun fittedRect(
     targetWidth: Float,
     targetHeight: Float,
     placement: ImagePlacement,
+    /** The panel's width in its own pixels, when [targetWidth] is a scaled drawing of it: a native fit is measured in them. */
+    panelWidth: Int? = null,
 ): Pair<Offset, Size> {
-    val widthScale = targetWidth / sourceWidth
-    val heightScale = targetHeight / sourceHeight
-    val baseScale = when (placement.fit) {
-        ImageFit.CONTAIN -> minOf(widthScale, heightScale)
-        ImageFit.COVER -> maxOf(widthScale, heightScale)
-        ImageFit.STRETCH -> 1f
-    }
-    val baseWidth = if (placement.fit == ImageFit.STRETCH) targetWidth else sourceWidth * baseScale
-    val baseHeight = if (placement.fit == ImageFit.STRETCH) {
-        targetHeight
-    } else {
-        sourceHeight * baseScale
-    }
-    val width = baseWidth * placement.zoom
-    val height = baseHeight * placement.zoom
-    val centerX = targetWidth / 2f + placement.offsetX * targetWidth
-    val centerY = targetHeight / 2f + placement.offsetY * targetHeight
-    return Offset(centerX - width / 2f, centerY - height / 2f) to Size(width, height)
+    val scale = panelWidth?.takeIf { it > 0 }?.let { targetWidth / it } ?: 1f
+    val rect = placedRect(sourceWidth, sourceHeight, targetWidth / scale, targetHeight / scale, placement)
+    return Offset(rect.left * scale, rect.top * scale) to Size(rect.width * scale, rect.height * scale)
 }
 
 /**

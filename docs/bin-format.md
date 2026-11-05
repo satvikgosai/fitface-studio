@@ -766,6 +766,9 @@ Formats: `0x0082` = RGB565, 2 bytes/px, little-endian half-word with R in bits
 3 bytes/px. `0x0088` = a 1,024-byte, 256-entry BGRA palette followed by one
 8-bit palette index per pixel. These map to GUI image-format enums 4, 5 and 10
 respectively; they are the only codes in the 7,306-image style/AOD corpus.
+No other code gives a smaller layout: rasters with codes `0x83`, `0x86`, `0x87`, `0x89` and
+`0x8A`, written as 1-, 2- and 4-bit palette images, drew on a watch as two bytes a pixel
+(probe F1, one SM-R390, 2026-11-05). The parser refuses any code but these three.
 A palette entry's alpha byte is honoured: Indexed8 animation frames whose background
 entry has alpha 0 showed the style background through them on a watch (2026-10-14).
 An appended Static with an RGB565+A raster also blends its partial alpha over both the
@@ -1286,8 +1289,23 @@ pixels. Pair colour is hardware-proven; Composite, Rule and arc colour have not 
 ### Adding or replacing backgrounds
 
 Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.
-Replacement/tint edits styles that have a background, skipping others and failing
-only if none does.
+Replacement/tint edits styles that have a background, failing only if none does. A
+whole-face replacement also gives each bare style in it one by the addition below, as many
+as fit, selected first, so All styles writes every style even after Remove background.
+
+**Removal.** `StructuralEditor.deleteBackground` deletes a style's still background outright:
+its Static and its raster, leaving the style as the faces that ship without one are. Widgets
+positioned against it are positioned against a panel-sized rectangle at the origin — the
+whole face — so their references become `WidgetImporter.ROOT_TARGET`, which names nothing and
+falls back to the whole face; saved removals' references follow through the commit's index
+mappings. It applies only where one Static at the panel's origin draws the raster and no saved
+removal names it (`deletableBackground`); anything else is painted black through the same-size
+replacement, as Remove did before. `CanvasIntegrityTest` deletes all 380 catalogue style and AOD
+backgrounds: each draws pixel for pixel what painting it black draws, frees exactly its Static
+and raster (`deletedBackgroundBytes`), and leaves every other entry byte-identical. The raster
+is one the face shipped with, so `Session.shippedImageCount` counts it gone (its Static neither
+live nor under Removed) and an import deleted later still drops all of its own rasters. Not yet
+sent to a watch; the result is the shape of the fourteen faces without a background.
 
 **Scope.** Replacement, addition and import write every style by default, as they always
 did. **This style only** (`thisStyleOnly`) writes the selected style alone: a replacement
@@ -1406,21 +1424,50 @@ like a still background.
 
 | Rule | Contract |
 | --- | --- |
-| Frames | One `IMAGE_INDEXED8` raster per kept frame: the panel size, a 256-colour median-cut palette (`IndexedImage.quantize`), a byte a pixel, zero trailer. Translucent pixels are laid over black first. Appended after every existing image, so nothing moves |
-| Record | Type 4, `+0x0C` index and size, position 0,0, mode 0, `+0x24` table length (≤ 255), `+0x25` repeat `0xFF`, `+0x26` period in ms, then one pointer an entry. A frame held for several periods is several entries naming one raster |
+| Frames | One `IMAGE_INDEXED8` raster per stored frame at the panel rectangle the placed picture covers (`movingBackgroundBounds`: its `placedRect` rounded outward and cut to the panel), a 256-colour median-cut palette (`IndexedImage.quantize`), a byte a pixel, zero trailer. Translucent pixels are laid over black first. The rest of the panel is black, the still background deleted when one is added, so it is not stored. A kept frame with exactly the same source pixels as an earlier kept one is not stored again; its entries name the earlier raster (`AnimationSource.firstOf`, `AnimationPlan.kept` against `frames`), which the watch plays (P1). Appended after every existing image, so nothing moves |
+| Record | Type 4, `+0x0C` index and size, mode 0, `+0x24` table length (≤ 255), `+0x25` repeat `0xFF`, `+0x26` period in ms, then one pointer an entry. A frame held for several periods is several entries naming one raster. Full-panel frames: position 0,0 and nothing else set, byte for byte as before. Smaller frames: the rectangle's corner at `+0x18/+0x1A` and `"BKGD"` in `+0x1C..+0x1F`, which the firmware never reads (`ANIMATION_BACKGROUND_TAG`), because the size no longer says it is a background. Confirmed on a watch below |
+| Fit | CONTAIN, COVER and STRETCH as for a still background, and NATIVE, the picture's own pixels one to one at zoom 1 with its corner on a whole pixel. NATIVE is offered only here and never remembered as the preferred fit. The frame step is chosen again for the new rectangle whenever the fit changes |
 | Timing | Delays under 20 ms count as 100 ms; a dropped frame's time goes to the frame kept before it; the period is the delays' GCD, falling back to the average with one entry a frame past 255 entries. The watch loops it whatever `+0x25` says (T1b), and plays it about 3× slower on the always-on display (T1e) |
 | Layer | Directly above the variant's last full-panel layer, or index 0 on a bare one; every later record moves up one and named alignment targets are renumbered. The insert checks every earlier record draws identical artwork at an identical place, and that the new record names exactly its own frames in table order |
-| Not "the" background | `FaceRecordParser.backgroundImage` skips rasters only an Animation draws, so Replace, tint and import edit the still background (or report none) and never one frame. Its guide is still `BACKGROUND`, so Arrange pins it, and the widget overlay drawn over a background being placed leaves it out |
-| Cost | `animationAddedBytes`: frames × (12 + 1024 + w × h + 4) + 40 + 4 × entries, equal to the growth (tested); 103,952 bytes a frame at 256 × 402. One a variant: a new moving, still or imported background deletes it in the same commit, its room counted free, and comes out byte for byte as on a face that never had it (tested). Adding one paints the variant's still background black in the same commit, as Remove background does, so deleting it later leaves none |
+| Not "the" background | `FaceRecordParser.backgroundImage` skips rasters only an Animation draws, so Replace, tint and import edit the still background (or report none) and never one frame. Its guide is still `BACKGROUND` (by size, or by the tag for smaller frames), so Arrange pins it, it is never counted as a moving picture, and the widget overlay drawn over a background being placed leaves it out |
+| Cost | `animationAddedBytes`: stored frames × (12 + 1024 + w × h + 4) + 40 + 4 × entries at the stored rectangle, equal to the growth (tested); 103,952 bytes a frame at 256 × 402, 8,540 at a 100 × 75 GIF's own size. One a variant: a new moving, still or imported background deletes it in the same commit, its room counted free (tested). Adding one deletes the variant's still background in the same commit, as Remove background does, its room counted free too (`EditorSnapshot.stillBackgroundBytes`), so deleting it later leaves none |
 | Provenance | None new: an added widget with no original (`NativeWidgetOrigin()`), as an added still background is. Removing it deletes the record and every frame only it drew; Undo restores it |
 
 `MovingBackgroundEditorTest` adds one to the first style of every catalogue face that has
 room and removes it again byte for byte.
 
 A video becomes the same frames: `AndroidVideoSource` reads a clip of it (`VideoClip`: ten
-frames a second, 0.5–6 s, opening at the first 3 s) with the platform's
-`MediaMetadataRetriever`, upright and just large enough to cover the panel, at most 64 MiB
-of frames. Each frame then lasts 100 ms; nothing else differs from a GIF.
+frames a second) with the platform's `MediaMetadataRetriever`, upright and just large enough
+to cover the panel, into a cache file at three bytes a pixel (`CachedVideoFrames`; how long
+it is kept is in the [architecture](architecture.md)). Where the video gives its frame count it is read in one pass, runs of
+consecutive frames with the one nearest each sample time kept (`VideoFramePlan`,
+`getFramesAtIndex`); otherwise, or if that fails, one frame at a time (`OPTION_CLOSEST`),
+which decodes from a keyframe for every frame. A frame that cannot be decoded repeats the one
+before it, so a frame's position always says its time. Each frame then lasts 100 ms; nothing
+else differs from a GIF.
+
+Both are added a part at a time (`AnimationParts`), a `VideoClip` on the source's own
+timeline. The editor opens at every frame of the longest part from the start that fits the
+room at what a frame costs, and fits the longest part again whenever the frames kept, the fit
+or the start change; Shorter and Longer then trim it, Longer no further than fits. A GIF's
+part is cut from frames already decoded, a frame belonging to it when it starts inside it at
+the frame nearest the half second asked for. A video is read once when it is picked, all one
+read takes from its start (`VideoClip.window`, after `WatchFaceRepository.probeVideo`), and
+every later change is cut from those frames; only a start past them, or a part from a later
+start whose every frame read fits, is read again. Both count repeats exactly
+(`AnimationParts.fittingFrames`). A GIF under a
+second (`AnimationParts.MIN_GIF_MS`) or of two frames is kept whole, at the smallest step that
+fits, as every source was before parts. A pinch, Size, Reset or a drag partly off the face
+changes what a frame costs, and fits the part again too, cut from the frames read and never
+reading, so the part and how far Longer goes always match the room.
+
+Neither source has a frame or length cap of its own. `GifDecoder` stops at 64 MiB of decoded
+ARGB frames, and the GIF file itself is read up to 32 MiB. One video read takes at most a
+minute (`VideoClip.MAX_READ_MS`) and 256 MiB of cached frames (`MAX_CACHED_BYTES`): all of
+the minute for a portrait video, about 31 s of a landscape 1080p one read at 715 × 402.
+What is kept is then decided by the record and the container: the table holds at most 255
+entries, so a part keeping every frame is at most 255 frames long, and every 2nd frame
+doubles that.
 
 **On a watch** (one SM-R390, 2026-10-22; probes from `MovingBackgroundProbesTest` and the
 app's own flow), every case played as the Canvas showed it:
@@ -1432,6 +1479,23 @@ app's own flow), every case played as the Canvas showed it:
   1000 ms at about 3 s, that supports a 3× multiplier rather than a fixed floor;
 - 25 full-panel frames at 100 ms played smoothly under a moving picture;
 - a background added in the app from a GIF, and one from a video clip.
+
+**Smaller frames on a watch** (one SM-R390, 2026-11-05; probes P1–P4 from
+`FramePackingProbesTest`, after the same flow in the app on an emulator): a moving background
+stored at a rectangle draws at its corner, under the time with black around it, on
+a custom face and over `00046`'s still background under its hands, in a style and on the
+always-on display; one raster named twice and out of order in the table plays. A 100 × 75 GIF
+at NATIVE kept all 200 frames in 2.06 MB and played smoothly; at CONTAIN across the width it
+kept every 3rd frame in 3.71 MB.
+
+**Several Animations do not stay in step** (same watch and day, probes T1–T5). A full-panel
+sweep cut into tiles, one Animation each with the same table and period, played straight
+after a restart, but entering the face from the picker started a later group of
+records about 75 ms behind an earlier one, for good: 24 tiles in row order broke across the
+face at the record boundary, the same tiles in column order broke down it, and 6 full-width
+strips broke too. 24 tiles advanced about every 150 ms against a stored 100, 48 crawled, and
+one full-panel Animation was smooth. So a picture is never split across Animations: tiles
+sharing rasters, which would have stored a flat GIF 2–4× smaller, are not used.
 
 ### Adding a moving picture
 
