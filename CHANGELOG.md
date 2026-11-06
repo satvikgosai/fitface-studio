@@ -35,6 +35,10 @@ Fixed:
   it is loading, and projects open faster.
 - A quick second tap could open two projects at once.
 - Opening a project no longer flashes a second loading screen.
+- **IMPORT** on **Projects**, and the project list, were greyed out while the watch-face
+  catalogue refreshed. They now stay usable.
+- **Remove** now deletes a widget with its artwork, freeing room for GIFs and videos.
+  **Undo** brings it back; **Restore** is gone.
 
 Added:
 
@@ -57,7 +61,8 @@ Added:
 - Each new custom face gets its own face number, from 201 to 250, so it installs beside
   your other faces instead of replacing one.
 - **Install** checks that a face's number and styles agree before sending, warns about
-  styles with no widgets, and lists likely reasons if the watch does not change face.
+  styles with no widgets, lists likely reasons if the watch does not change face, and
+  folds its one-time setup steps into **Phone ready** once done.
 - Editing pages show their controls first: explanations are behind an **ⓘ** you can tap,
   and a gesture you have not used yet gets a one-line hint until you try it.
 - Adding widgets and backgrounds from other faces is no longer marked **Experimental**.

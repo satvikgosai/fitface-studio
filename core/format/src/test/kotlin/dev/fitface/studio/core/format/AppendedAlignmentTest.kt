@@ -86,18 +86,4 @@ class AppendedAlignmentTest {
         assertEquals(0, target(c, 2))
         assertEquals(40 to 60, guides(c)[2].let { it.drawLeft to it.drawTop })
     }
-
-    @Test fun aRestoredFaceRelativeWidgetComesBackWhereItWas() {
-        var c = container(value(0, target = 0, x = 0, y = 0), value(1, target = 3, x = 60, y = 90),
-            value(2, target = 2, x = 5, y = 5))
-        val r = FaceRecordParser.scanWidgets(c.entryByBasename(style))[1]
-        val removed = StructuralEditor.removeWidget(c, listOf(style), r.globalIndex, r.widgetType, r.sequenceId,
-            r.x, r.y, requireFinal = false)
-        c = removed.container
-        // Grow the face past index 3, so the saved target would name a real widget.
-        repeat(3) { c = duplicate(c, 0) }
-        c = StructuralEditor.appendWidget(c, listOf(style), removed.removedRecords).container
-        assertEquals(60 to 90, guides(c).last().let { it.drawLeft to it.drawTop })
-        assertEquals(WidgetImporter.ROOT_TARGET, target(c, guides(c).last().globalIndex))
-    }
 }

@@ -77,7 +77,7 @@ class CustomFaceLibraryTest {
         viewModel.onEditorNavigated()
         viewModel.onLibraryShown()
         assertNull(viewModel.state.value.customFaceProgress)
-        assertFalse(viewModel.state.value.isWorking)
+        assertFalse(viewModel.state.value.isBusy)
     }
 
     /** The session is single, so while one is being made nothing else may open. */
@@ -90,7 +90,7 @@ class CustomFaceLibraryTest {
         val state = viewModel.state.value
         assertNotNull(state.customFaceProgress)
         assertFalse(state.customFaceProgress!!.building)
-        assertTrue(state.isWorking)
+        assertTrue(state.isBusy)
         assertFalse(state.canSelectFace)
         viewModel.startCustomFace("Custom face")
         settle()

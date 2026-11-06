@@ -217,7 +217,8 @@ class StylePreviewProjectTest {
      * Checkpoints written before the lineage moved to the head keep removed records and
      * import baselines ahead of it, and stay that way until their next edit. The list must
      * still find the map behind them, and opening, which decodes the whole file, must not
-     * care about the order at all.
+     * care about the order at all — nor about the removed records, which a build that
+     * offered Restore wrote and this one reads past.
      */
     @Test
     fun aCheckpointInTheEarlierFieldOrderStillPicksItsPreviewAndOpens() = runBlocking {
@@ -238,9 +239,9 @@ class StylePreviewProjectTest {
             requireFinal = false,
             applyToAllStyles = false,
         )
-        assertEquals(1, s.removedWidgets.size)
         val checkpoint = File(requireNotNull(database.projectDao().findById(s.projectId)?.editedBinPath))
-        val fields = Json.parseToJsonElement(checkpoint.readText()).jsonObject
+        val fields = Json.parseToJsonElement(checkpoint.readText()).jsonObject +
+            ("removed" to Json.parseToJsonElement(LegacyRemoval))
         val earlierOrder = listOf("schema", "thumbnailRefreshed", "removed", "importOrigins", "lineage", "editedContainer")
         assertTrue("a field the earlier order does not name: ${fields.keys}", earlierOrder.containsAll(fields.keys))
         checkpoint.writeText(JsonObject(earlierOrder.mapNotNull { key -> fields[key]?.let { key to it } }.toMap()).toString())
@@ -250,7 +251,7 @@ class StylePreviewProjectTest {
         assertEquals(expected, repository.observeProjects().first().single().previewImagePath)
         val reopened = repository.openProject(s.projectId)
         assertEquals("style1.bin", reopened.activeStyleName)
-        assertEquals(1, reopened.removedWidgets.size)
+        assertEquals(s.widgets.size, reopened.widgets.size)
         assertEquals(expected, reopened.stylePreviewPaths.getValue("style1.bin"))
     }
 
@@ -287,3 +288,7 @@ class StylePreviewProjectTest {
         )
     }
 }
+
+/** One removal as a build that offered Restore saved it: read past, never restored. */
+private const val LegacyRemoval = """[{"widgetType":3,"sequenceId":2,"x":0,"y":0,"width":20,"height":20,""" +
+    """"recordsByVariant":{"style1.bin":"AwAAAA=="},"globalIndex":4,"nativeIdentityRecorded":true}]"""

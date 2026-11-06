@@ -46,8 +46,8 @@ credentials are deliberately not stored in this repository.
   :app:lintDebug
 ```
 
-Last recorded corpus-backed verification (2026-10-22, moving pictures and video clips):
-**972 tests collected, 971 passed, 1 skipped, 0 failures, 0 lint errors,
+Last recorded corpus-backed verification (2026-11-06, widget deletion with artwork):
+**1047 tests collected, 1046 passed, 1 skipped, 0 failures, 0 lint errors,
 25 lint warnings.**
 Those warnings were dependency/SDK notices. These are recorded results, not an
 assertion that a later checkout has already passed; run the command above.
@@ -84,8 +84,8 @@ catalogue faces — about three minutes — and checks that each one:
 - keeps every selectable widget overlapping the panel;
 - survives a move of every selectable widget, both on its own style and across
   every variant that carries it;
-- survives a remove/restore of every style's final widget, and an all-variant
-  remove/restore/duplicate of each style's first canvas widget.
+- survives deleting every style's final widget, and an all-variant delete and
+  duplicate of each style's first canvas widget.
 
 There is no `androidTest` source set; the Room migration test runs under
 Robolectric.

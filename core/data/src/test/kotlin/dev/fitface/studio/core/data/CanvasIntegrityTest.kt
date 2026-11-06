@@ -4,6 +4,10 @@ import dev.fitface.studio.core.format.BackgroundImporter
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
+import dev.fitface.studio.core.format.NativeWidgetOrigin
+import dev.fitface.studio.core.format.SessionLineage
+import dev.fitface.studio.core.format.WidgetPristine
+import org.junit.Assert.assertEquals
 import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.model.PreviewFrame
@@ -31,7 +35,8 @@ import org.robolectric.annotation.GraphicsMode
  * is perfectly well-formed and the watch would accept it. They show up only as a wrong
  * *picture*: a widget whose outline is drawn somewhere its pixels are not, a sprite that
  * silently stops drawing, an outline sized from one widget's frames and filled from
- * another's. Face `00022` showed all three at once after a remove-and-restore, because
+ * another's. Face `00022` showed all three at once after a remove-and-restore (when the
+ * editor still offered Restore), because
  * every consumer resolved "the original of this widget" by a global index the edit had
  * renumbered.
  *
@@ -366,12 +371,18 @@ class CanvasIntegrityTest {
         original: Fit3Container,
         current: Fit3Container,
         styleName: String,
+        /** The session's saved identities, which the repository reads in place of pairing. */
+        lineage: SessionLineage? = null,
     ): Canvas? {
         val style = current.entryByBasename(styleName)
         val originalStyle = original.entryByBasename(styleName)
         val currentBackground = panelFrame(style)
-        val sources = FaceRecordParser.originalWidgetSources(style, originalStyle)
-        val duplicates = FaceRecordParser.duplicateSourceGlobalIndices(style, originalStyle)
+        val saved = lineage?.widgets?.get(styleName)
+        val sources = saved?.mapNotNull { (index, origin) -> origin.originalIndex?.let { index to it } }?.toMap()
+            ?: FaceRecordParser.originalWidgetSources(style, originalStyle)
+        val duplicates = saved?.filterValues { it.duplicate }?.mapNotNull { (index, origin) ->
+            origin.originalIndex?.let { index to it }
+        }?.toMap() ?: FaceRecordParser.duplicateSourceGlobalIndices(style, originalStyle)
         val originalGuides = FaceRecordParser.widgetGuides(originalStyle)
             .associateBy { it.globalIndex }
         val guides = FaceRecordParser.widgetGuides(style).map { widget ->
@@ -447,10 +458,14 @@ class CanvasIntegrityTest {
         original: ContainerEntry,
         current: ContainerEntry,
         failures: MutableList<String>,
+        saved: Map<Int, NativeWidgetOrigin>? = null,
     ) {
         val originals = FaceRecordParser.scanWidgets(original).associateBy { it.globalIndex }
-        val sources = FaceRecordParser.originalWidgetSources(current, original)
-        val duplicates = FaceRecordParser.duplicateSourceGlobalIndices(current, original)
+        val sources = saved?.mapNotNull { (index, origin) -> origin.originalIndex?.let { index to it } }?.toMap()
+            ?: FaceRecordParser.originalWidgetSources(current, original)
+        val duplicates = saved?.filterValues { it.duplicate }?.mapNotNull { (index, origin) ->
+            origin.originalIndex?.let { index to it }
+        }?.toMap() ?: FaceRecordParser.duplicateSourceGlobalIndices(current, original)
         FaceRecordParser.scanWidgets(current).forEach { record ->
             val source = sources[record.globalIndex] ?: duplicates[record.globalIndex]
             if (source == null) {
@@ -494,12 +509,17 @@ class CanvasIntegrityTest {
 
     /**
      * The fixed sequences below each start from a pristine container. Real use does not:
-     * a widget gets moved, then removed, then restored, then something else is
-     * duplicated on top. Those compose in ways a single edit does not, and the pairing
+     * a widget gets moved, then another deleted with its artwork, then something else is
+     * duplicated on top and deleted again. Those compose in ways a single edit does not, and the pairing
      * that resolves a widget's original is a set of heuristics — payload, position,
      * type-and-sequence — which a *combination* of edits can make ambiguous even though
      * each one alone is fine. So this walks a deterministic pseudo-random chain of edits
      * per face and checks the same invariants after every step.
+     *
+     * Identities are carried the way the repository carries them: captured once from the
+     * pristine face, then remapped by each deletion and appended to by each duplicate. The
+     * stateless pairing cannot follow a deletion of the face's own artwork — it names
+     * rasters by index, and those indices move — which is why every commit saves a lineage.
      */
     @Test
     fun longEditChainsKeepTheCanvasSelfConsistent() {
@@ -516,7 +536,7 @@ class CanvasIntegrityTest {
             val baseline = canvasOf(original, original, styleName) ?: return@forEach
 
             var current = original
-            var cut: Map<String, ByteArray>? = null
+            var lineage = SessionLineage.capture(original, original, null)
             // A fixed, face-derived walk: no Math.random, so a failure reproduces.
             var seed = face.hashCode() and 0x7FFF_FFFF
             repeat(10) { step ->
@@ -524,6 +544,7 @@ class CanvasIntegrityTest {
                 val records = FaceRecordParser.scanWidgets(current.entryByBasename(styleName))
                 if (records.isEmpty()) return@repeat
                 val pick = records[seed % records.size]
+                var nextLineage = lineage
                 val next = when (seed % 4) {
                     0 -> runCatching {
                         FaceEditor.moveWidget(
@@ -537,27 +558,24 @@ class CanvasIntegrityTest {
                         ).container
                     }.getOrNull()
 
-                    1 -> runCatching {
-                        StructuralEditor.removeWidget(
-                            source = current,
-                            entryBasenames = listOf(styleName),
-                            globalIndex = pick.globalIndex,
-                            widgetType = pick.widgetType,
-                            sequenceId = pick.sequenceId,
-                            x = pick.x,
-                            y = pick.y,
-                            requireFinal = false,
-                        )
-                    }.getOrNull()?.also { cut = it.removedRecords }?.container
-
-                    2 -> cut?.let { saved ->
+                    1, 2 -> {
+                        // Op 2 deletes the newest record, which after a duplicate is a copy.
+                        val target = if (seed % 4 == 1) pick else records.last()
                         runCatching {
-                            StructuralEditor.appendWidget(
+                            StructuralEditor.deleteWidget(
                                 source = current,
-                                entryBasenames = saved.keys.toList(),
-                                recordsByStyle = saved,
+                                entryBasenames = listOf(styleName),
+                                globalIndex = target.globalIndex,
+                                widgetType = target.widgetType,
+                                sequenceId = target.sequenceId,
+                                x = target.x,
+                                y = target.y,
+                                targetIndices = mapOf(styleName to target.globalIndex),
                             ).container
-                        }.getOrNull()?.also { cut = null }
+                        }.getOrNull()?.also {
+                            val cut = target.globalIndex
+                            nextLineage = lineage.remap(styleName) { if (it == cut) null else if (it > cut) it - 1 else it }
+                        }
                     }
 
                     else -> runCatching {
@@ -570,11 +588,17 @@ class CanvasIntegrityTest {
                             x = pick.x,
                             y = pick.y,
                         ).container
-                    }.getOrNull()
+                    }.getOrNull()?.also { copied ->
+                        val origin = lineage.widgets.getValue(styleName)[pick.globalIndex]
+                        val appended = FaceRecordParser.scanWidgets(copied.entryByBasename(styleName)).last().globalIndex
+                        nextLineage = if (origin == null) lineage
+                            else lineage.append(styleName, appended, origin.copy(duplicate = true))
+                    }
                 } ?: return@repeat
 
                 current = next
-                val canvas = canvasOf(original, current, styleName) ?: return@repeat
+                lineage = nextLineage
+                val canvas = canvasOf(original, current, styleName, lineage) ?: return@repeat
                 steps++
                 val tag = "$face/$styleName chain step $step (op ${seed % 4})"
                 checkOriginIdentity(
@@ -582,6 +606,7 @@ class CanvasIntegrityTest {
                     original.entryByBasename(styleName),
                     current.entryByBasename(styleName),
                     failures,
+                    lineage.widgets.getValue(styleName),
                 )
                 checkLayerMatchesBox(tag, canvas, failures)
                 checkNoLayerLost(tag, baseline, canvas, failures)
@@ -656,8 +681,11 @@ class CanvasIntegrityTest {
             }
             facesChecked++
 
-            fun check(label: String, edited: Fit3Container) {
-                val canvas = canvasOf(original, edited, styleName) ?: return
+            val pristineLineage = SessionLineage.capture(original, original, null)
+            fun afterCut(cut: Int) = pristineLineage.remap(styleName) { if (it == cut) null else if (it > cut) it - 1 else it }
+
+            fun check(label: String, edited: Fit3Container, lineage: SessionLineage? = null) {
+                val canvas = canvasOf(original, edited, styleName, lineage) ?: return
                 editsChecked++
                 val tag = "$face/$styleName $label"
                 checkOriginIdentity(
@@ -665,6 +693,7 @@ class CanvasIntegrityTest {
                     original.entryByBasename(styleName),
                     edited.entryByBasename(styleName),
                     failures,
+                    lineage?.widgets?.getValue(styleName),
                 )
                 checkLayerMatchesBox(tag, canvas, failures)
                 checkBoxesOnPanel(tag, canvas, failures)
@@ -675,11 +704,11 @@ class CanvasIntegrityTest {
 
             val records = FaceRecordParser.scanWidgets(original.entryByBasename(styleName))
 
-            // Remove a widget that is not last, so the table really is renumbered, then
-            // put it back — the sequence that broke face 00022.
+            // Delete a widget that is not last, so the table really is renumbered and the
+            // rasters after its own move — the renumbering that broke face 00022.
             records.dropLast(1).firstNotNullOfOrNull { record ->
                 runCatching {
-                    StructuralEditor.removeWidget(
+                    StructuralEditor.deleteWidget(
                         source = original,
                         entryBasenames = listOf(styleName),
                         globalIndex = record.globalIndex,
@@ -687,19 +716,10 @@ class CanvasIntegrityTest {
                         sequenceId = record.sequenceId,
                         x = record.x,
                         y = record.y,
-                        requireFinal = false,
-                    )
-                }.getOrNull()
-            }?.let { removal ->
-                check("after remove", removal.container)
-                runCatching {
-                    StructuralEditor.appendWidget(
-                        source = removal.container,
-                        entryBasenames = removal.removedRecords.keys.toList(),
-                        recordsByStyle = removal.removedRecords,
+                        targetIndices = mapOf(styleName to record.globalIndex),
                     ).container
-                }.getOrNull()?.let { check("after remove+restore", it) }
-            }
+                }.getOrNull()?.let { record to it }
+            }?.let { (record, deleted) -> check("after delete", deleted, afterCut(record.globalIndex)) }
 
             // Duplicate a widget.
             records.firstNotNullOfOrNull { record ->
@@ -716,7 +736,7 @@ class CanvasIntegrityTest {
                 }.getOrNull()
             }?.let { check("after duplicate", it) }
 
-            // Resize a sprite, then remove-restore-resize it — the full reported flow.
+            // Resize a sprite, then delete a widget ahead of it and resize it again.
             FaceRecordParser.widgetGuides(original.entryByBasename(styleName))
                 .firstOrNull { it.canResize && it.width >= 8 && it.height >= 8 }
                 ?.let { target ->
@@ -736,61 +756,52 @@ class CanvasIntegrityTest {
                     }.getOrNull() ?: return@let
                     check("after resize", resized)
 
-                    // By index: a resize rewrites rasters in place and renumbers nothing,
-                    // and `(type, source)` is not an identity — a Static's source is 0 in
-                    // 678 of the catalogue's 681 records.
-                    val moved = FaceRecordParser.widgetGuides(resized.entryByBasename(styleName))
-                        .single { it.globalIndex == target.globalIndex }
-                    val removal = runCatching {
-                        StructuralEditor.removeWidget(
-                            source = resized,
-                            entryBasenames = listOf(styleName),
-                            globalIndex = moved.globalIndex,
-                            widgetType = moved.type,
-                            sequenceId = moved.sequenceId,
-                            x = moved.x,
-                            y = moved.y,
-                            requireFinal = false,
-                        )
-                    }.getOrNull() ?: return@let
-                    val restored = runCatching {
-                        StructuralEditor.appendWidget(
-                            source = removal.container,
-                            entryBasenames = removal.removedRecords.keys.toList(),
-                            recordsByStyle = removal.removedRecords,
-                        ).container
-                    }.getOrNull() ?: return@let
-                    check("after resize+remove+restore", restored)
+                    // Then delete a widget ahead of it, so it is renumbered and its frames
+                    // move, and resize it again — the reported flow, with a deletion where
+                    // Restore used to be. Identity comes from the lineage, as in the app: the
+                    // stateless pairing names rasters by index, and those just moved.
+                    val (cut, deleted) = FaceRecordParser.scanWidgets(resized.entryByBasename(styleName))
+                        .filter { it.globalIndex < target.globalIndex }
+                        .firstNotNullOfOrNull { record ->
+                            runCatching {
+                                StructuralEditor.deleteWidget(
+                                    source = resized,
+                                    entryBasenames = listOf(styleName),
+                                    globalIndex = record.globalIndex,
+                                    widgetType = record.widgetType,
+                                    sequenceId = record.sequenceId,
+                                    x = record.x,
+                                    y = record.y,
+                                    targetIndices = mapOf(styleName to record.globalIndex),
+                                ).container
+                            }.getOrNull()?.let { record.globalIndex to it }
+                        } ?: return@let
+                    val lineage = afterCut(cut)
+                    check("after resize+delete", deleted, lineage)
 
-                    // Re-resolved in `restored`, not reused from `target`: the removal
-                    // renumbered the table and the restore appended the record at the end,
-                    // so the widget the editor has to be *told* about is a different index
-                    // by now. This is the sequence that produced the bare-outline bug.
-                    // The removal renumbered the table and the restore appended the record
-                    // at the end, so this is the one lookup that needs the identity map
-                    // rather than an index or a data source.
-                    val restoredStyle = restored.entryByBasename(styleName)
-                    val restoredIndex = FaceRecordParser
-                        .originalWidgetSources(restoredStyle, original.entryByBasename(styleName))
-                        .entries
-                        .singleOrNull { it.value == target.globalIndex }
-                        ?.key ?: return@let
-                    val restoredTarget = FaceRecordParser.widgetGuides(restoredStyle)
-                        .single { it.globalIndex == restoredIndex }
+                    val sources = lineage.widgets.getValue(styleName)
+                        .mapNotNull { (index, origin) -> origin.originalIndex?.let { index to it } }.toMap()
+                    val movedIndex = sources.entries.single { it.value == target.globalIndex }.key
+                    assertEquals("$face: the sprite moves up one", target.globalIndex - 1, movedIndex)
+                    val movedTarget = FaceRecordParser.widgetGuides(deleted.entryByBasename(styleName))
+                        .single { it.globalIndex == movedIndex }
                     runCatching {
                         StructuralEditor.resizeWidget(
-                            source = restored,
+                            source = deleted,
                             entryBasenames = listOf(styleName),
-                            globalIndex = restoredTarget.globalIndex,
-                            widgetType = restoredTarget.type,
-                            sequenceId = restoredTarget.sequenceId,
-                            x = restoredTarget.x,
-                            y = restoredTarget.y,
+                            globalIndex = movedTarget.globalIndex,
+                            widgetType = movedTarget.type,
+                            sequenceId = movedTarget.sequenceId,
+                            x = movedTarget.x,
+                            y = movedTarget.y,
                             width = (target.width / 3).coerceAtLeast(1),
                             height = (target.height / 3).coerceAtLeast(1),
                             pristine = original,
+                            pristineWidgets = mapOf(styleName to
+                                WidgetPristine(original.entryByBasename(styleName), sources)),
+                            targetIndices = mapOf(styleName to movedTarget.globalIndex),
                         ).container
-                    }.getOrNull()?.let { check("after resize+remove+restore+resize", it) }
+                    }.getOrNull()?.let { check("after resize+delete+resize", it, lineage) }
                 }
         }
 

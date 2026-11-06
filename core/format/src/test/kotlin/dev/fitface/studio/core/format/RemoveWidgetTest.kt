@@ -5,7 +5,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -13,7 +12,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 
-class RemoveRestoreTest {
+class RemoveWidgetTest {
     private val root = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot")))
     private val live00106 = root.resolve("SM-R390_00106/assets/SM-R390_00106_256x402.bin")
     private val live00046 = root.resolve("SM-R390_00046/assets/SM-R390_00046_256x402.bin")
@@ -95,72 +94,6 @@ class RemoveRestoreTest {
         assertTrue(
             "the message has to name the cost: ${failure.message}",
             failure.message!!.contains("positioned against"),
-        )
-    }
-
-    @Test
-    fun removeThenRestorePutsTheRecordBackWithOnlyItsIndexRewritten() {
-        val source = load(live00106)
-        val styles = listOf("style0.bin", "style1.bin")
-        val before = FaceRecordParser.scanWidgets(source.entryByBasename("style0.bin"))
-        val target = before.last()
-
-        val removal = StructuralEditor.removeWidget(
-            source = source,
-            entryBasenames = styles,
-            globalIndex = target.globalIndex,
-            widgetType = target.widgetType,
-            sequenceId = target.sequenceId,
-            x = target.x,
-            y = target.y,
-            requireFinal = true,
-        )
-        assertEquals(styles.toSet(), removal.removedRecords.keys)
-
-        val restored = StructuralEditor.appendWidget(
-            source = removal.container,
-            entryBasenames = styles,
-            recordsByStyle = removal.removedRecords,
-        )
-        assertTrue(restored.container.validate().isValid)
-
-        val after = FaceRecordParser.scanWidgets(restored.container.entryByBasename("style0.bin"))
-        assertEquals(before.size, after.size)
-        assertEquals(before.map { it.globalIndex }, after.map { it.globalIndex })
-        val restoredRecord = after.last()
-        assertEquals(target.widgetType, restoredRecord.widgetType)
-        assertEquals(target.sequenceId, restoredRecord.sequenceId)
-        assertEquals(target.x, restoredRecord.x)
-        assertEquals(target.y, restoredRecord.y)
-        assertEquals(target.words, restoredRecord.words)
-        // The final widget was the last record, so removing and re-appending it is a
-        // pure round trip.
-        assertArrayEquals(source.toByteArray(), restored.container.toByteArray())
-    }
-
-    @Test
-    fun restoringAMiddleWidgetAppendsItAtTheEnd() {
-        val source = load(live00106)
-        val styles = listOf("style0.bin")
-        val before = FaceRecordParser.scanWidgets(source.entryByBasename("style0.bin"))
-        val target = before[1]
-
-        val removal = StructuralEditor.removeWidget(
-            source, styles, target.globalIndex, target.widgetType, target.sequenceId,
-            target.x, target.y, requireFinal = false,
-        )
-        val restored = StructuralEditor.appendWidget(
-            removal.container, styles, removal.removedRecords,
-        )
-
-        val after = FaceRecordParser.scanWidgets(restored.container.entryByBasename("style0.bin"))
-        assertEquals(before.size, after.size)
-        assertEquals(target.sequenceId, after.last().sequenceId)
-        assertTrue(restored.container.validate().isValid)
-        // Ordering changed, so the bytes must differ even though the record survived.
-        assertNotEquals(
-            source.toByteArray().toList(),
-            restored.container.toByteArray().toList(),
         )
     }
 

@@ -686,13 +686,13 @@ renumber these references with them, and a widget that others are positioned
 against cannot simply be removed.
 
 A reference resolves only against an earlier record, so "names nothing" depends on where
-the record sits. An appended record — a duplicate, or a restored widget — goes after every
+the record sits. An appended record — a duplicate — goes after every
 index, and a value that named nothing where its source sat can name a real widget there:
 `00016`'s date names 20, and once duplicating it grew the face past 20, each further copy
 aligned to copy #20 and was drawn off the face, as the watch would draw it. So an appended
 record whose target was at or after its former index, and would now resolve, takes
 `WidgetImporter.ROOT_TARGET` (`0xFFFF`), as an import does; one that still names nothing
-keeps its bytes. `AppendedAlignmentTest` covers copies and restores.
+keeps its bytes. `AppendedAlignmentTest` covers copies.
 
 ### Badge: geometry is a line segment — **proven for the one record**
 
@@ -922,7 +922,7 @@ Recorded background-addition runs (205,880 bytes per style):
 All 99 vendor containers fit; largest `00072` is 4,149,034 bytes. The measured
 accept/reject interval is `4,149,034..4,365,626`; the app treats 4 MiB as settled.
 `00022` is 4,117,664 bytes, only 76,640 below the ceiling: this explains its old
-oversized-resize rejection, not a separate prohibition on restoring shipped artwork.
+oversized-resize rejection, not a separate prohibition on enlarging shipped artwork.
 Imports and raster growth can also cross the ceiling.
 
 ### Identity, layout and structural edits
@@ -940,7 +940,7 @@ Imports and raster growth can also cross the ceiling.
 | Original identity survives index changes | Schema-3 checkpoints persist `SessionLineage` native sources and duplicate status; operations remap current indices explicitly. Legacy migration uses `originalWidgetSources` once. Unknown originals cannot be resized. Never use raw offsets or `originalRecords[globalIndex]` as identity. |
 | Source IDs are not identities | Static source is zero in 678/681 records; Sprite `(type, source)` happens to be unique in 1,486/1,518, not universally |
 | Every declared raster pointer is relocated | Static `+0x20`, Sprite's exact frame-count words, Hand `words[1]`, Arc `words[4]` (30/30), LineBar `words[2]` (16/16) |
-| Empty widget tables are legal while editing | Removing the last widget retains the image section; snapshot, restore and preview accept zero widgets. The firmware's style-header validator requires a nonzero count (§6), so Install sends an emptied style or AOD with a warning naming it. On a watch (2026-10-14) an emptied style installed and drew black while the always-on display kept its clock; swiping to a tile and back flashed "no watch face" for a moment |
+| Empty widget tables are legal while editing | Deleting the last widget keeps one raster (the smallest) so the image section survives; snapshot, import, picture and preview accept zero widgets. The firmware's style-header validator requires a nonzero count (§6), so Install sends an emptied style or AOD with a warning naming it. On a watch (2026-10-14) an emptied style installed and drew black while the always-on display kept its clock; swiping to a tile and back flashed "no watch face" for a moment |
 
 Sign-based anchoring misplaced 62 records on ten faces (`00015`, `00016`, `00018`,
 `00023`, `00027`, `00030`, `00051`, `00066`, `00089`, `00096`): 43 off-panel
@@ -948,7 +948,7 @@ primitives, 14 Values and 5 centred Composites. `WidgetCensusTest` checks zero
 layout disagreements. Scanning arbitrary words as indices blocked 68% of removals
 and left 18/99 faces without a removable widget; named-field checks replace it.
 
-Identity regression cases: on `00022`, remove/restore moves the seq-10 hour sprite
+Identity regression cases: on `00022`, a remove/restore (when the editor offered Restore) moved the seq-10 hour sprite
 to an index originally occupied by seq-37 battery; direct indexing erased the wrong
 rectangle and lost the sprite. Raw-pointer comparison lost the nine identical
 Statics on `00003` after image relocation. Leaving Static `+0x20` stale lost artwork
@@ -960,9 +960,8 @@ fixed point, direction and pixel gaps. Rotating around top-left displaced `00046
 hour by 8×76px and second hand by 8×120px. Use the stored `+0x24/+0x26` sweep.
 `ResizedWidgetLeavesNoGhostTest` covers stale pixels; `EmptyStyleTest` covers zero records.
 
-Native removal preserves all rasters and saves record bytes for restore. Restore
-appends at the end (thus changes z-order), renumbering and relocating saved pointers
-as needed. Duplication appends rather than inserting mid-table. Unsupported operations
+Removal deletes; see [Deleting widgets](#deleting-widgets). Duplication appends rather
+than inserting mid-table. Unsupported operations
 include arbitrary construction, middle insertion, font replacement, unknown-pointer
 rewriting and universal cross-firmware conversion. Manual schema-level opportunities
 are not necessarily editor features: a hand pivot, existing glyph-group reference
@@ -1005,8 +1004,7 @@ Select the corresponding complete `PreviewStream.RECORD_STRIDE` frames from
 the style payload, one 74-byte directory record and one 99,696-byte picker frame.
 
 Session metadata composes current-to-pristine variant identities through repeated
-deletions. Remap native/donor origins and saved removed records; discard records
-owned only by deleted styles. Pristine resizing, original-angle resets, shipped
+deletions. Remap native/donor origins; discard origins owned only by deleted styles. Pristine resizing, original-angle resets, shipped
 image counts and packaged PNG lookup all resolve through that mapping. The active
 style follows its survivor; deleting it selects the next survivor, otherwise the
 previous one. AOD selection stays AOD. Reset restores the project's full pristine
@@ -1022,7 +1020,7 @@ offer style management. Persistence and archive contracts are in
 
 `StyleDeletionTest` sweeps corpus deletion candidates and survivor shapes, alongside
 synthetic default, path and invalid-selection cases. `CanvasIntegrityTest` compares
-survivor renders; repository tests cover resize/restore, shared imported resources,
+survivor renders; repository tests cover resize/deletion, shared imported resources,
 rollback, reopening, archives, copies, previews and Reset. These software checks do
 not establish arbitrary style deletion on hardware. Verify middle/active removal,
 remaining picker frames, AOD, wake/reboot and subsequent installs on a watch; the
@@ -1040,8 +1038,7 @@ Before accepting, compare every resolved placement's origin, basis and mapped
 referent. Refuse loss of an existing anchor or activation of a forward reference,
 even if its current coordinates happen to agree with panel placement. Self references
 remain self references; nonexistent producer targets remain unchanged. Unsupported
-alignment codes refuse arrangement. Saved removed records carry their named targets
-through the same permutation before later Restore.
+alignment codes refuse arrangement.
 
 The repository commits the permutation with native and donor identities atomically.
 Selection follows the moved widget, pending moves are cancelled, and review/thumbnail
@@ -1050,8 +1047,8 @@ those identities into each current table; current indices must never select sibl
 after reorder. Ambiguous duplicate counterparts are skipped. Arrangement itself is
 selected-variant-only, including isolated AOD.
 
-`WidgetReorderTest` checks synthetic dependencies, mixed record sizes, saved removals
-and corpus round trips. `CanvasIntegrityTest` checks actual opaque overlap and unchanged
+`WidgetReorderTest` checks synthetic dependencies, mixed record sizes and corpus round
+trips. `CanvasIntegrityTest` checks actual opaque overlap and unchanged
 per-widget artwork. Emulator checks do not establish watch-side acceptance of changed
 record order; deliberate hardware verification remains outstanding.
 
@@ -1227,14 +1224,13 @@ angle itself (`SessionLineage.artworkTurns`; persistence in
   the saved turn, and a turn lands on the rung the pool is on now. Turning back to zero at
   full size reproduces the shipped bytes.
 - **Keyed by artwork.** The turn is saved under the original variant and lowest original
-  image index, or the import origin, so widget removal, restore, duplication and reordering
+  image index, or the import origin, so widget deletion, duplication and reordering
   keep it. Saving one moves the project to checkpoint/archive schema 4.
 
 A turned digit turns in place: the time does not swing as a group about a common centre.
 A resize keeps the top-left and a turn keeps the centre, so mixing them moves a widget —
 an 80 px picture turned 45°, halved, then turned back sits about 9 px from where it began —
-while the artwork itself stays exact. A widget removed before its artwork was turned keeps
-its saved position when restored over the larger image.
+while the artwork itself stays exact.
 
 A turn keeps the resize rung: the same percentage of the original, now turned. A widget
 enlarged near its limit may not fit that rung at the new angle, and then takes the largest
@@ -1297,15 +1293,14 @@ as fit, selected first, so All styles writes every style even after Remove backg
 its Static and its raster, leaving the style as the faces that ship without one are. Widgets
 positioned against it are positioned against a panel-sized rectangle at the origin — the
 whole face — so their references become `WidgetImporter.ROOT_TARGET`, which names nothing and
-falls back to the whole face; saved removals' references follow through the commit's index
-mappings. It applies only where one Static at the panel's origin draws the raster and no saved
-removal names it (`deletableBackground`); anything else is painted black through the same-size
-replacement, as Remove did before. `CanvasIntegrityTest` deletes all 380 catalogue style and AOD
-backgrounds: each draws pixel for pixel what painting it black draws, frees exactly its Static
-and raster (`deletedBackgroundBytes`), and leaves every other entry byte-identical. The raster
-is one the face shipped with, so `Session.shippedImageCount` counts it gone (its Static neither
-live nor under Removed) and an import deleted later still drops all of its own rasters. Not yet
-sent to a watch; the result is the shape of the fourteen faces without a background.
+falls back to the whole face. It applies only where one Static at the panel's origin draws
+the raster and it is not the style's only raster (`deletableBackground`; see
+[Deleting widgets](#deleting-widgets) for why a section is never emptied); anything else is
+painted black through the same-size replacement, as Remove did before. `CanvasIntegrityTest`
+deletes all 380 catalogue style and AOD backgrounds: each draws pixel for pixel what painting
+it black draws, frees exactly its Static and raster (`deletedBackgroundBytes`), and leaves
+every other entry byte-identical. Not yet sent to a watch; the result is the shape of the
+fourteen faces without a background.
 
 **Scope.** Replacement, addition and import write every style by default, as they always
 did. **This style only** (`thisStyleOnly`) writes the selected style alone: a replacement
@@ -1431,7 +1426,7 @@ like a still background.
 | Layer | Directly above the variant's last full-panel layer, or index 0 on a bare one; every later record moves up one and named alignment targets are renumbered. The insert checks every earlier record draws identical artwork at an identical place, and that the new record names exactly its own frames in table order |
 | Not "the" background | `FaceRecordParser.backgroundImage` skips rasters only an Animation draws, so Replace, tint and import edit the still background (or report none) and never one frame. Its guide is still `BACKGROUND` (by size, or by the tag for smaller frames), so Arrange pins it, it is never counted as a moving picture, and the widget overlay drawn over a background being placed leaves it out |
 | Cost | `animationAddedBytes`: stored frames × (12 + 1024 + w × h + 4) + 40 + 4 × entries at the stored rectangle, equal to the growth (tested); 103,952 bytes a frame at 256 × 402, 8,540 at a 100 × 75 GIF's own size. One a variant: a new moving, still or imported background deletes it in the same commit, its room counted free (tested). Adding one deletes the variant's still background in the same commit, as Remove background does, its room counted free too (`EditorSnapshot.stillBackgroundBytes`), so deleting it later leaves none |
-| Provenance | None new: an added widget with no original (`NativeWidgetOrigin()`), as an added still background is. Removing it deletes the record and every frame only it drew; Undo restores it |
+| Provenance | None new: an added widget with no original (`NativeWidgetOrigin()`), as an added still background is. Removing it deletes the record and every frame only it drew; Undo brings it back |
 
 `MovingBackgroundEditorTest` adds one to the first style of every catalogue face that has
 room and removes it again byte for byte.
@@ -1521,38 +1516,52 @@ The canvas plays every Animation it can decode: the composer returns each one's 
 frames, table and period beside the layers, and the Canvas page draws the still runs
 between animations once and each animation's current frame between them.
 
-### Removing imported widgets
+### Deleting widgets
 
-`deleteWidget` permanently removes an imported record and its uniquely owned appended
-rasters; native removal remains restorable. A measured `00013` project retained 52
-unused rasters (1,370,656 bytes) after nine imported digits were removed by the old path.
+`StructuralEditor.deleteWidget` is the only removal the editor makes, for every widget —
+stock, imported, a duplicate or added. It cuts the record from each targeted variant
+(refusing a widget others are positioned against), then drops every image record in that
+variant no live widget points at, through `dropImages`. There is no Removed list and no
+Restore: Undo, Reset and importing the widget again from the same face bring one back. This
+replaced a model where stock removals kept their rasters for Restore. On 2026-11-06, the 789
+stock widgets of `style0.bin` that can be deleted one at a time across the 99 faces freed
+13,822,710 bytes between them (each measured alone from the shipped face).
 
-- Never delete an image below the pristine entry's image count.
-- Never delete an image referenced by another live widget or a saved removed record.
-- Preserve survivor image order, relocate declared pointers and saved records through
-  `relocateSavedWidget`, and assert identical artwork and non-pointer bytes.
-- Keep font resources (removing them renumbers others) and an import-origin table
-  entry while added resources remain, even when no imported widget is live. An empty
-  provenance table would make reopen reject the foreign resources.
-- A kept binding is not lost to later imports (issue #11). An import may overwrite an
-  appended binding in place, a same-size patch that renumbers nothing, when nothing still
-  names it:
-  - no live Value or Composite record in any style or the always-on display;
-  - no saved removal;
-  - no kept import baseline.
+- **Shared artwork stays.** A raster another widget still points at is drawn, so it is kept:
+  a duplicate's pool, the digits an hour-tens sprite shares with hour-units (`00011`).
+- **Undrawn means unneeded.** No `style*.bin` in the 99-container catalogue carries a raster
+  nothing draws, so purging every undrawn image takes nothing a face relies on. It also takes
+  what an older build kept for a Restore: saved removals in old checkpoints and archives are
+  read and ignored, and their rasters go with the next deletion in that variant.
+- **Never an empty section.** Every later edit refuses a style without an image section
+  (`requireContiguousWidgets`), so deleting the last widget keeps the smallest raster, and
+  `dropImages` refuses to take every image.
+- **Relocation is checked.** `dropImages` rebuilds the section from survivors in order,
+  rewrites every declared pointer through `relocatePointers` and asserts each survivor draws
+  byte-identical artwork with otherwise identical record bytes.
+- **Identity is the lineage.** Pristine-based resize and artwork turns (keyed by original
+  image index) read the pristine entry through the saved `SessionLineage`, so a lower image
+  count does not move them. The stateless pairing (`originalWidgetSources`, `payloadKey`)
+  names rasters by index and stops matching once a shipped raster has gone; it is only a
+  fallback for a project with no lineage yet, whose rasters are intact. Every commit
+  saves the lineage, and `CanvasIntegrityTest` carries one through its edit chains. Lineage and import origins are renumbered for the cut record;
+  import origins with no live widget are pruned (one donor table is kept while its added
+  fonts remain).
+- Keep font resources (removing them renumbers others). A kept binding is not lost to later
+  imports (issue #11). An import may overwrite an appended binding in place, a same-size
+  patch that renumbers nothing, when no live Value or Composite record in any style or the
+  always-on display names it and no kept import baseline does. Vendor bindings, the pristine
+  count, are never rewritten. `FontSlotsTest` replays the add-and-remove cycle that used to
+  fill all ten slots.
 
-  Vendor bindings, the pristine count, are never rewritten. `FontSlotsTest` replays the
-  add-and-remove cycle that used to fill all ten slots.
+`WidgetDeletionTest` sweeps every deletable stock widget of `style0.bin` on every face
+(exact rasters freed, survivors' artwork identical, validation clean), import/delete byte
+round trips, shared digits, emptied styles and leftovers from older builds.
+`WidgetOriginPairingTest` and `CanvasIntegrityTest` check pairing and rendering after
+deletions that renumber the table and move rasters. Hardware acceptance of an image count
+below the shipped one, and of a style reduced to one raster, is **not yet verified**.
 
-`ImportedWidgetDeletionTest` checks import/delete byte restoration and retained
-references. Hardware acceptance of a decreased image count is still unverified.
-
-A copy of a stock widget (`SessionLineage` marks it `duplicate`) is also deleted rather
-than saved under Removed: its record is cut exactly as a native removal cuts it, but no
-`RemovedWidget` is kept. Its rasters stay, because a stock duplicate owns none — it draws
-the pool of the widget it copied, which is live or itself saved under Removed. Originals
-remain restorable; repeated duplicate-and-remove no longer accumulates restorable copies.
-A new copy is also moved `DuplicateOffset` (8 px) right and down in the same commit — the
+Duplicates are deleted the same way. A new copy is also moved `DuplicateOffset` (8 px) right and down in the same commit — the
 other way near the panel edge, not at all for hands and other outline-less widgets — so it
 does not sit invisibly on its original (`duplicateOffset`).
 

@@ -183,24 +183,26 @@ data class LibraryUiState(
     val exportFileName: String?
         get() = exporting?.let { ProjectArchiveNaming.fileName(it.faceId, it.name) }
 
-    val isWorking: Boolean
-        get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null ||
-            customFaceProgress != null || editorHandoff
-
     /**
-     * Whether a tap on the grid may open the face sheet. Deliberately narrower than
-     * [isWorking], and the value the grid's cards should be enabled on.
+     * Something holds the repository's single editing session, or is about to: a project
+     * opening, a download or custom face that will open one, or an editor on its way. The
+     * project rows, IMPORT, Duplicate and the face cards all refuse while it is true.
      *
-     * The grid is painted from the on-disk cache before the network is touched, so
-     * `isLoadingCatalog` is true for the whole opening window of every launch while the
-     * screen already looks completely ready. Refusing the tap on [isWorking] made that
-     * window silent — no sheet, no row spinner, no message — and a catalogue refresh
-     * conflicts with nothing the sheet does: it only reads the face the tap carried.
-     * Opening a project and a download in flight do conflict, so those still refuse.
+     * A catalogue refresh is deliberately not part of it. The grid is painted from the
+     * on-disk cache before the network is touched, so `isLoadingCatalog` is true for the
+     * whole opening window of every launch while the screen already looks ready, and a
+     * refresh only writes the catalogue's own fields. Counting it here greyed out IMPORT
+     * and every project row for the length of each launch's sync and each REFRESH, for no
+     * conflict at all — the face sheet's download, which opens an editor too, never waited
+     * for it.
      */
+    val isBusy: Boolean
+        get() = isOpeningProject || downloadingProductId != null || customFaceProgress != null ||
+            editorHandoff
+
+    /** Whether a tap on the grid may open the face sheet: whenever nothing is [isBusy]. */
     val canSelectFace: Boolean
-        get() = !isOpeningProject && downloadingProductId == null && customFaceProgress == null &&
-            !editorHandoff
+        get() = !isBusy
 
     val visibleFaces: List<CatalogFace>
         get() {
@@ -538,8 +540,8 @@ class LibraryViewModel @Inject constructor(
     fun downloadSelectedFace() {
         val face = mutableState.value.selectedFace ?: return
         val styleId = mutableState.value.selectedStyleId ?: return
-        // Not `isWorking`: a catalogue refresh is no reason to refuse, which is the whole
-        // point of the sheet opening during one. An open in flight is — it holds the
+        // A catalogue refresh is no reason to refuse, which is the whole point of the
+        // sheet opening during one. An open in flight is — it holds the
         // repository's single editing session and it is about to take the screen, and this
         // button sits under the rows that start one, live for the several seconds an open
         // takes. Two editors on the back stack was the result.
@@ -591,11 +593,11 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun openProject(project: ProjectSummary) {
-        // Broader than `canSelectFace` on purpose. The repository holds one open
-        // editing session, so this must not race the download that is about to open one,
-        // and it navigates away from the library while the refresh is still writing into
-        // that screen's state — unlike the sheet, which only reads the face it was given.
-        if (mutableState.value.isWorking) return
+        // The repository holds one open editing session, so this must not race a download
+        // or custom face that is about to open one. A catalogue refresh is not a reason:
+        // it writes only the catalogue's fields, and this ViewModel outlives the editor
+        // it hands over to, as it does for the sheet's download.
+        if (mutableState.value.isBusy) return
         viewModelScope.launch {
             mutableState.update { it.copy(openingProjectId = project.id, error = null) }
             runCatching { repository.openProject(project.id) }
@@ -688,7 +690,7 @@ class LibraryViewModel @Inject constructor(
      * default the new row can land anywhere in the list.
      */
     fun duplicateProject(project: ProjectSummary) {
-        if (mutableState.value.isWorking) return
+        if (mutableState.value.isBusy) return
         viewModelScope.launch {
             runCatching { repository.duplicateProject(project.id) }
                 .onSuccess { duplicate ->
@@ -761,13 +763,13 @@ class LibraryViewModel @Inject constructor(
     /**
      * Reads an archive the picker returned into a new project.
      *
-     * Refused while something else is working, like [openProject] and unlike a catalogue
-     * refresh: this parses a container and writes a project directory, which is the same
-     * conflict opening one has.
+     * Refused while something holds the editing session, like [openProject], but not during
+     * a catalogue refresh: this parses a container and writes a project directory, which
+     * conflicts with an open and not with the catalogue.
      */
     fun importProject(sourceUri: String?) {
         if (sourceUri == null) return
-        if (mutableState.value.isWorking) return
+        if (mutableState.value.isBusy) return
         viewModelScope.launch {
             runCatching { repository.importProject(sourceUri) }
                 .onSuccess { imported ->

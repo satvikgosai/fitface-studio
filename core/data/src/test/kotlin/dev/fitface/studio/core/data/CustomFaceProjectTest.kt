@@ -87,10 +87,8 @@ class CustomFaceProjectTest {
         // A face number of its own, so it installs beside Info_4 rather than over it.
         assertEquals("00201", snapshot.faceId)
         assertEquals("Custom face", snapshot.projectName)
-        // The template is the project's starting point, not an edit of Info_4: reset lands
-        // here, and nothing is under Removed.
+        // The template is the project's starting point, not an edit of Info_4: reset lands here.
         assertFalse(snapshot.isDirty)
-        assertTrue(snapshot.removedWidgets.isEmpty())
         assertEquals(5, snapshot.widgets.size)
         // One style: the four were copies of each other once their readings were gone.
         assertEquals(listOf("style0.bin"), snapshot.styleNames)
@@ -256,12 +254,11 @@ class CustomFaceProjectTest {
     }
 
     /**
-     * The report: every clock widget removed, and not one of them could be put back —
-     * "style0.bin: style needs widgets and images", because the append refused an empty
-     * widget table.
+     * Every clock widget deleted by hand: the style keeps one raster, the container shrinks,
+     * and Undo brings every widget back to the template's exact bytes, which reopen as such.
      */
     @Test
-    fun aFaceEmptiedByHandRestoresEveryWidget() = runBlocking {
+    fun aFaceEmptiedByHandComesBackWithUndo() = runBlocking {
         val template = repository.openTemplate(download(), "Custom face")
         var s = template
         while (s.widgets.isNotEmpty()) {
@@ -269,13 +266,9 @@ class CustomFaceProjectTest {
             s = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
                 widget.x, widget.y, false, false)
         }
-        assertEquals(5, s.removedWidgets.size)
-        // Restored in the order they were removed from the bottom of the table.
-        s.removedWidgets.sortedBy { it.globalIndex }.forEach { removed ->
-            s = repository.restoreWidget(removed.id)
-        }
+        assertTrue(s.containerBytes < template.containerBytes)
+        repeat(5) { s = repository.undo() }
         assertEquals(5, s.widgets.size)
-        assertTrue(s.removedWidgets.isEmpty())
         assertEquals(template.containerBytes, s.containerBytes)
         repository = repository()
         assertEquals(5, repository.openProject(template.projectId).widgets.size)

@@ -188,7 +188,6 @@ class PictureWidgetRepositoryTest {
         s = repository.removeWidget(s.selectedVariant.basename, picture.globalIndex, picture.type, picture.sequenceId,
             picture.x, picture.y, requireFinal = false, applyToAllStyles = false)
         assertArrayEquals(pristine, bytes())
-        assertTrue("deleted, not parked under Removed", s.removedWidgets.isEmpty())
         val saved = checkpoint(s.projectId)
         assertTrue(saved.startsWith("{\"schema\":3,"))
         assertTrue("no picture table is left behind", !saved.contains("importOrigins"))

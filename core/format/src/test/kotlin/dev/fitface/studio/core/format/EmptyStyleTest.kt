@@ -11,9 +11,9 @@ import org.junit.Test
  * next.
  *
  * Removing the last widget was always permitted, and every edit that could follow it was
- * refused: the shared guard demanded a non-empty widget table, so Restore on a custom face
- * emptied by hand answered "style0.bin: style needs widgets and images" for all five of its
- * widgets, and the face could only be got back by resetting it.
+ * refused: the shared guard demanded a non-empty widget table, so a custom face emptied by
+ * hand answered "style0.bin: style needs widgets and images" to every edit, and could only
+ * be got back by resetting it.
  */
 class EmptyStyleTest {
     private val root = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot")))
@@ -28,36 +28,22 @@ class EmptyStyleTest {
 
     private fun records(c: Fit3Container) = FaceRecordParser.scanWidgets(c.entryByBasename(style))
 
-    /** Emptied highest first, restored lowest first — which puts every record back where it was. */
-    private fun emptied(source: Fit3Container): Pair<Fit3Container, List<ByteArray>> {
+    /** Every widget deleted, highest first, as the editor deletes them. */
+    private fun emptied(source: Fit3Container): Fit3Container {
         var current = source
-        val saved = mutableListOf<ByteArray>()
         records(source).reversed().forEach { record ->
-            val edit = StructuralEditor.removeWidget(current, listOf(style), record.globalIndex,
-                record.widgetType, record.sequenceId, record.x, record.y, requireFinal = false)
-            saved += edit.removedRecords.getValue(style)
-            current = edit.container
+            current = StructuralEditor.deleteWidget(current, listOf(style), record.globalIndex,
+                record.widgetType, record.sequenceId, record.x, record.y,
+                targetIndices = mapOf(style to record.globalIndex)).container
         }
         assertTrue(records(current).isEmpty())
         assertEquals(emptyList<ValidationIssue>(), current.validate().errors)
-        return current to saved.reversed()
-    }
-
-    @Test
-    fun anEmptiedStyleRestoresToExactlyWhatItWas() {
-        val template = CustomFaceTemplate.strip(face(CustomFaceTemplate.FACE_ID))
-        val (empty, saved) = emptied(template)
-        var current = empty
-        saved.forEach { raw ->
-            current = StructuralEditor.appendWidget(current, listOf(style), mapOf(style to raw)).container
-        }
-        assertArrayEquals(template.entryByBasename(style).data, current.entryByBasename(style).data)
-        assertArrayEquals(template.toByteArray(), current.toByteArray())
+        return current
     }
 
     @Test
     fun anEmptyStyleTakesABackgroundAndAnImport() {
-        val (empty, _) = emptied(CustomFaceTemplate.strip(face(CustomFaceTemplate.FACE_ID)))
+        val empty = emptied(CustomFaceTemplate.strip(face(CustomFaceTemplate.FACE_ID)))
         val panel = FaceRecordParser.panelSize(empty.entryByBasename(style))
         val withBackground = StructuralEditor.addBackgrounds(empty, listOf(style), panel.width, panel.height,
             IntArray(panel.width * panel.height) { 0xFF223344.toInt() }).container

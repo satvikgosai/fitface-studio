@@ -51,7 +51,7 @@ the app. The watch photo shows a real Bluetooth install.
 - Replace or add a background where the face has room for it, including
   copying the background from another face.
 - Move, resize, duplicate and remove supported widgets, and set text, lines and arc
-  gauges to any colour. Restore removed stock widgets and add widgets from other faces.
+  gauges to any colour. Add widgets from other faces.
   Arrange widgets in front of or behind each other. Rotate text, lines, arc gauges and
   pictures in 15° steps or to an exact angle, with an original-angle reset; pictures are
   redrawn from their original artwork.

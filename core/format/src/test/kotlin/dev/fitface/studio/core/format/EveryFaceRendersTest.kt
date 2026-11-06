@@ -411,12 +411,12 @@ class EveryFaceRendersTest {
     }
 
     /**
-     * Removal and duplication with "apply to every style" on, which have the same
+     * Deletion and duplication with "apply to every style" on, which have the same
      * per-variant matching problem as a move and blocked 785 of 2,833 selections
      * across 43 faces before variants without the widget were skipped.
      */
     @Test
-    fun everyStylesFirstCanvasWidgetSurvivesAnAllVariantRemoveRestoreAndDuplicate() {
+    fun everyStylesFirstCanvasWidgetSurvivesAnAllVariantDeleteAndDuplicate() {
         val failures = mutableListOf<String>()
         var cycles = 0
         containers.forEach { path ->
@@ -433,7 +433,7 @@ class EveryFaceRendersTest {
                         styleNames.filterNot { it == entry.basename }
                     val label = "$face/${entry.basename}#${widget.globalIndex}"
                     runCatching {
-                        val removal = StructuralEditor.removeWidget(
+                        val removal = StructuralEditor.deleteWidget(
                             source = source,
                             entryBasenames = order,
                             globalIndex = widget.globalIndex,
@@ -441,21 +441,12 @@ class EveryFaceRendersTest {
                             sequenceId = widget.sequenceId,
                             x = widget.x,
                             y = widget.y,
-                            requireFinal = false,
                         )
                         if (!removal.container.validate().isValid) {
                             failures += "$label: container invalid after removal"
                         }
                         if (entry.basename !in removal.removedRecords) {
                             failures += "$label: the selected style was not cut"
-                        }
-                        val restored = StructuralEditor.appendWidget(
-                            source = removal.container,
-                            entryBasenames = removal.removedRecords.keys.toList(),
-                            recordsByStyle = removal.removedRecords,
-                        )
-                        if (!restored.container.validate().isValid) {
-                            failures += "$label: container invalid after restore"
                         }
                         val duplicated = StructuralEditor.duplicateWidget(
                             source = source,
@@ -481,9 +472,9 @@ class EveryFaceRendersTest {
         )
     }
 
-    /** Removing the final widget is the structural edit the editor offers everywhere. */
+    /** Deleting the final widget of every style, artwork and all, leaves a valid container. */
     @Test
-    fun theFinalWidgetOfEveryStyleCanBeRemovedAndRestored() {
+    fun theFinalWidgetOfEveryStyleCanBeDeleted() {
         val failures = mutableListOf<String>()
         var cycles = 0
         containers.forEach { path ->
@@ -494,7 +485,7 @@ class EveryFaceRendersTest {
                     val label = "$face/${entry.basename}"
                     val target = FaceRecordParser.scanWidgets(entry).last()
                     runCatching {
-                        val removal = StructuralEditor.removeWidget(
+                        val deletion = StructuralEditor.deleteWidget(
                             source = source,
                             entryBasenames = listOf(entry.basename),
                             globalIndex = target.globalIndex,
@@ -503,22 +494,13 @@ class EveryFaceRendersTest {
                             x = target.x,
                             y = target.y,
                             requireFinal = true,
+                            targetIndices = mapOf(entry.basename to target.globalIndex),
                         )
-                        if (!removal.container.validate().isValid) {
-                            failures += "$label: container invalid after removal"
+                        if (!deletion.container.validate().isValid) {
+                            failures += "$label: container invalid after deletion"
                         }
-                        val restored = StructuralEditor.appendWidget(
-                            source = removal.container,
-                            entryBasenames = listOf(entry.basename),
-                            recordsByStyle = removal.removedRecords,
-                        )
-                        if (!restored.container.validate().isValid) {
-                            failures += "$label: container invalid after restore"
-                        }
-                        // Removing then re-appending the last record is a pure round
-                        // trip, so the bytes have to come back exactly.
-                        if (!restored.container.toByteArray().contentEquals(source.toByteArray())) {
-                            failures += "$label: remove/restore was not byte-identical"
+                        if (deletion.container.fileSize > source.fileSize) {
+                            failures += "$label: deletion grew the container"
                         }
                         cycles++
                     }.onFailure { failures += "$label: ${it.message}" }
@@ -526,7 +508,7 @@ class EveryFaceRendersTest {
         }
         assertTrue("no style exercised", cycles > 0)
         assertTrue(
-            "${failures.size} of $cycles remove/restore cycles failed:\n" +
+            "${failures.size} of $cycles deletions failed:\n" +
                 failures.take(40).joinToString("\n"),
             failures.isEmpty(),
         )

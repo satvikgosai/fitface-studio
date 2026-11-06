@@ -136,8 +136,8 @@ class MovingBackgroundRepositoryTest {
     }
 
     /**
-     * Deleted, not parked under Removed, with every frame: the face is left as Remove background
-     * leaves it — no background, the still one it replaced deleted too — and Undo brings it back.
+     * Deleted with every frame: the face is left as Remove background leaves it — no
+     * background, the still one it replaced deleted too — and Undo brings it back.
      */
     @Test fun removingItTakesEveryFrameAndUndoBringsItBack() = runBlocking {
         val expected = noBackground("00112")
@@ -145,7 +145,6 @@ class MovingBackgroundRepositoryTest {
         val added = repository.addMovingBackground(repository.readAnimation(gif("three.gif")), ImagePlacement(), 1)
         val removed = repository.removeMovingBackground()
         assertNull(removed.movingBackground)
-        assertTrue(removed.removedWidgets.isEmpty())
         assertFalse("no background is shown, not the one the moving one replaced", removed.selectedBackgroundShown)
         assertArrayEquals(expected, bytes())
         val undone = repository.undo()
@@ -162,7 +161,6 @@ class MovingBackgroundRepositoryTest {
         val removed = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
             widget.x, widget.y, false, false, null)
         assertNull(removed.movingBackground)
-        assertTrue(removed.removedWidgets.isEmpty())
         assertArrayEquals(expected, bytes())
     }
 
@@ -397,44 +395,42 @@ class MovingBackgroundRepositoryTest {
 
     /**
      * Remove background takes one of the rasters the face shipped with, and nothing after it is
-     * mistaken for one: a moving picture added and deleted again leaves no frame behind. A
-     * widget parked under Removed beforehand, positioned against the deleted background, is
-     * restored where it was.
+     * mistaken for one: a moving picture added and deleted again leaves no frame behind, and
+     * the widgets that were positioned against the background stay where they were.
      */
     @Test fun aRemovedBackgroundLeavesNothingStrandedOrMisplaced() = runBlocking {
         val opened = repository.openPackage(face("00112"))
-        val widget = opened.widgets.last { it.canEditPosition }
-        val parked = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
-            widget.x, widget.y, false, false, null).removedWidgets.single()
-        repository.removeBackground(thisStyleOnly = true)
-        val bare = bytes()
+        val bare = repository.removeBackground(thisStyleOnly = true)
+        val before = bytes()
+        assertEquals(
+            opened.widgets.drop(1).map { it.drawLeft to it.drawTop },
+            bare.widgets.map { it.drawLeft to it.drawTop },
+        )
 
         val withPicture = repository.addMovingPicture(repository.readAnimation(gif("three.gif")), 1, 32, 50, 20, 20)
         val picture = withPicture.widgets.last()
         repository.removeWidget("style0.bin", picture.globalIndex, picture.type, picture.sequenceId,
             picture.x, picture.y, false, false, null)
-        assertArrayEquals("every frame went with it", bare, bytes())
-
-        val restored = repository.restoreWidget(parked.id).widgets.last()
-        assertEquals(widget.drawLeft to widget.drawTop, restored.drawLeft to restored.drawTop)
+        assertArrayEquals("every frame went with it", before, bytes())
         assertTrue(repository.currentSnapshot().validationErrors.isEmpty())
     }
 
-    /** A widget parked under Removed survives the replacement and is restored where it was. */
-    @Test fun aRemovedWidgetSurvivesAReplacement() = runBlocking {
+    /**
+     * A stock widget deleted first frees its artwork for the frames, and stays deleted through
+     * moving backgrounds and a still replacement.
+     */
+    @Test fun aDeletedStockWidgetFreesRoomAndStaysDeleted() = runBlocking {
         val opened = repository.openPackage(face("00112"))
         val widget = opened.widgets.last { it.canEditPosition }
         val removed = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
             widget.x, widget.y, false, false, null)
-        val saved = removed.removedWidgets.single()
+        assertTrue("its artwork went with it", removed.containerBytes < opened.containerBytes)
         repository.addMovingBackground(repository.readAnimation(gif("forty.gif")), ImagePlacement(), 20)
         repository.addMovingBackground(repository.readAnimation(gif("three.gif")), ImagePlacement(), 1)
-        repository.replaceBackground(png(), ImagePlacement())
-        val restored = repository.restoreWidget(saved.id)
-        assertTrue(restored.removedWidgets.isEmpty())
-        assertNull(restored.movingBackground)
-        assertEquals(opened.widgets.size, restored.widgets.size)
-        assertTrue(restored.validationErrors.isEmpty())
+        val replaced = repository.replaceBackground(png(), ImagePlacement())
+        assertNull(replaced.movingBackground)
+        assertEquals(opened.widgets.size - 1, replaced.widgets.size)
+        assertTrue(replaced.validationErrors.isEmpty())
     }
 
     @Test fun oneTooLargeOrSomethingElseIsRefused() = runBlocking {

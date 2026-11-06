@@ -202,4 +202,22 @@ class DirectInstallStateTest {
             0f,
         )
     }
+
+    /**
+     * Steps 1 and 2 fold away once both hold, and come back on their own when either stops
+     * holding: nothing about them is remembered, so a revoked permission cannot hide.
+     */
+    @Test
+    fun thePhoneIsReadyOnlyWhileTheWatchAppIsFoundAndNearbyIsGranted() {
+        assertTrue(ready.phoneReady)
+        // Steps 3 and 4 have no say in it.
+        assertTrue(ready.copy(watchfacePeerCached = false, otaPeerCached = false).phoneReady)
+
+        assertFalse("revoked Nearby access", ready.copy(helperNearbyGranted = false).phoneReady)
+        assertFalse(
+            "no watch app or agent",
+            ready.copy(environment = ready.environment.copy(pluginInstalled = false, companionAppInstalled = false)).phoneReady,
+        )
+        assertFalse("not probed yet", ready.copy(environment = ready.environment.copy(probed = false)).phoneReady)
+    }
 }

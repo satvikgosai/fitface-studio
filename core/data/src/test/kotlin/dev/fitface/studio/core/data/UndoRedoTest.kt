@@ -113,8 +113,6 @@ class UndoRedoTest {
         val last = s.widgets.last()
         record(repository.removeWidget(s.selectedVariant.basename, last.globalIndex, last.type, last.sequenceId,
             last.x, last.y, false, false), EditKind.REMOVE)
-        assertEquals(1, s.removedWidgets.size)
-        record(repository.restoreWidget(s.removedWidgets.single().id), EditKind.RESTORE)
         val copied = s.widgets.first { it.type == 3 }
         record(repository.duplicateWidget(s.selectedVariant.basename, copied.globalIndex, copied.type,
             copied.sequenceId, copied.x, copied.y, false), EditKind.DUPLICATE)
@@ -129,7 +127,6 @@ class UndoRedoTest {
         }
         assertFalse("back at the package", s.isDirty)
         assertNull(s.undoKind)
-        assertTrue(s.removedWidgets.isEmpty())
 
         // And forward again.
         for (index in kinds.indices) {
@@ -141,19 +138,21 @@ class UndoRedoTest {
         assertTrue(s.widgets.last().importedFromFaceId != null)
     }
 
-    @Test fun undoingARemovalBringsTheWidgetBackAndRedoSavesItForRestoreAgain() = runBlocking {
+    /** Deleting takes the artwork; Undo brings widget and artwork back, Redo takes them again. */
+    @Test fun undoingADeletionBringsTheWidgetAndItsArtworkBack() = runBlocking {
         var s = repository.openPackage(face("00106"))
+        val pristine = bytes()
+        val opened = s
         val last = s.widgets.last()
         s = repository.removeWidget(s.selectedVariant.basename, last.globalIndex, last.type, last.sequenceId,
             last.x, last.y, false, false)
-        val removedId = s.removedWidgets.single().id
+        val deleted = bytes()
+        assertEquals(opened.widgets.size - 1, s.widgets.size)
         s = repository.undo()
-        assertTrue(s.removedWidgets.isEmpty())
+        assertArrayEquals(pristine, bytes())
         assertEquals(last.globalIndex, s.widgets.last().globalIndex)
         s = repository.redo()
-        assertEquals(removedId, s.removedWidgets.single().id)
-        s = repository.restoreWidget(removedId)
-        assertTrue(s.removedWidgets.isEmpty())
+        assertArrayEquals(deleted, bytes())
     }
 
     @Test fun undoingAStyleDeletionRestoresTheStylesAndTheActiveOne() = runBlocking {

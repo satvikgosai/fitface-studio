@@ -269,9 +269,6 @@
   .dev-badge.setup, .dev-badge.checking { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
   .dev-badge.missing { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
 
-  /* ---- removed widget row ---- */
-  .removed { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 8px; background: var(--sc-low); border: 1px solid var(--outline-variant); }
-  .removed-accent { width: 3px; height: 28px; background: color-mix(in srgb, var(--warning) 60%, transparent); flex: none; }
 
   /* ---- empty state ---- */
   .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 8px 0; }
@@ -639,15 +636,6 @@
           <div class="icon-btn" aria-label="Project actions">⋯</div><span class="glyph-btn">&rsaquo;</span>
         </div>
 
-        <div class="caption">RemovedWidgetRow — kept so it can go back</div>
-        <div class="removed">
-          <div class="removed-accent"></div>
-          <div style="flex:1;min-width:0">
-            <div class="peek-name">Widget #7</div>
-            <div class="proj-meta">Image &middot; 40&times;40 &middot; 4 styles</div>
-          </div>
-          <div class="fit-btn secondary" style="min-height:38px;padding:0 12px">Restore</div>
-        </div>
 
         <div class="caption">ValidationCheck — pass / fail</div>
         <div class="check"><span class="mark ok">&#10003;</span><span class="lbl">Per-entry CRC</span><span class="res">pass</span></div>
@@ -657,6 +645,12 @@
         <div>
           <div class="step"><div class="step-dot done">&#10003;</div><div><div class="step-title">Connect the watch in its companion app</div><div class="step-sub">Companion app and plugin found</div></div></div>
           <div class="step pending"><div class="step-dot">3</div><div><div class="step-title">Discover the watch-face and OTA peers</div><div class="step-sub">Needs the watch connected</div></div></div>
+        </div>
+
+        <div class="caption">Install checklist — steps 1 and 2 folded while both are done (▾ shows them; either coming undone brings its row back)</div>
+        <div>
+          <div class="step"><div class="step-dot done">&#10003;</div><div style="flex:1"><div class="step-title">Phone ready</div><div class="step-sub">Companion app and plugin found &middot; Nearby access granted</div></div><div class="step-sub">&#9662;</div></div>
+          <div class="step pending"><div class="step-dot">3</div><div><div class="step-title">Find the watch for transfer</div><div class="step-sub">Keep the plugin&rsquo;s Nearby devices access on.</div></div></div>
         </div>
 
         <div class="caption">Device badge — linked / setup / checking / missing</div>
@@ -823,15 +817,6 @@
           <div class="icon-btn" aria-label="Project actions">⋯</div><span class="glyph-btn">&rsaquo;</span>
         </div>
 
-        <div class="caption">RemovedWidgetRow — kept so it can go back</div>
-        <div class="removed">
-          <div class="removed-accent"></div>
-          <div style="flex:1;min-width:0">
-            <div class="peek-name">Widget #7</div>
-            <div class="proj-meta">Image &middot; 40&times;40 &middot; 4 styles</div>
-          </div>
-          <div class="fit-btn secondary" style="min-height:38px;padding:0 12px">Restore</div>
-        </div>
 
         <div class="caption">ValidationCheck — pass / fail</div>
         <div class="check"><span class="mark ok">&#10003;</span><span class="lbl">Per-entry CRC</span><span class="res">pass</span></div>
@@ -841,6 +826,12 @@
         <div>
           <div class="step"><div class="step-dot done">&#10003;</div><div><div class="step-title">Connect the watch in its companion app</div><div class="step-sub">Companion app and plugin found</div></div></div>
           <div class="step pending"><div class="step-dot">3</div><div><div class="step-title">Discover the watch-face and OTA peers</div><div class="step-sub">Needs the watch connected</div></div></div>
+        </div>
+
+        <div class="caption">Install checklist — steps 1 and 2 folded while both are done (▾ shows them; either coming undone brings its row back)</div>
+        <div>
+          <div class="step"><div class="step-dot done">&#10003;</div><div style="flex:1"><div class="step-title">Phone ready</div><div class="step-sub">Companion app and plugin found &middot; Nearby access granted</div></div><div class="step-sub">&#9662;</div></div>
+          <div class="step pending"><div class="step-dot">3</div><div><div class="step-title">Find the watch for transfer</div><div class="step-sub">Keep the plugin&rsquo;s Nearby devices access on.</div></div></div>
         </div>
 
         <div class="caption">Device badge — linked / setup / checking / missing</div>
@@ -1007,7 +998,7 @@
     <li>The screen states; the ⓘ explains. <code>FitInfo</code> is a drawn ⓘ sized to the text it follows (12dp beside body text and in buttons, 10dp after a <code>MicroLabel</code>, 9dp in a tag; Compose widens its touch area to 48dp) labelled “About ‹topic›”. <code>FitHeading</code> is a <code>MicroLabel</code> with one, <code>FitTag</code> a badge that is its own trigger (a widget's kind, NO OUTLINE, BACKGROUND, OPAQUE, SAMPLE PREVIEW), <code>FitInfoLink</code> a text trigger for a question (“Face not changing?”), and <code>FitButton(info =)</code> puts it inside a button after the label, never beside the button. The bubble is a focusable popup anchored to its trigger: above when it fits, otherwise below; closed by an outside tap, back or the trigger, never by a timer; one open at a time. A key closes it when its subject changes. Shared controls (Position, Size, Fit, Colour) carry the same ⓘ on every page.</li>
     <li><code>FitDetails</code> is for reference facts someone opens on purpose: the project's file details, Install's Checks and Audit, and Transfer details. It is a 48dp-minimum full-header button with action label, announced expanded state and restored state. Put long expanded content in the page/sheet scroll region so pinned actions stay reachable. Explanations do not go in drop-downs.</li>
     <li>Gestures nothing on screen can show (hold to select several, hold to compare, pinch, drag on the face) keep a visible line through <code>rememberLearnedHint</code> until done once on the device, then that line goes. The drag line leaves a blank of the same height so the face does not resize.</li>
-    <li>Use <code>styleLabel</code> from the parsed style number plus one, not a list index. Use <code>variantLabel</code> for AOD everywhere, including accessibility; raw sampler IDs remain protocol data. Removed rows retain typed category/model facts rather than preformatted technical labels, with defaults for older stored data.</li>
+    <li>Use <code>styleLabel</code> from the parsed style number plus one, not a list index. Use <code>variantLabel</code> for AOD everywhere, including accessibility; raw sampler IDs remain protocol data.</li>
     <li>A custom row <code>contentDescription</code> must include its identity and visible status, including OUTDATED. Edit widget names a widget's kind and properties as tags (kind, NO OUTLINE/BACKGROUND, OPAQUE, COPY OF #N); the kind's bubble holds the record, and a no-outline widget's support message is in its own tag, not repeated there.</li>
     <li>Persistent failures have persistent state (<code>catalogFailure</code>); a sheet shows <code>sheetError</code> because it covers the snackbar. Await <code>showSnackbar</code>, then clear in <code>finally</code>: clearing the effect's key first cancels the message.</li>
   </ul>

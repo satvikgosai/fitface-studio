@@ -46,8 +46,8 @@ data class WidgetImportOrigins(
     })
 
     /**
-     * Drops the artwork no live widget and no saved removal ([referenced]) still needs —
-     * what is left once an imported widget, and every duplicate of it, has been deleted.
+     * Drops the artwork no live widget still needs — what is left once an imported widget,
+     * and every duplicate of it, has been deleted.
      *
      * One donor is always kept. A table is what lets a container carry what an import added
      * beside the widget — its font resources, its dictionary entries — and an empty one is
@@ -56,8 +56,8 @@ data class WidgetImportOrigins(
      * of nothing but deleted pictures goes entirely (null), and the project returns to the
      * checkpoint schema older builds read.
      */
-    fun pruned(referenced: Set<String>): WidgetImportOrigins? {
-        val needed = widgets.filter { it.indices.isNotEmpty() || it.id in referenced }
+    fun pruned(): WidgetImportOrigins? {
+        val needed = widgets.filter { it.indices.isNotEmpty() }
         val kept = needed.ifEmpty {
             listOfNotNull(widgets.filter { it.kind == AddedWidgetKind.DONOR }.minByOrNull { it.baseline.length })
         }
@@ -70,7 +70,7 @@ data class WidgetImportOrigins(
         require(originalSha256 == digest(original.toByteArray())) { "Imported artwork belongs to a different original face." }
         require(widgets.isNotEmpty() && widgets.size <= 256) { "Invalid imported artwork table." }
         require(widgets.map { it.id }.distinct().size == widgets.size) { "Duplicate imported artwork identity." }
-        // Keeping removed artwork is intentional: Restore and resize need the same original.
+        // Baselines are kept while their widgets live: resize starts from the same original.
         require(widgets.sumOf { it.baseline.length.toLong() } <= MAX_BASE64_BYTES) {
             "This project has too much saved imported artwork. Start a new project to add more."
         }

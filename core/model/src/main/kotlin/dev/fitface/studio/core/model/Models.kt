@@ -824,67 +824,6 @@ data class EditorVariant(
     }
 }
 
-/**
- * A widget record that was removed from the container and can be appended back.
- * [recordsByVariant] holds the exact bytes that were cut out of each face entry.
- *
- * It carries the *facts* the Removed list shows and no assembled copy: this module is
- * framework-free and cannot reach a resource table, so a label built here is a string no
- * translator can see and no screen can reword. It used to hold `label = "Widget #12"` for
- * exactly that reason, spelled differently from the `Widget #%1$d` two lines away in the
- * editor's own resources.
- */
-data class RemovedWidget(
-    val id: Long,
-    /**
-     * Where the record sat when it was cut, which is a historical marker rather than a
-     * live address: `removeWidget` renumbers everything after the record it cuts, so this
-     * names the widget the reader removed and must not be used to resolve it. Negative
-     * when it is not known, which is only a session written before this field existed.
-     */
-    val globalIndex: Int,
-    val widgetType: Int,
-    val sequenceId: Int,
-    val x: Int,
-    val y: Int,
-    val width: Int,
-    val height: Int,
-    /**
-     * The live reading it followed, named, or null where the format names none — the same
-     * two fields [WidgetGuide] carries, copied at removal because the guide is gone once
-     * the record is out of the container.
-     */
-    val sourceLabel: String? = null,
-    val followsReading: Boolean = false,
-    val recordsByVariant: Map<String, ByteArray>,
-    val importOriginId: String? = null,
-    val nativeIdentityRecorded: Boolean = false,
-    val nativeSourceIndices: Map<String, Int> = emptyMap(),
-    val duplicateSourceVariants: Set<String> = emptySet(),
-) {
-    /** What it draws, named — the same label the widget list shows for a live record. */
-    val category: WidgetCategory get() = WidgetCategory.forWidgetType(widgetType)
-
-    /**
-     * How many **numbered styles** the record was cut from.
-     *
-     * Counted rather than taken from `recordsByVariant.size`, which counts *entries*: an
-     * always-on removal writes one entry that is not a style, and reporting it as "1
-     * styles" is the same mistake `editor_audit_detail_aod` exists to avoid. AOD is never
-     * joined to a style edit, so in practice this is either the style count or zero.
-     */
-    val styleCount: Int
-        get() = recordsByVariant.keys.count { EditorVariant.styleNumberOf(it) != null }
-
-    /** Whether the record was cut from the always-on display. */
-    val touchedAod: Boolean get() = AOD_ENTRY_NAME in recordsByVariant
-
-    override fun equals(other: Any?): Boolean = this === other ||
-        (other is RemovedWidget && other.id == id)
-
-    override fun hashCode(): Int = id.hashCode()
-}
-
 data class PreviewFrame(
     val width: Int,
     val height: Int,
@@ -913,7 +852,7 @@ data class EditAuditSummary(
  * Coarse on purpose; the diagnostics history keeps the precise operation.
  */
 enum class EditKind {
-    MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, RESTORE, DUPLICATE, IMPORT, BACKGROUND,
+    MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, DUPLICATE, IMPORT, BACKGROUND,
     STYLES, THUMBNAIL, TEXT, PICTURE, MOVING_BACKGROUND, MOVING_PICTURE,
 }
 
@@ -970,7 +909,6 @@ data class EditorSnapshot(
     val widgetOverlay: PreviewFrame,
     val widgetImageLayers: List<WidgetImageLayer>,
     val widgets: List<WidgetGuide>,
-    val removedWidgets: List<RemovedWidget> = emptyList(),
     /**
      * Style name → the package's own preview image for that style, on disk.
      *
@@ -1582,6 +1520,11 @@ interface WatchFaceRepository {
         applyToAllStyles: Boolean,
     ): EditorSnapshot
 
+    /**
+     * Deletes a widget, and every raster nothing draws once it is gone, from the selected
+     * style or from every style that carries it. Undo brings it back; there is no list of
+     * removed widgets to restore from.
+     */
     suspend fun removeWidget(
         styleName: String,
         globalIndex: Int,
@@ -1604,9 +1547,6 @@ interface WatchFaceRepository {
         applyToAllStyles: Boolean,
         group: Long? = null,
     ): EditorSnapshot
-
-    /** Re-appends a widget that [removeWidget] took out, at the end of the table. */
-    suspend fun restoreWidget(removedId: Long): EditorSnapshot
 
     /** Re-renders the face-picker thumbnail for the selected style. */
     suspend fun refreshThumbnail(): EditorSnapshot

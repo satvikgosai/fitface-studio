@@ -54,13 +54,6 @@
     <string name="editor_delete_project_message">@string/ui_delete_project_message</string>
     <string name="editor_delete_project_confirm">@string/ui_delete</string>
     <string name="editor_widget_index_unknown">—</string>
-    <!--
-      A removed record's title. Separate from `editor_selection_widget` because the index
-      may be unknown: a session written before the index was stored has only the label that
-      build assembled, and where that cannot be read this says so rather than inventing a
-      number. Both are worded identically on purpose.
-    -->
-    <string name="editor_selection_widget_or_unknown">Widget #%1$s</string>
 
     <!-- Page subtitles -->
     <string name="editor_subtitle_canvas">face %1$s · %2$s</string>
@@ -114,7 +107,6 @@
     <string name="editor_edit_kind_colour">colour change</string>
     <string name="editor_edit_kind_arrange">layer order change</string>
     <string name="editor_edit_kind_remove">removal</string>
-    <string name="editor_edit_kind_restore">restore</string>
     <string name="editor_edit_kind_duplicate">duplicate</string>
     <string name="editor_edit_kind_import">import</string>
     <string name="editor_edit_kind_background">background change</string>
@@ -176,15 +168,6 @@
     <string name="editor_widgets_on_canvas_title">On the canvas</string>
     <string name="editor_widgets_off_canvas_title">Edit from this list</string>
     <string name="editor_widgets_off_canvas_detail">Select clock hands and full-face backgrounds here; they have no selectable outline on the canvas. Supported artwork still appears in the preview.</string>
-    <string name="editor_widgets_removed_title">Removed</string>
-    <!-- The count chip at the top of the list. Removals used to be the third section of
-         a 25-row scroll, so putting one back meant finding it first. -->
-    <plurals name="editor_widgets_removed_count">
-        <item quantity="one">%1$d removed</item>
-        <item quantity="other">%1$d removed</item>
-    </plurals>
-    <string name="editor_widgets_removed_show">Show removed widgets</string>
-    <string name="editor_widgets_removed_hide">Hide removed widgets</string>
 
     <!-- Widget row -->
     <string name="editor_row_placement_background">Background</string>
@@ -203,27 +186,12 @@
     -->
     <string name="editor_row_frames">%1$d frames</string>
     <string name="editor_row_position">%1$d, %2$d</string>
-    <!--
-      The Removed list sits directly under the live one and has to read like it: what the
-      record draws, the reading it followed, its size, and what the removal reached. It used
-      to say "type 4 · seq 29 · 60×60 · 3 styles" — the format layer's own numbers, beside
-      rows saying "Sprite · steps". The last argument is a phrase, not a count, because an
-      always-on removal touches one entry that is not a style at all.
-    -->
-    <string name="editor_row_removed">%1$s · %2$s · %3$d×%4$d · %5$s</string>
-    <plurals name="editor_row_removed_styles">
-        <item quantity="one">%1$d style</item>
-        <item quantity="other">%1$d styles</item>
-    </plurals>
-    <string name="editor_restore">Restore</string>
 
     <!-- Inspector -->
     <string name="editor_inspector_empty">Select a widget from the canvas or list.</string>
-    <string name="editor_remove_title">Remove widget #%1$d?</string>
-    <string name="editor_remove_body_all_styles">Removes it from every style that has it. You can restore it from Removed.</string>
-    <string name="editor_remove_body_one_style">Removes it from %1$s. You can restore it from Removed.</string>
-    <string name="editor_remove_confirm">Remove</string>
-    <!-- A widget from another face is deleted rather than kept under Removed. -->
+    <!-- Every widget is deleted with whatever artwork no other widget draws. -->
+    <string name="editor_remove_body_all_styles">Deletes it and its artwork from every style that has it. Artwork another widget still draws stays. Undo brings it back.</string>
+    <string name="editor_remove_body_one_style">Deletes it and its artwork from %1$s. Artwork another widget still draws stays. Undo brings it back.</string>
     <string name="editor_delete_title">Delete widget #%1$d?</string>
     <string name="editor_delete_body_imported">Deletes it and its artwork. Undo brings it back.</string>
     <string name="editor_delete_confirm">@string/ui_delete</string>
@@ -240,14 +208,14 @@
     <string name="editor_selection_clear">@string/ui_clear_selection</string>
     <string name="editor_selection_duplicate_a11y">Duplicate all %1$d</string>
     <string name="editor_selection_remove_a11y">Remove all %1$d</string>
-    <string name="editor_remove_set_title">Remove %1$d widgets?</string>
+    <string name="editor_remove_set_title">Delete %1$d widgets?</string>
     <plurals name="editor_remove_set_stock_all">
-        <item quantity="one">%1$d is removed from every style that has it. You can restore it from Removed.</item>
-        <item quantity="other">%1$d are removed from every style that has them. You can restore them from Removed.</item>
+        <item quantity="one">%1$d is deleted with its artwork from every style that has it. Artwork another widget still draws stays.</item>
+        <item quantity="other">%1$d are deleted with their artwork from every style that has them. Artwork another widget still draws stays.</item>
     </plurals>
     <plurals name="editor_remove_set_stock_one">
-        <item quantity="one">%1$d is removed from %2$s. You can restore it from Removed.</item>
-        <item quantity="other">%1$d are removed from %2$s. You can restore them from Removed.</item>
+        <item quantity="one">%1$d is deleted with its artwork from %2$s. Artwork another widget still draws stays.</item>
+        <item quantity="other">%1$d are deleted with their artwork from %2$s. Artwork another widget still draws stays.</item>
     </plurals>
     <plurals name="editor_remove_set_duplicate">
         <item quantity="one">%1$d copy is deleted.</item>
@@ -476,6 +444,8 @@
     <string name="editor_setup_step2_title">Grant FitFace Nearby devices access</string>
     <string name="editor_setup_step2_why">Required to connect to the watch.</string>
     <string name="editor_setup_step2_done">Granted</string>
+    <string name="editor_setup_phone_ready">Phone ready</string>
+    <string name="editor_setup_phone_ready_detail">%1$s · Nearby access granted</string>
     <string name="editor_setup_step3_title">Find the watch for transfer</string>
     <string name="editor_setup_step3_why">Keep the plugin’s Nearby devices access on.</string>
     <string name="editor_setup_step3_why_legacy">Keep the plugin enabled.</string>
@@ -524,10 +494,9 @@
       style would have it disagree with every "Style N" the rest of the app shows.
     -->
     <string name="editor_payload_detail">face %1$s  ·  sampler %2$s\nsha256 %3$s\npayload %4$d B, watch limit 4 MiB</string>
-    <string name="editor_destructive_note">A duplicate is added at the end of the drawing order, 8 px right and down from its original (the other way near an edge), and selected for editing. Removing a duplicate deletes it instead of listing it under Removed. Removal and duplication rebuild the widget table and its checksums.</string>
+    <string name="editor_destructive_note">A duplicate is added at the end of the drawing order, 8 px right and down from its original (the other way near an edge), and selected for editing. Removing a widget deletes it with every raster no other widget draws, freeing that space. Removal and duplication rebuild the widget table and its checksums.</string>
     <string name="editor_transfer_progress">%1$d/%2$d windows · %3$d/%4$d bytes</string>
     <string name="editor_preview_explanation">Uses the face’s text and font sizes with substitute glyphs. Missing preview content is still included when sent.</string>
-    <string name="editor_restore_explanation">Restored widgets are placed at the end of the drawing order.</string>
     <string name="editor_styles_details">About these previews</string>
     <string name="editor_connection_details">Connection details</string>
     <string name="editor_setup_details">Why this order?</string>

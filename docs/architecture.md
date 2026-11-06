@@ -41,7 +41,7 @@ its own state machine and freezes a copy of the validated bytes before transfer.
 ## Invariants
 
 1. Repository edit commits roll back container, audit, active style, selected variant,
-   import origins and removed widgets when snapshot/persistence fails. Reset is a
+   import origins and lineage when snapshot/persistence fails. Reset is a
    separate path with its own persistence handling, not a bypass of validation.
 2. Structural edits reparse and revalidate before acceptance.
 3. `Session.validatedBytes()` is the only path to the watch for a face: size, magic, errors,
@@ -91,7 +91,7 @@ This composition also supplies Install, the selected Styles row and explicit
 face-picker thumbnail refresh. `preview.bin` and packaged style PNGs remain useful as
 **unedited references**, never as a source of editable widget pixels. Refreshing a
 thumbnail cannot feed its scaled pixels back into the scene. Original-container
-identity matching remains necessary for pristine resize resampling and restoration,
+identity matching remains necessary for pristine resize resampling and resets,
 but it is no longer a prerequisite for a widget to draw.
 
 The sample is 28 December 2024, 10:08:00, with illustrative health readings.
@@ -101,6 +101,13 @@ resource-based preview, not a pixel-exact emulator of the watch's GUI or live se
 
 `CanvasIntegrityTest` exercises edit chains with the production text rasterizer;
 `ResourceCanvasCorpusTest` checks every style and AOD without `preview.bin`.
+`StockThumbnailAgreementTest` compares every stock style's render with its own picker
+thumbnail in `preview.bin` and fails where the thumbnail shows artwork with nothing of
+ours near it. The one exception (2026-11-06, 99 faces) is `00011` ("Big info") style 0:
+its thumbnail and store screenshot show three activity rings drawn as a heart, but
+`style0.bin` holds only the time and date (the same six records as its AOD) and the
+package carries nothing else for it. Whatever the watch draws there comes from outside
+the container, so the canvas cannot show or edit it; unverified on hardware.
 Synthetic tests cover all seventeen constructors, compositing, pivots, text programs,
 alpha, z-order, clipping and fixed stroke width. Set `FITFACE_CANVAS_CONTACT_SHEET`
 to an output PNG path when running the resource corpus test to generate a stock/style/AOD
@@ -115,7 +122,7 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/catalog-cache/packages/<appId>@<versionCode>.apk` | Downloaded packages; older versions evicted |
 | `filesDir/projects/<id>/source.apk` | The package a project was opened from |
 | `filesDir/projects/<id>/edited.bin` | Legacy edited container, read for backward compatibility |
-| `filesDir/projects/<id>/session.json` | Legacy removed records and thumbnail state |
+| `filesDir/projects/<id>/session.json` | Legacy session state beside `edited.bin` (its removed records are read and ignored) |
 | `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state and original widget identities; the row names the committed file, and the open session's undo and redo steps name the others |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
@@ -136,8 +143,8 @@ each page clears the other kind's finished result when it opens.
 
 `WatchFaceRepositoryImpl.commit` restores all session state if producing or saving
 an edit fails. Every new edit writes a new immutable `edit-<UUID>.checkpoint`
-under `NonCancellable`, containing the BIN, native identities, donor provenance,
-removed records and thumbnail state, then swaps the Room pointer. A failed swap
+under `NonCancellable`, containing the BIN, native identities, donor provenance
+and thumbnail state, then swaps the Room pointer. A failed swap
 removes the candidate file. No BIN can commit independently of the metadata needed to
 interpret or restore it. Reset clears the pointer before removing old files. Legacy
 BIN/session pairs remain readable and migrate on their next edit; missing checkpoints
@@ -168,7 +175,7 @@ row moves, so a step that cannot be shown is never made current.
 - **Bounded.** 30 steps and 48 MiB of checkpoint files, oldest dropped first; a 4 MiB
   face therefore keeps about eight. History gives itself up for the session, before
   writing, when the phone lacks room for the next checkpoint and a 16 MiB margin.
-- **Callers that change the session before committing** (removal, restore, thumbnail)
+- **Callers that change the session before committing** (thumbnail)
   pass the true before-state to `commit`.
 
 `UndoRedoTest` walks every kind of edit back and forward byte for byte, and covers style
@@ -262,7 +269,7 @@ assets/bandface_info.json       face name and sampler ID
 assets/SM-R390_00046_2_0.png     default style previews
 fitface/project.json            name, face, store version, selected style
 fitface/edited.bin              optional edited container
-fitface/session.json            removed records and imported-resource provenance
+fitface/session.json            widget identities and imported-resource provenance
 ```
 
 `Fit3Apk.readsMember` is the single predicate shared by reader and exporter. When
@@ -280,14 +287,14 @@ Schemas 1 and 2 remain readable. New edited projects use schema 3, which require
 `SessionLineage` and an edited BIN together. It binds the original container digest,
 current-to-original variant names and every non-imported widget to its original
 index (or an explicit unknown/generated origin), including duplicate status.
-Insertion, removal and restore supply index changes; subsequent edits never infer
+Insertion and deletion supply index changes; subsequent edits never infer
 identity from the new index. Legacy projects use the existing matching algorithm
-once when upgrading; historical ambiguity cannot be reconstructed. Saved removals
-retain original identities per variant. Database schema remains 5. Vendor
+once when upgrading; historical ambiguity cannot be reconstructed. Removed records
+saved by builds that offered Restore are read and ignored. Database schema remains 5. Vendor
 pristine bytes remain unchanged; Reset removes imports. `WidgetImportOrigins` tracks
 an explicit origin ID, donor face, target variant, current indices and compact pristine
-entry with original rasters. Removal/insertion remaps indices; restore/duplicate
-retain origin links. Native matching excludes import indices. Donor cache eviction
+entry with original rasters. Deletion/insertion remaps indices; duplicates retain
+origin links, and an origin with no live widget is pruned. Native matching excludes import indices. Donor cache eviction
 cannot affect a saved import, and resize always uses donor originals.
 
 Style deletion composes an injective, ordered survivor map from current variant
@@ -302,7 +309,7 @@ original identity-only path contract and upgrade on their next edit.
 Schema 4 is schema 3 plus `SessionLineage.artworkTurns`: the angle of each turned
 Static/Sprite artwork, which no byte of the container records and the pixels cannot
 reveal. It is keyed by artwork — `native:<original variant>:<lowest original image index>`
-or `import:<origin id>` — so removal, restore, duplication, reordering and added
+or `import:<origin id>` — so deletion, duplication, reordering and added
 backgrounds need no remap; style deletion drops keys of deleted original variants and a
 commit drops keys of deleted imports. A project is written at schema 4 only while a turn
 exists and returns to 3 when every turn is reset, because readers decode with
@@ -313,7 +320,7 @@ A moving background ([format](bin-format.md#adding-a-moving-background)) or movi
 ([format](bin-format.md#adding-a-moving-picture)) needs no schema: its record is an added
 widget with no original, like an added still background, its timing lives in the record,
 and nothing about the GIF or video is kept. The snapshot tells a moving picture apart from
-its record. Removing either deletes it with its frames instead of parking it under Removed.
+its record. Removing either deletes it with its frames, as every widget is deleted.
 Video frames are read by `AndroidVideoSource` in `:core:data`, through the platform's
 `MediaMetadataRetriever`, into a frame cache file under the app's cache directory
 (`VideoFrameFiles`). The editor releases every read but the one being placed whenever that
@@ -333,8 +340,7 @@ container last, so the projects list finds the style map before any import basel
 (a picture's can be hundreds of kilobytes). See
 [format: adding a picture](bin-format.md#adding-a-picture).
 
-The same checkpoint commits survivor identities, filtered/remapped removed records
-and active-style fallback with the edited BIN. Packaged PNG files retain pristine
+The same checkpoint commits survivor identities and active-style fallback with the edited BIN. Packaged PNG files retain pristine
 names; the editor and library resolve them through the survivor map. The library
 reads only that map, from the head of each checkpoint (`readCheckpointVariants`): the
 session state is written lineage first and container last, so the read stops within
@@ -361,7 +367,7 @@ those names earlier, but neither behaviour is the containment mechanism.
 | Unopenable pristine container | Same validation/error funnel as package download |
 | Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
 | Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions; schema 3: declared ordered style survivors and validated shared-resource closure |
-| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities, the original digest and valid saved removals; schema 4 also requires saved artwork turns naming existing original artwork or imports; schema 5 requires a picture origin, and any other schema refuses one |
+| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities and the original digest; schema 4 also requires saved artwork turns naming existing original artwork or imports; schema 5 requires a picture origin, and any other schema refuses one |
 
 Clamp manifest strings; an invalid selected-style name becomes no saved selection.
 After validation, creation uses the row/files cleanup contract above. Failed import

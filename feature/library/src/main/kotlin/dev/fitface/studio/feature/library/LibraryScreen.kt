@@ -321,7 +321,7 @@ private fun LibraryScreen(
                 )
                 LibraryPage.Projects -> ProjectsList(
                     state = state,
-                    enabled = !state.isWorking,
+                    enabled = !state.isBusy,
                     openingProjectId = state.openingProjectId,
                     onQuery = onProjectQuery,
                     onSort = onProjectSort,
@@ -350,7 +350,7 @@ private fun LibraryScreen(
             uneditable = face.appId in state.uneditableAppIds,
             takesPhotos = state.takesPhotos(face),
             packageOnDevice = state.selectedFaceCached,
-            projectsEnabled = !state.isWorking,
+            projectsEnabled = !state.isBusy,
             openingProjectId = state.openingProjectId,
             error = state.sheetError,
             onDismiss = onDismissFace,
@@ -437,7 +437,7 @@ internal fun LibraryHeader(
                     )
                 }
             } else {
-                TextButton(onClick = onImport, enabled = !state.isWorking) {
+                TextButton(onClick = onImport, enabled = !state.isBusy) {
                     Text(
                         stringResource(R.string.library_action_import),
                         style = MaterialTheme.typography.labelMedium,
@@ -553,7 +553,7 @@ private fun WatchFaceGrid(
                 sortOptions = CatalogSort.entries,
                 sort = state.sort,
                 sortReversed = state.sortReversed,
-                // `canSelectFace`, not `isWorking`. The grid is painted from the on-disk
+                // `canSelectFace`, which leaves out a catalogue refresh. The grid is painted from the on-disk
                 // cache before the network is touched, so `isLoadingCatalog` is true for the
                 // whole opening window of every launch while the screen already looks ready
                 // — and re-sorting a list conflicts with a refresh no more than opening the
@@ -599,7 +599,7 @@ private fun WatchFaceGrid(
             gridItems(state.visibleFaces, key = CatalogFace::productId) { face ->
                 WatchFaceCard(
                     face = face,
-                    // `canSelectFace`, like the sort chips above — not `isWorking`. The
+                    // `canSelectFace`, like the sort chips above, which leaves out a refresh. The
                     // grid is drawn from the on-disk cache before the network is touched,
                     // so `isLoadingCatalog` is true for the whole opening window of every
                     // launch while the screen already looks ready, and a card refusing the
@@ -973,10 +973,9 @@ private fun FaceDetailsSheet(
                     },
                     onClick = onDownload,
                     modifier = Modifier.fillMaxWidth(),
-                    // `openingProjectId`, not `projectsEnabled`: the latter is `isWorking`,
-                    // and a catalogue refresh must not close this button any more than it
-                    // closes the sheet. An open in flight must, and did not — it is the
-                    // control directly under the rows that start one.
+                    // `openingProjectId`, not `projectsEnabled`: the latter is `isBusy`, which
+                    // this button's own download sets. An open in flight must close it, and
+                    // did not once — it is the control directly under the rows that start one.
                     enabled = !downloading && !uneditable && openingProjectId == null,
                     loading = downloading,
                 )

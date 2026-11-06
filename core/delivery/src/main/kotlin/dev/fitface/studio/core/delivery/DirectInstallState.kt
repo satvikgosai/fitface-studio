@@ -172,6 +172,13 @@ data class DirectInstallState(
         else -> false
     }
 
+    /**
+     * The once-per-phone steps, 1 and 2, both hold right now. Read live, not remembered: an
+     * uninstalled watch app or revoked Nearby access makes this false again by itself.
+     */
+    val phoneReady: Boolean
+        get() = isStepDone(SetupStep.COMPANION_PRESENT) && isStepDone(SetupStep.HELPER_PERMISSION)
+
     /** Discovery is the step the checklist is waiting on. */
     val awaitingDiscovery: Boolean
         get() = helperNearbyGranted && !peersCached

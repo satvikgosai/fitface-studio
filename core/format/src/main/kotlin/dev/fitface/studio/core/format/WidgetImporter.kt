@@ -26,11 +26,9 @@ data class WidgetImportEdit(
  */
 data class FontSlots(val pristineCount: Int, val reserved: Set<Int> = emptySet()) {
     companion object {
-        /** Slots for a session: its pristine container, its saved removals and its imports. */
-        fun of(original: Fit3Container, savedRecords: Collection<ByteArray>,
-            origins: WidgetImportOrigins?): FontSlots {
+        /** Slots for a session: its pristine container and its imports. */
+        fun of(original: Fit3Container, origins: WidgetImportOrigins?): FontSlots {
             val reserved = buildSet {
-                savedRecords.forEach { raw -> bindingNamedBy(raw)?.let(::add) }
                 origins?.widgets?.forEach { origin ->
                     val baseline = Base64.getDecoder().decode(origin.baseline)
                     if (baseline.size > STYLE_HEADER_SIZE) {
@@ -274,7 +272,7 @@ object WidgetImporter {
 
     /**
      * The lowest appended binding that no text record in any style or the always-on display
-     * names, and that no saved removal or kept import still needs, or null.
+     * names, and that no kept import still needs, or null.
      */
     private fun orphanedSlot(target: Fit3Container, count: Int, slots: FontSlots): Int? {
         val named = FaceResources.variantEntries(target).flatMap { entry ->

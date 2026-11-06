@@ -18,7 +18,7 @@ class ProjectArchiveException(message: String, cause: Throwable? = null) :
  * Everything about a project that is not already in the package it was started from.
  *
  * Written as `fitface/project.json`. Every field after the first release has to carry a
- * default for the reason `StoredRemovedWidget`'s do: an archive is read back from files
+ * default: an archive is read back from files
  * written by other builds, and a missing key throws — which here is a whole project that
  * will not import rather than one that imports without a detail.
  */
@@ -56,7 +56,7 @@ data class ProjectArchiveContents(
     val manifest: ProjectManifest,
     /** The edited container, or null for a project exported before it was edited. */
     val editedContainer: ByteArray?,
-    /** The removed-widget records, or null when there were none to keep. */
+    /** The editing session — widget identities and imported artwork — or null without an edit. */
     val sessionState: ByteArray?,
 )
 
@@ -72,7 +72,7 @@ data class ProjectArchiveContents(
  * assets/SM-R390_00046_2_0.png       the default style previews
  * fitface/project.json               the manifest above
  * fitface/edited.bin                 the current container, when there is an edit
- * fitface/session.json               the removed-widget records
+ * fitface/session.json               the editing session beside that edit
  * ```
  *
  * [Fit3Apk.parse] reads that unchanged — one container matching its own name pattern,
@@ -186,9 +186,8 @@ object ProjectArchive {
                 }
                 out.write(ManifestEntry, json.encodeToString(manifest).encodeToByteArray())
                 editedContainer?.let { out.write(EditedEntry, it) }
-                // Only ever beside an edit. The records name widgets cut out of the edited
-                // container, so on their own they describe a face nothing removed anything
-                // from — `restoreSessionState` is not even called without one.
+                // Only ever beside an edit: the session describes the edited container, so
+                // on its own it describes a face nothing was done to.
                 sessionState?.takeIf { editedContainer != null }?.let { out.write(SessionEntry, it) }
             }
         } catch (error: ProjectArchiveException) {
@@ -270,9 +269,9 @@ object ProjectArchive {
         }
         if (manifest.schema >= 2 && (edited == null || session == null))
             throw ProjectArchiveException("that project's imported artwork or saved edit is missing")
-        // A session with no edit describes removals from a container nothing removed
-        // anything from. `pack` will not write that pair; an archive that carries it was
-        // assembled by hand, and dropping the half that cannot apply is the honest reading.
+        // A session with no edit describes a container nothing was done to. `pack` will not
+        // write that pair; an archive that carries it was assembled by hand, and dropping
+        // the half that cannot apply is the honest reading.
         return ProjectArchiveContents(
             manifest = manifest,
             editedContainer = edited,

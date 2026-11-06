@@ -75,7 +75,9 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
 - Remap only named alignment-reference fields. Refuse removal of a live target;
   never scan arbitrary words for values resembling global indices.
 - Global indices, data sources and raw raster offsets are not stable identities.
-  Use `originalWidgetSources`, `payloadKey`, `StyleWidgetMatch` and import origins.
+  After a commit, identity is the saved `SessionLineage` and import origins; the
+  stateless `originalWidgetSources`/`payloadKey` pairing names rasters by index and
+  is only valid while a face's own rasters are intact. `StyleWidgetMatch` for siblings.
 - Relocate every declared image pointer, including Static `+0x20`, Arc `words[4]`
   and LineBar `words[2]`. A coincidental zero is not evidence of a pointer.
 - A Hand rotates about `drawLeft/drawTop + pivot`, using its stored sweep and a
@@ -89,16 +91,17 @@ These are reminders; offsets, evidence, algorithms and exceptions belong in the
   `SessionLineage.artworkTurns` (keyed by artwork, schema 4). Resize and turn both
   measure from the turned original's bounds; never turn the previous output.
 - Resizing keeps image-record count. Background addition and widget import have
-  separate append rules; imported deletion has bounded resource ownership rules.
-  Do not reintroduce a blanket image-count ban.
+  separate append rules; deletion drops undrawn rasters. Do not reintroduce a blanket
+  image-count ban.
 - Enforce the settled 4 MiB container ceiling. Add backgrounds only to styles that
   fit, selected style first. Append their raster without shifting existing offsets.
 - Selected-style matching is strict; requested sibling edits are best effort where
   that widget exists. The default is selected style. Imports are variant-local.
 - AOD edits are isolated. `selectedVariant` is not `activeStyleName`; use the shared
   AOD constant and targeting function. AOD cannot refresh a style-picker thumbnail.
-- Native removal preserves resources for restore. Imported removal must preserve
-  resources still owned or referenced elsewhere, including saved removed records.
+- Removal deletes every kind of widget with every raster nothing draws any more;
+  artwork a survivor draws stays, and a style keeps at least one raster. There is no
+  Restore: saved removals from older builds are read and ignored.
 - Empty widget tables are valid while editing; Install warns before sending one.
   Reset returns to the project's pristine package, including a custom template's
   stripped original.

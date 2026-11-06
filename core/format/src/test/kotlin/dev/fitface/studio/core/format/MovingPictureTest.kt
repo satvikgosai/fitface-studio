@@ -44,8 +44,8 @@ class MovingPictureTest {
 
     private fun removed(after: Fit3Container, before: Fit3Container, variant: String, index: Int): Fit3Container {
         val record = FaceRecordParser.scanWidgets(after.entryByBasename(variant)).single { it.globalIndex == index }
-        return StructuralEditor.deleteWidget(after, variant, index, record.widgetType, record.sequenceId, record.x, record.y,
-            shippedImageCount = FaceRecordParser.scanImages(before.entryByBasename(variant)).size).container
+        return StructuralEditor.deleteWidget(after, listOf(variant), index, record.widgetType, record.sequenceId, record.x, record.y,
+            targetIndices = mapOf(variant to index)).container
     }
 
     @Test

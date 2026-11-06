@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.DuplicatedProject
+import dev.fitface.studio.core.model.ImportedProject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -40,10 +42,10 @@ import org.robolectric.Shadows.shadowOf
  *
  * The grid is deliberately painted from the on-disk cache before the network is touched,
  * so `isLoadingCatalog` is true for the whole opening window of every launch while the
- * screen already looks ready. `selectFace` used to refuse on the whole of `isWorking`,
- * which includes that flag, so every tap in that window did nothing at all — no sheet, no
- * spinner, no message. Opening the sheet only reads the face the tap carried, so a refresh
- * is not a reason to refuse it; a download in flight and a project being opened are, and
+ * screen already looks ready. `selectFace`, and later IMPORT and the project rows, used
+ * to refuse on a busy flag that included it, so every tap in that window did nothing at
+ * all. A refresh writes only the catalogue's own fields, so it is no reason to refuse any
+ * of them; a download in flight and a project being opened hold the editing session, and
  * still are.
  *
  * Robolectric is here for `viewModelScope`: without a main looper `Dispatchers.Main` cannot
@@ -109,9 +111,9 @@ class LibraryViewModelTest {
 
         assertEquals(faces[1], viewModel.state.value.selectedFace)
         assertEquals(7, viewModel.state.value.selectedStyleId)
-        // isWorking itself is untouched — the header, the sort chips and the projects
-        // list all still read it, and the refresh really is still running.
-        assertTrue(viewModel.state.value.isWorking)
+        // The refresh really is still running; it just blocks nothing.
+        assertTrue(viewModel.state.value.isLoadingCatalog)
+        assertFalse(viewModel.state.value.isBusy)
     }
 
     /**
@@ -176,21 +178,49 @@ class LibraryViewModelTest {
     }
 
     /**
-     * The other `isWorking` guard is left broad on purpose. Unlike the sheet, opening a
-     * project claims the repository's single editing session and navigates away from the
-     * library while the refresh is still writing into its state.
+     * The project rows, IMPORT and Duplicate do not wait for a refresh either. They used to:
+     * the guard counted the catalogue, so every launch's sync and every REFRESH greyed out
+     * the Projects page for no conflict — the refresh writes only catalogue fields, and the
+     * sheet's download already opened an editor during one.
      */
     @Test
-    fun openingAProjectStillRefusesWhileTheCatalogueIsRefreshing() {
+    fun projectsOpenImportAndDuplicateWhileTheCatalogueIsRefreshing() {
+        coEvery { repository.openProject(any()) } coAnswers { awaitCancellation() }
+        coEvery { repository.importProject(any()) } returns ImportedProject(31, "Aurora 3")
+        coEvery { repository.duplicateProject(any()) } returns DuplicatedProject(32, "Aurora 4")
         val catalog = FakeCatalog(cached = catalogue.copy(fromCache = true))
 
         val viewModel = LibraryViewModel(repository, catalog, DiagnosticsLog(), reporter())
         settle()
+        assertTrue(viewModel.state.value.isLoadingCatalog)
+        assertFalse(viewModel.state.value.isBusy)
+
+        viewModel.importProject("content://in")
+        viewModel.duplicateProject(project)
+        settle()
+        coVerify(exactly = 1) { repository.importProject("content://in") }
+        coVerify(exactly = 1) { repository.duplicateProject(project.id) }
+
+        viewModel.openProject(project)
+        settle()
+        assertTrue(viewModel.state.value.isOpeningProject)
+        coVerify(exactly = 1) { repository.openProject(project.id) }
+    }
+
+    /** Opening a project still holds the session, so IMPORT waits for it. */
+    @Test
+    fun importWaitsWhileAProjectIsOpening() {
+        coEvery { repository.openProject(any()) } coAnswers { awaitCancellation() }
+        val viewModel = LibraryViewModel(repository, FakeCatalog(loaded = catalogue), DiagnosticsLog(), reporter())
+        settle()
         viewModel.openProject(project)
         settle()
 
-        assertFalse(viewModel.state.value.isOpeningProject)
-        coVerify(exactly = 0) { repository.openProject(any()) }
+        viewModel.importProject("content://in")
+        settle()
+
+        assertTrue(viewModel.state.value.isBusy)
+        coVerify(exactly = 0) { repository.importProject(any()) }
     }
 
     /** And a refresh still will not start a second copy of itself. */
@@ -207,11 +237,11 @@ class LibraryViewModelTest {
         assertEquals(1, catalog.loadCount)
     }
 
-    /** The predicate the grid's cards are enabled on, which is not `isWorking`. */
+    /** The predicate the grid's cards are enabled on, which leaves out a refresh. */
     @Test
     fun onlyAConflictingOperationClosesTheGridToTaps() {
         val refreshing = LibraryUiState(isLoadingCatalog = true)
-        assertTrue(refreshing.isWorking)
+        assertFalse(refreshing.isBusy)
         assertTrue(refreshing.canSelectFace)
 
         assertTrue(LibraryUiState(isLoadingCatalog = false).canSelectFace)
@@ -288,7 +318,7 @@ class LibraryViewModelTest {
         coVerify(exactly = 0) { repository.openPackage(any()) }
     }
 
-    /** A refresh still is not a reason to refuse it, which is why the guard is not `isWorking`. */
+    /** A refresh still is not a reason to refuse it. */
     @Test
     fun startingANewProjectDuringACatalogueRefreshIsAllowed() {
         val catalog = FakeCatalog(cached = catalogue.copy(fromCache = true))
@@ -337,7 +367,7 @@ class LibraryViewModelTest {
         // The sheet stays, spinning, until the editor has the screen: closed earlier, the
         // face grid flashed between the two.
         assertEquals(faces[0], viewModel.state.value.selectedFace)
-        assertTrue("nothing is live while the editor is on its way", viewModel.state.value.isWorking)
+        assertTrue("nothing is live while the editor is on its way", viewModel.state.value.isBusy)
         assertFalse(viewModel.state.value.canSelectFace)
 
         // A second tap in the gap is refused: one open, one editor.
@@ -352,7 +382,7 @@ class LibraryViewModelTest {
         viewModel.onLibraryHidden()
         viewModel.onLibraryShown()
         assertEquals(faces[0], viewModel.state.value.selectedFace)
-        assertTrue(viewModel.state.value.isWorking)
+        assertTrue(viewModel.state.value.isBusy)
 
         viewModel.onEditorNavigated()
         viewModel.onLibraryHidden()
@@ -361,7 +391,7 @@ class LibraryViewModelTest {
         // Back from the editor: the row stops spinning and the list is live again.
         viewModel.onLibraryShown()
         assertNull("the row must not be left spinning", viewModel.state.value.openingProjectId)
-        assertFalse(viewModel.state.value.isWorking)
+        assertFalse(viewModel.state.value.isBusy)
         collector.cancel()
     }
 
@@ -381,12 +411,12 @@ class LibraryViewModelTest {
         viewModel.selectFace(faces[0])
         viewModel.openProject(project)
         settle()
-        assertTrue(viewModel.state.value.isWorking)
+        assertTrue(viewModel.state.value.isBusy)
 
         viewModel.onEditorNavigated()
         viewModel.onLibraryShown()
 
-        assertFalse("the list must be live again", viewModel.state.value.isWorking)
+        assertFalse("the list must be live again", viewModel.state.value.isBusy)
         assertTrue(viewModel.state.value.canSelectFace)
         assertNull("the row must not be left spinning", viewModel.state.value.openingProjectId)
         assertNull("the sheet closes on the way back", viewModel.state.value.selectedFace)

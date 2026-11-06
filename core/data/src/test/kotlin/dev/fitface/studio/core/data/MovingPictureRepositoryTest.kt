@@ -149,12 +149,11 @@ class MovingPictureRepositoryTest {
         assertEquals(2, twice.activeMovingPictures)
 
         val one = remove(twice.widgets.single { it.globalIndex == original.globalIndex })
-        assertTrue("the duplicate keeps drawing them", one.removedWidgets.isEmpty())
+        assertEquals("the duplicate keeps drawing them", twice.containerBytes - 0x28 - 4 * 4, one.containerBytes)
         assertEquals(1, one.activeMovingPictures)
         assertEquals(3, one.widgetAnimations.single().frames.size)
         val none = remove(one.widgets.last())
         assertEquals(0, none.activeMovingPictures)
-        assertTrue(none.removedWidgets.isEmpty())
         assertArrayEquals(originalBytes("00112"), bytes())
 
         assertEquals(1, repository.undo().activeMovingPictures)
@@ -163,7 +162,8 @@ class MovingPictureRepositoryTest {
 
     /**
      * A face that arrives with a moving picture — a probe, say — plays it and says so on
-     * Install like one added here, but it is part of that face: removing it keeps it restorable.
+     * Install like one added here, but it is part of that face. Removing it deletes it with its
+     * frames like any widget, and the face comes back to what it was without it.
      */
     @Test fun aMovingPictureTheFaceArrivedWithPlaysAndIsCountedButStaysTheFaces() = runBlocking {
         val stock = Fit3Container.parse(originalBytes("00112"))
@@ -175,8 +175,8 @@ class MovingPictureRepositoryTest {
         val widget = opened.widgets.single { it.globalIndex == shipped.globalIndex }
         assertNull("the face's own, not added here", widget.addedKind)
         val removed = remove(widget)
-        assertEquals("parked under Removed, frames and all", 1, removed.removedWidgets.size)
         assertEquals(0, removed.activeMovingPictures)
+        assertArrayEquals("its frames went with it", originalBytes("00112"), bytes())
     }
 
     private fun bitmap(width: Int, height: Int, left: Int, right: Int) =

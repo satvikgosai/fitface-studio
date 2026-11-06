@@ -1824,18 +1824,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun restoreWidget(removedId: Long) {
-        operate(
-            onSuccess = { current ->
-                current.copy(
-                    selectedWidgetIndex = current.snapshot?.widgets
-                        ?.maxByOrNull { it.ordinal }
-                        ?.globalIndex,
-                )
-            },
-        ) { repository.restoreWidget(removedId) }
-    }
-
     /**
      * Re-renders the watch's face-picker thumbnail from the current edit.
      *

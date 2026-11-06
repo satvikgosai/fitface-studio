@@ -84,7 +84,7 @@ class WidgetImportRepositoryTest {
     private fun exportFile() = File(context.cacheDir, "widget-import-tests/out.zip").also { it.parentFile!!.mkdirs() }
     private suspend fun export(id: Long): File = exportFile().also { repository.exportProject(id, Uri.fromFile(it).toString()) }
 
-    @Test fun deletingAndRenumberingStylesPreservesNativeArtworkRestoreArchiveAndReset() = runBlocking {
+    @Test fun deletingAndRenumberingStylesPreservesNativeArtworkThroughDeletionArchiveAndReset() = runBlocking {
         var s = repository.openPackage(face("00112"))
         s = repository.currentSnapshot("style2.bin")
         val originalStyle = s.originalVariants.getValue(s.selectedVariant.basename)
@@ -92,9 +92,12 @@ class WidgetImportRepositoryTest {
         val expected = pixels(s, native.globalIndex)
         s = repository.resizeWidget("style2.bin", native.globalIndex, native.type, native.sequenceId,
             native.x, native.y, native.width - 2, native.height - 3, false)
-        val current = s.widgets.single { it.globalIndex == native.globalIndex }
-        s = repository.removeWidget("style2.bin", current.globalIndex, current.type, current.sequenceId,
-            current.x, current.y, false, false)
+        // Another widget, after it in the table, deleted with its artwork: the resized sprite's
+        // frames may move, its index does not.
+        val other = s.widgets.last { w -> w.globalIndex > native.globalIndex &&
+            s.widgets.none { it.alignedToGlobalIndex == w.globalIndex } }
+        s = repository.removeWidget("style2.bin", other.globalIndex, other.type, other.sequenceId,
+            other.x, other.y, false, false)
         val review = repository.styleManagement()
         val beforeBytes = s.containerBytes
         s = repository.deleteStyles(setOf("style0.bin", "style1.bin"), review.revision)
@@ -102,17 +105,15 @@ class WidgetImportRepositoryTest {
         assertEquals("style0.bin", s.activeStyleName)
         assertEquals(originalStyle, s.originalVariants.getValue("style0.bin"))
         assertArrayEquals(review.previews.getValue("style2.bin").argb, s.composedPreview.argb)
-        assertEquals(setOf("style0.bin"), s.removedWidgets.single().recordsByVariant.keys)
         val copy = repository.duplicateProject(s.projectId)
         s = repository.openProject(copy.id)
         val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
         repository = repository(); s = repository.openProject(imported.id)
-        s = repository.restoreWidget(s.removedWidgets.single().id)
-        val restored = s.widgets.last()
-        assertEquals(native.width, restored.originalWidth)
-        s = repository.resizeWidget("style0.bin", restored.globalIndex, restored.type, restored.sequenceId,
-            restored.x, restored.y, native.width, native.height, false)
-        assertArrayEquals(expected, pixels(s, restored.globalIndex))
+        val sprite = s.widgets.single { it.globalIndex == native.globalIndex }
+        assertEquals(native.width, sprite.originalWidth)
+        s = repository.resizeWidget("style0.bin", sprite.globalIndex, sprite.type, sprite.sequenceId,
+            sprite.x, sprite.y, native.width, native.height, false)
+        assertArrayEquals(expected, pixels(s, sprite.globalIndex))
         val reset = repository.resetEdits()
         assertEquals("style2.bin", reset.activeStyleName)
         assertArrayEquals(bin("00112"), repository.prepareDirectInstall().copyBytes())
@@ -181,7 +182,7 @@ class WidgetImportRepositoryTest {
         assertTrue(runCatching { repository.deleteStyles(setOf("aod.bin"), repository.styleManagement().revision) }.isFailure)
     }
 
-    @Test fun reorderedTwinsKeepTheirOriginalThroughResizeAllStylesRemoveRestoreAndArchive() = runBlocking {
+    @Test fun reorderedTwinsKeepTheirOriginalThroughResizeArchiveAndAllStyleDeletion() = runBlocking {
         val original = repository.openPackage(face("00003"))
         val native = original.widgets.first { it.type == 1 && it.placement == WidgetPlacement.CANVAS }
         val expected = pixels(original, native.globalIndex)
@@ -212,15 +213,17 @@ class WidgetImportRepositoryTest {
         s = repository.resizeWidget("style0.bin", destination, small.type, small.sequenceId,
             small.x, small.y, native.originalWidth, native.originalHeight, false)
         assertArrayEquals(expected, pixels(s, destination))
-        val restoredSize = s.widgets.last()
-        s = repository.removeWidget("style0.bin", destination, restoredSize.type, restoredSize.sequenceId,
-            restoredSize.x, restoredSize.y, false, true)
-        assertEquals(original.styleNames.size, s.removedWidgets.single().recordsByVariant.size)
         val imported = repository.importProject(Uri.fromFile(export(s.projectId)).toString())
         repository = repository(); s = repository.openProject(imported.id)
-        s = repository.restoreWidget(s.removedWidgets.single().id)
         assertArrayEquals(expected, pixels(s, s.widgets.last().globalIndex))
         assertEquals(native.originalX, s.widgets.last().originalX)
+        val last = s.widgets.last()
+        val counts = original.styleNames.associateWith { repository.currentSnapshot(it).widgets.size }
+        repository.currentSnapshot("style0.bin")
+        s = repository.removeWidget("style0.bin", destination, last.type, last.sequenceId, last.x, last.y, false, true)
+        original.styleNames.forEach { name ->
+            assertEquals("$name loses the twin too", counts.getValue(name) - 1, repository.currentSnapshot(name).widgets.size)
+        }
         repository.resetEdits(); assertArrayEquals(bin("00003"), repository.prepareDirectInstall().copyBytes())
     }
 
@@ -248,7 +251,6 @@ class WidgetImportRepositoryTest {
         // A copy is deleted from every style it was made in, and kept nowhere.
         assertEquals(s.styleNames.size, s.audit!!.changedStyles.size)
         assertEquals(count - 1, s.widgets.size)
-        assertTrue(s.removedWidgets.isEmpty())
     }
 
     @Test fun failedReorderRestoresBothTheBytesAndNativeIdentitiesInMemoryAndOnDisk() = runBlocking {
@@ -288,7 +290,7 @@ class WidgetImportRepositoryTest {
         before.entries.filter { it.basename != "aod.bin" }.forEach { assertArrayEquals(it.data, after.entryByBasename(it.basename).data) }
     }
 
-    @Test fun nativeCheckpointCarriesIdentitiesAndRemovalAtomicallyThroughCopyAndArchive() = runBlocking {
+    @Test fun nativeCheckpointCarriesIdentitiesAndDeletionAtomicallyThroughCopyAndArchive() = runBlocking {
         var s = repository.openPackage(face("00003"))
         val anchors = s.widgets.mapNotNull { it.alignedToGlobalIndex }.toSet()
         val native = s.widgets.first { it.type == 1 && it.globalIndex !in anchors && it.placement == WidgetPlacement.CANVAS }
@@ -296,8 +298,7 @@ class WidgetImportRepositoryTest {
         s = repository.duplicateWidget("style0.bin", native.globalIndex, native.type, native.sequenceId, native.x, native.y, false)
         val duplicate = s.widgets.last()
         s = move(s, duplicate, 15)
-        // The original goes under Removed while its copy stays live; a removed copy would be
-        // deleted and leave nothing to carry.
+        // The original is deleted while its copy stays live and keeps drawing its artwork.
         s = repository.removeWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
             native.x, native.y, false, false)
         val checkpoint = File(requireNotNull(dao.findById(s.projectId)?.editedBinPath))
@@ -309,20 +310,29 @@ class WidgetImportRepositoryTest {
         val imported = repository.importProject(Uri.fromFile(archive).toString())
         repository = repository()
         s = repository.openProject(imported.id)
-        val restored = repository.restoreWidget(s.removedWidgets.single().id)
-        assertEquals(null, restored.widgets.last().duplicateSourceGlobalIndex)
-        assertEquals(1, restored.widgets.count { it.duplicateSourceGlobalIndex == native.globalIndex })
-        assertEquals(native.originalX, restored.widgets.last().originalX)
-        assertArrayEquals(expected, pixels(restored, restored.widgets.last().globalIndex))
+        val copy = s.widgets.last()
+        assertEquals(native.globalIndex, copy.duplicateSourceGlobalIndex)
+        assertEquals(1, s.widgets.count { it.duplicateSourceGlobalIndex == native.globalIndex })
+        assertArrayEquals(expected, pixels(s, copy.globalIndex))
         repository.resetEdits()
         assertArrayEquals(bin("00003"), repository.prepareDirectInstall().copyBytes())
     }
 
-    @Test fun legacyRemovedWidgetGetsAnIdentityBeforeTheNextEditChangesIndices() = runBlocking {
+    /**
+     * An archive from a build that offered Restore: its edit cut a widget's record and kept
+     * the artwork for a Restore, and its session lists that removal. It opens, the removal is
+     * let go, and the next deletion frees the kept artwork too — the result is exactly what
+     * deleting both widgets in this build makes.
+     */
+    @Test fun aLegacyRemovalOpensAndItsKeptArtworkGoesWithTheNextDeletion() = runBlocking {
+        val pristine = Fit3Container.parse(bin("00105"))
         var s = repository.openPackage(face("00105"))
         val native = s.widgets.first { it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.TEXT }
         s = repository.removeWidget("style0.bin", native.globalIndex, native.type, native.sequenceId,
             native.x, native.y, false, false)
+        // The record alone, as the old build cut it.
+        val legacy = StructuralEditor.removeWidget(pristine, listOf("style0.bin"), native.globalIndex, native.type,
+            native.sequenceId, native.x, native.y, requireFinal = false)
         val source = export(s.projectId).readBytes()
         val out = ByteArrayOutputStream()
         ZipOutputStream(out).use { zip -> ZipInputStream(source.inputStream()).use { input ->
@@ -332,25 +342,31 @@ class WidgetImportRepositoryTest {
                 if (entry.name in setOf(ProjectArchive.ManifestEntry, ProjectArchive.SessionEntry)) {
                     val obj = Json.parseToJsonElement(bytes.decodeToString()).jsonObject.toMutableMap()
                     obj["schema"] = JsonPrimitive(1); obj.remove("lineage")
-                    obj["removed"]?.let { list -> obj["removed"] = JsonArray(list.jsonArray.map { record ->
-                        JsonObject(record.jsonObject.filterKeys { it !in setOf("nativeIdentityRecorded", "nativeSourceIndices", "duplicateSourceVariants") })
-                    }) }
+                    if (entry.name == ProjectArchive.SessionEntry) obj["removed"] = Json.parseToJsonElement(
+                        """[{"widgetType":${native.type},"sequenceId":${native.sequenceId},"x":${native.x},""" +
+                            """"y":${native.y},"width":1,"height":1,"recordsByVariant":{"style0.bin":"""" +
+                            java.util.Base64.getEncoder().encodeToString(legacy.removedRecords.getValue("style0.bin")) + """"}}]""")
                     bytes = JsonObject(obj).toString().encodeToByteArray()
                 }
+                if (entry.name == ProjectArchive.EditedEntry) bytes = legacy.container.toByteArray()
                 zip.putNextEntry(ZipEntry(entry.name)); zip.write(bytes); zip.closeEntry()
             }
         } }
         val file = exportFile().apply { writeBytes(out.toByteArray()) }
         val imported = repository.importProject(Uri.fromFile(file).toString())
         s = repository.openProject(imported.id)
-        assertFalse(s.removedWidgets.single().nativeIdentityRecorded)
-        s = move(s, s.widgets.last())
-        assertTrue(s.removedWidgets.single().nativeIdentityRecorded)
-        assertEquals(native.globalIndex, s.removedWidgets.single().nativeSourceIndices["style0.bin"])
-        repository = repository(); s = repository.openProject(s.projectId)
-        s = repository.restoreWidget(s.removedWidgets.single().id)
-        assertEquals(null, s.widgets.last().duplicateSourceGlobalIndex)
-        assertEquals(native.originalRotationTenths, s.widgets.last().originalRotationTenths)
+        assertEquals(legacy.container.fileSize, s.containerBytes)
+        val other = s.widgets.last { w -> s.widgets.none { it.alignedToGlobalIndex == w.globalIndex } }
+        s = repository.removeWidget("style0.bin", other.globalIndex, other.type, other.sequenceId,
+            other.x, other.y, false, false)
+        val both = StructuralEditor.deleteWidget(
+            StructuralEditor.deleteWidget(pristine, listOf("style0.bin"), native.globalIndex, native.type,
+                native.sequenceId, native.x, native.y, targetIndices = mapOf("style0.bin" to native.globalIndex)).container,
+            listOf("style0.bin"), other.globalIndex, other.type, other.sequenceId, other.x, other.y,
+            targetIndices = mapOf("style0.bin" to other.globalIndex)).container
+        assertArrayEquals(both.toByteArray(), repository.prepareDirectInstall().copyBytes())
+        repository = repository()
+        assertEquals(s.widgets.size, repository.openProject(s.projectId).widgets.size)
     }
 
     @Test fun missingNativeIdentityIsRejectedBeforeCreatingAnyProject() = runBlocking {
@@ -458,11 +474,11 @@ class WidgetImportRepositoryTest {
     }
 
     /**
-     * Removing a copy of a stock widget deletes it: nothing goes under Removed, and the face
-     * is byte-for-byte what it was before the Duplicate tap — in every style the copy was
-     * made in. The original itself still goes under Removed and comes back.
+     * Removing a copy of a stock widget deletes it, and the face is byte-for-byte what it was
+     * before the Duplicate tap — in every style the copy was made in. The original is deleted
+     * too when removed, and Undo brings it back.
      */
-    @Test fun aRemovedDuplicateIsDeletedAndOnlyTheOriginalIsRestorable() = runBlocking {
+    @Test fun aRemovedDuplicateLeavesTheFaceAsItWasAndTheOriginalComesBackWithUndo() = runBlocking {
         var s = repository.openPackage(face("00106"))
         val widget = s.widgets.first { it.type == 5 }
         val before = repository.prepareDirectInstall().copyBytes()
@@ -481,16 +497,15 @@ class WidgetImportRepositoryTest {
         s = repository.currentSnapshot("style0.bin")
         s = repository.removeWidget("style0.bin", copy.globalIndex, copy.type, copy.sequenceId,
             copy.x, copy.y, false, true)
-        assertTrue(s.removedWidgets.isEmpty())
         assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
         repository = repository(); s = repository.openProject(s.projectId)
-        assertTrue(s.removedWidgets.isEmpty())
+        val count = s.widgets.size
         s = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
             widget.x, widget.y, false, false)
-        assertEquals(1, s.removedWidgets.size)
-        s = repository.restoreWidget(s.removedWidgets.single().id)
-        assertTrue(s.removedWidgets.isEmpty())
-        assertEquals(widget.colorArgb, s.widgets.last().colorArgb)
+        assertEquals(count - 1, s.widgets.size)
+        s = repository.undo()
+        assertArrayEquals(before, repository.prepareDirectInstall().copyBytes())
+        assertEquals(widget.colorArgb, s.widgets.single { it.globalIndex == widget.globalIndex }.colorArgb)
     }
 
     /**
@@ -568,7 +583,7 @@ class WidgetImportRepositoryTest {
         assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
     }
 
-    @Test fun turnedArtworkKeepsItsTurnThroughResizeRemovalReopenArchiveAndReset() = runBlocking {
+    @Test fun turnedArtworkKeepsItsTurnThroughResizeDeletionReopenArchiveAndReset() = runBlocking {
         var s = repository.openPackage(face("00105"))
         val digit = s.widgets.first {
             it.rotationKind == dev.fitface.studio.core.model.WidgetRotationKind.ARTWORK && it.sharedArtworkWidgets > 0
@@ -593,22 +608,23 @@ class WidgetImportRepositoryTest {
         turned = s.widgets.single { it.globalIndex == digit.globalIndex }
         assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
         assertEquals(150, turned.rotationTenths)
-        // Removing and restoring a widget does not lose its artwork's turn: it is kept by artwork.
+        // Deleting one digit keeps the shared frames, and their turn, for the others: the turn
+        // is kept by artwork, not by widget.
+        val others = s.widgets.count { it.rotationTenths == 150 } - 1
         s = remove(s, turned)
-        s = repository.restoreWidget(s.removedWidgets.single().id)
-        assertEquals(150, s.widgets.last().rotationTenths)
+        fun sharer(snapshot: EditorSnapshot) = snapshot.widgets.first { it.rotationTenths == 150 }
+        assertEquals(others, s.widgets.count { it.rotationTenths == 150 })
         repository = repository(); s = repository.openProject(s.projectId)
-        assertEquals(150, s.widgets.last().rotationTenths)
+        assertEquals(others, s.widgets.count { it.rotationTenths == 150 })
         val archive = export(s.projectId)
         assertEquals(4, ProjectArchive.read(archive.readBytes()).manifest.schema)
         val imported = repository.importProject(Uri.fromFile(archive).toString())
         repository = repository(); s = repository.openProject(imported.id)
-        turned = s.widgets.last()
-        assertEquals(150, turned.rotationTenths)
+        turned = sharer(s)
         assertEquals(smaller.percentOfOriginal, dev.fitface.studio.core.model.widgetSizePercent(turned))
         // Back to no turn, the project stops needing the newer schema.
         s = repository.rotateWidget("style0.bin", turned.globalIndex, turned.sequenceId, turned.x, turned.y, 0, false)
-        assertEquals(0, s.widgets.last().rotationTenths)
+        assertEquals(0, s.widgets.single { it.globalIndex == turned.globalIndex }.rotationTenths)
         assertEquals(3, ProjectArchive.read(export(s.projectId).readBytes()).manifest.schema)
         repository.resetEdits()
         assertArrayEquals(bin("00105"), repository.prepareDirectInstall().copyBytes())
@@ -712,10 +728,9 @@ class WidgetImportRepositoryTest {
             s = repository.duplicateWidget(s.selectedVariant.basename, moved.globalIndex, moved.type,
                 moved.sequenceId, moved.x, moved.y, true)
             assertEquals(id, s.widgets.last().importedFromFaceId)
-            // An imported widget is deleted, not parked under Removed. The copy shared the
-            // original's artwork, so deleting it gives back exactly the record it added.
+            // The copy shared the original's artwork, so deleting it gives back exactly the
+            // record it added.
             s = remove(s, s.widgets.last())
-            assertTrue(s.removedWidgets.none { it.importOriginId != null })
             assertEquals(beforeCopy, s.containerBytes)
             repository = repository()
             s = repository.openProject(native.projectId)
@@ -725,7 +740,6 @@ class WidgetImportRepositoryTest {
         assertEquals(1, dao.findByFaceId("00106").size)
         assertTrue(dao.findByFaceId("00008").isEmpty())
         assertEquals(9, s.widgets.count { it.importedFromFaceId != null })
-        assertTrue(s.removedWidgets.isEmpty())
         val sibling = repository.currentSnapshot("style1.bin")
         assertTrue(sibling.widgets.none { it.importedFromFaceId != null })
     }
@@ -878,7 +892,6 @@ class WidgetImportRepositoryTest {
         val imported = s.widgets.last()
         assertTrue(s.containerBytes > native.containerBytes)
         s = remove(s, imported)
-        assertTrue(s.removedWidgets.isEmpty())
         assertEquals(native.widgets.size, s.widgets.size)
         assertEquals(native.containerBytes, s.containerBytes)
         assertEquals(native.imageCount, s.imageCount)
@@ -910,26 +923,23 @@ class WidgetImportRepositoryTest {
     }
 
     /**
-     * A stock widget under Removed stays restorable across an import's artwork being
-     * deleted — its saved record is carried past the images that went.
+     * A stock widget is deleted with its artwork, and the way to have it back after Undo is out
+     * of reach is to import it from the same face: it draws exactly what it drew.
      */
-    @Test fun aStockRemovalStaysRestorableAfterAnImportIsDeleted() = runBlocking {
+    @Test fun aDeletedStockWidgetComesBackByImportingItFromTheSameFace() = runBlocking {
         val native = repository.openPackage(face("00106"))
         val anchors = native.widgets.mapNotNull { it.alignedToGlobalIndex }.toSet()
         val stock = native.widgets.first {
-            it.globalIndex !in anchors && it.placement == WidgetPlacement.CANVAS
+            it.globalIndex !in anchors && it.placement == WidgetPlacement.CANVAS && it.type == 3
         }
         val expected = pixels(native, stock.globalIndex)
         var s = repository.removeWidget("style0.bin", stock.globalIndex, stock.type, stock.sequenceId,
             stock.x, stock.y, false, false)
-        s = add(s, "00008", 1)
-        s = add(s, "00008", 1)
-        s = remove(s, s.widgets[s.widgets.size - 2])
-        s = remove(s, s.widgets.last())
-        assertEquals(1, s.removedWidgets.size)
+        assertEquals(native.widgets.size - 1, s.widgets.size)
         repository = repository()
         s = repository.openProject(s.projectId)
-        s = repository.restoreWidget(s.removedWidgets.single().id)
+        s = add(s, "00106", stock.globalIndex)
+        assertEquals("00106", s.widgets.last().importedFromFaceId)
         assertArrayEquals(expected, pixels(s, s.widgets.last().globalIndex))
     }
 
@@ -1087,7 +1097,6 @@ class WidgetImportRepositoryTest {
         donors.forEach { (id, index) ->
             s = add(s, id, index)
             s = remove(s, s.widgets.last())
-            assertTrue(s.removedWidgets.isEmpty())
         }
         // One kept import record may still hold its slot; never the table's worth.
         val bindings = FaceResources.fontBindings(Fit3Container.parse(repository.prepareDirectInstall().copyBytes())).size

@@ -37,10 +37,10 @@ class FontSlotsTest {
     private fun bindings(c: Fit3Container) = FaceResources.fontBindings(c)
     private fun lastRecord(c: Fit3Container) = FaceRecordParser.scanWidgets(c.entryByBasename(style)).last()
 
-    private fun deleteLast(c: Fit3Container, shipped: Int): Fit3Container {
+    private fun deleteLast(c: Fit3Container): Fit3Container {
         val record = lastRecord(c)
-        return StructuralEditor.deleteWidget(c, style, record.globalIndex, record.widgetType,
-            record.sequenceId, record.x, record.y, shipped).container
+        return StructuralEditor.deleteWidget(c, listOf(style), record.globalIndex, record.widgetType,
+            record.sequenceId, record.x, record.y, targetIndices = mapOf(style to record.globalIndex)).container
     }
 
     /**
@@ -82,13 +82,12 @@ class FontSlotsTest {
         val donors = distinctTextDonors(original, StyleHeader.MAX_FONT_BINDINGS - pristine + 2)
         assumeTrue("needs ${StyleHeader.MAX_FONT_BINDINGS - pristine + 2} distinct donors, found ${donors.size}",
             donors.size == StyleHeader.MAX_FONT_BINDINGS - pristine + 2)
-        val shipped = FaceRecordParser.scanImages(original.entryByBasename(style)).size
 
         // The old path: every round leaves a binding behind until the table is full.
         var current = original
         val refusal = runCatching {
             donors.forEach { (donor, index) ->
-                current = deleteLast(WidgetImporter.importWidget(current, style, donor, style, index).edit.container, shipped)
+                current = deleteLast(WidgetImporter.importWidget(current, style, donor, style, index).edit.container)
             }
         }.exceptionOrNull()
         assertTrue("$refusal", refusal is Fit3FormatException && refusal.message.orEmpty().contains("all 10"))
@@ -97,7 +96,7 @@ class FontSlotsTest {
         current = original
         donors.forEach { (donor, index) ->
             val result = WidgetImporter.importWidget(current, style, donor, style, index,
-                FontSlots.of(original, emptyList(), null))
+                FontSlots.of(original, null))
             val imported = result.edit.container
             assertEquals(emptyList<ValidationIssue>(), imported.validate().errors)
             assertEquals(pristine + 1, bindings(imported).size)
@@ -105,7 +104,7 @@ class FontSlotsTest {
             assertArrayEquals(donor.entryByBasename("font_${
                 FaceRecordParser.scanWidgets(donor.entryByBasename(style)).single { it.globalIndex == index }.fontBindingIndex
             }.bin").data, imported.entryByBasename("font_$pristine.bin").data)
-            current = deleteLast(imported, shipped)
+            current = deleteLast(imported)
         }
     }
 
@@ -176,18 +175,15 @@ class FontSlotsTest {
     }
 
     @Test
-    fun savedRemovalsAndImportBaselinesReserveTheirBindings() {
-        val value = ByteArray(56).also { it.putU32(0, 5); it[0x28] = 6 }
-        val composite = ByteArray(100).also { it.putU32(0, 13); it[0x5E] = 7 }
-        val picture = ByteArray(40).also { it.putU32(0, 1) }
+    fun importBaselinesReserveTheirBindings() {
         val baseline = ByteArray(STYLE_HEADER_SIZE) + ByteArray(56).also { it.putU32(0, 5); it[0x28] = 8 }
         val origins = WidgetImportOrigins("x", listOf(
             WidgetImportOrigin("id", "00001", style, Base64.getEncoder().encodeToString(baseline), listOf(3)),
         ))
 
-        val slots = FontSlots.of(face("00106"), listOf(value, composite, picture), origins)
+        val slots = FontSlots.of(face("00106"), origins)
 
-        assertEquals(setOf(6, 7, 8), slots.reserved)
+        assertEquals(setOf(8), slots.reserved)
         assertEquals(bindings(face("00106")).size, slots.pristineCount)
     }
 

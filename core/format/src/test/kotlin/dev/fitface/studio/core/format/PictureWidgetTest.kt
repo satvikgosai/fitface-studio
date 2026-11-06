@@ -130,9 +130,8 @@ class PictureWidgetTest {
         val original = face("00112")
         val edited = PictureWidget.insert(original, style, 80, 80, disc(80, 80), 100).edit.container
         val record = lastRecord(edited)
-        val deleted = StructuralEditor.deleteWidget(edited, style, record.globalIndex, record.widgetType,
-            record.sequenceId, record.x, record.y,
-            FaceRecordParser.scanImages(original.entryByBasename(style)).size, emptyList()).container
+        val deleted = StructuralEditor.deleteWidget(edited, listOf(style), record.globalIndex, record.widgetType,
+            record.sequenceId, record.x, record.y, targetIndices = mapOf(style to record.globalIndex)).container
         assertArrayEquals(original.toByteArray(), deleted.toByteArray())
     }
 
@@ -203,10 +202,10 @@ class PictureWidgetTest {
     fun aTableOfDeletedPicturesIsPrunedAwayButADonorIsKept() {
         val picture = WidgetImportOrigin("p", "", style, "AAAA", emptyList(), AddedWidgetKind.PICTURE)
         val donor = WidgetImportOrigin("d", "00112", style, "AAAAAAAA", emptyList())
-        assertNull(WidgetImportOrigins("x", listOf(picture)).pruned(emptySet()))
-        assertEquals(listOf(donor), WidgetImportOrigins("x", listOf(picture, donor)).pruned(emptySet())?.widgets)
+        assertNull(WidgetImportOrigins("x", listOf(picture)).pruned())
+        assertEquals(listOf(donor), WidgetImportOrigins("x", listOf(picture, donor)).pruned()?.widgets)
         val live = picture.copy(indices = listOf(4))
-        assertEquals(listOf(live), WidgetImportOrigins("x", listOf(live, donor)).pruned(emptySet())?.widgets)
+        assertEquals(listOf(live), WidgetImportOrigins("x", listOf(live, donor)).pruned()?.widgets)
     }
 
     /** Placed where the canvas put it, partly off the face if it was left there. */

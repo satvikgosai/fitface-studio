@@ -109,6 +109,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -135,7 +136,6 @@ import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.placedRect
 import dev.fitface.studio.core.model.PreviewFrame
-import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.VariantKind
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
@@ -334,7 +334,6 @@ fun EditorRoute(
         onPlaceWidget = viewModel::placeWidget,
         onRemoveWidget = viewModel::removeSelectedWidget,
         onDuplicateWidget = viewModel::duplicateSelectedWidget,
-        onRestoreWidget = viewModel::restoreWidget,
         onWidgetImported = viewModel::acceptWidgetImport,
         onBackgroundImported = viewModel::acceptBackgroundImport,
         onStylesDeleted = viewModel::acceptStyleDeletion,
@@ -462,7 +461,6 @@ private fun EditorScreen(
     onPlaceWidget: (Int, Int, Int) -> Unit,
     onRemoveWidget: () -> Unit,
     onDuplicateWidget: () -> Unit,
-    onRestoreWidget: (Long) -> Unit,
     onWidgetImported: (EditorSnapshot) -> Unit,
     onBackgroundImported: (EditorSnapshot) -> Unit,
     onStylesDeleted: (EditorSnapshot) -> Unit,
@@ -644,7 +642,6 @@ private fun EditorScreen(
                         onPlaceWidget = onPlaceWidget,
                         onRemoveWidget = onRemoveWidget,
                         onDuplicateWidget = onDuplicateWidget,
-                        onRestoreWidget = onRestoreWidget,
                         onImportWidget = { importing = true },
                         pictures = pictures,
                         moving = moving,
@@ -1195,7 +1192,6 @@ private fun EditorPageContent(
     onPlaceWidget: (Int, Int, Int) -> Unit,
     onRemoveWidget: () -> Unit,
     onDuplicateWidget: () -> Unit,
-    onRestoreWidget: (Long) -> Unit,
     onImportWidget: () -> Unit,
     pictures: PictureActions,
     moving: MovingBackgroundActions,
@@ -1259,7 +1255,6 @@ private fun EditorPageContent(
             onHold = { selection.onBegin(it.globalIndex) },
             onClearSet = selection.onClear,
             onEditSet = { onNavigate(EditorPage.Canvas) },
-            onRestore = onRestoreWidget,
             onImport = onImportWidget,
             state = state,
             pictures = pictures,
@@ -1531,7 +1526,6 @@ internal fun editKindLabel(kind: EditKind): String = stringResource(
         EditKind.COLOUR -> R.string.editor_edit_kind_colour
         EditKind.ARRANGE -> R.string.editor_edit_kind_arrange
         EditKind.REMOVE -> R.string.editor_edit_kind_remove
-        EditKind.RESTORE -> R.string.editor_edit_kind_restore
         EditKind.DUPLICATE -> R.string.editor_edit_kind_duplicate
         EditKind.IMPORT -> R.string.editor_edit_kind_import
         EditKind.BACKGROUND -> R.string.editor_edit_kind_background
@@ -1890,21 +1884,12 @@ private fun RemoveWidgetDialog(
     onDismiss: () -> Unit,
 ) {
     val importedFrom = widget.importedFromFaceId
-    // A copy of a stock widget is deleted outright as well; its original stays to copy again.
     val copy = widget.addedKind == null && widget.duplicateSourceGlobalIndex != null
-    // So is a moving background, frames and all: it can be added again.
     val moving = snapshot.movingBackground?.globalIndex == widget.globalIndex
-    val deletes = widget.addedKind != null || copy || moving
+    // Every kind is deleted with its artwork; the body says what that means for this one.
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(
-                stringResource(
-                    if (deletes) R.string.editor_delete_title else R.string.editor_remove_title,
-                    widget.globalIndex,
-                ),
-            )
-        },
+        title = { Text(stringResource(R.string.editor_delete_title, widget.globalIndex)) },
         text = {
             Text(
                 if (importedFrom != null) {
@@ -1929,13 +1914,7 @@ private fun RemoveWidgetDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(
-                    stringResource(
-                        if (deletes) R.string.editor_delete_confirm else R.string.editor_remove_confirm,
-                    ),
-                )
-            }
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.editor_delete_confirm)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
@@ -2107,9 +2086,8 @@ private fun SelectionSetBar(
 /**
  * Confirms removing a set, and says what becomes of each kind of member.
  *
- * The two kinds end differently now: a stock widget goes to the Removed list and can be
- * put back, and one imported from another face is deleted with its artwork. A set can hold
- * both, so the dialog counts each.
+ * Every member is deleted with its artwork, but what that reaches differs — a stock widget
+ * every style that has it, a copy only itself — so the dialog counts each kind.
  */
 @Composable
 private fun RemoveSetDialog(
@@ -2127,7 +2105,7 @@ private fun RemoveSetDialog(
     val stock = picks.size - imported - added - copies
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (picks.size == 1) stringResource(R.string.editor_remove_title, picks.single().globalIndex)
+        title = { Text(if (picks.size == 1) stringResource(R.string.editor_delete_title, picks.single().globalIndex)
             else stringResource(R.string.editor_remove_set_title, picks.size)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2153,7 +2131,7 @@ private fun RemoveSetDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text(stringResource(R.string.editor_remove_confirm)) }
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.editor_delete_confirm)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.editor_cancel)) }
@@ -2417,7 +2395,6 @@ private fun WidgetsWorkspace(
     onHold: (WidgetGuide) -> Unit,
     onClearSet: () -> Unit,
     onEditSet: () -> Unit,
-    onRestore: (Long) -> Unit,
     onImport: () -> Unit,
     state: EditorUiState,
     pictures: PictureActions,
@@ -2432,11 +2409,6 @@ private fun WidgetsWorkspace(
     val offCanvas = snapshot.offCanvasWidgets
     val picks = multiSelection.mapNotNull { index -> snapshot.widgets.firstOrNull { it.globalIndex == index } }
     fun order(widget: WidgetGuide) = multiSelection.indexOf(widget.globalIndex).takeIf { it >= 0 }
-    // Removals used to be the third section of this list, below every widget on the face
-    // and every widget off it — so putting one back meant scrolling past two dozen rows to
-    // find out whether there was anything to put back at all. The count is at the top now
-    // and opens in place.
-    var showRemoved by rememberSaveable { mutableStateOf(false) }
     val severalHint = rememberLearnedHint(LearnedGesture.SelectSeveral)
     if (picks.isNotEmpty()) SideEffect { severalHint.learn() }
     Column(modifier) {
@@ -2452,20 +2424,6 @@ private fun WidgetsWorkspace(
                     FitButton(stringResource(R.string.editor_media_choose), pictures.onChoose,
                         Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
                     if (state.readingFrames) ReadingFramesLine()
-                }
-            }
-            if (snapshot.removedWidgets.isNotEmpty()) {
-                item {
-                    RemovedWidgetsToggle(
-                        count = snapshot.removedWidgets.size,
-                        expanded = showRemoved,
-                        onToggle = { showRemoved = !showRemoved },
-                    )
-                }
-                if (showRemoved) {
-                    items(snapshot.removedWidgets, key = { "removed-${it.id}" }) { removed ->
-                        RemovedWidgetRow(removed, enabled) { onRestore(removed.id) }
-                    }
                 }
             }
             item {
@@ -2562,44 +2520,6 @@ private fun WidgetSetFooter(
             )
         }
         FitButton(stringResource(R.string.editor_widgets_set_edit), onEdit, Modifier.fillMaxWidth(), enabled = enabled)
-    }
-}
-
-/**
- * How many widgets are in the removed list, and the tap that opens it.
- *
- * A chip rather than a section heading, because it has to read as something that does
- * something: the list it opens is the only way a removal is undone.
- */
-@Composable
-private fun RemovedWidgetsToggle(count: Int, expanded: Boolean, onToggle: () -> Unit) {
-    val action = stringResource(
-        if (expanded) R.string.editor_widgets_removed_hide else R.string.editor_widgets_removed_show,
-    )
-    Row(
-        Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-            .clickable(role = Role.Button, onClick = onToggle)
-            .semantics { contentDescription = action }
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        // Its ⓘ takes its own tap; the rest of the row opens and closes the list.
-        FitHeading(stringResource(R.string.editor_widgets_removed_title), Modifier.weight(1f)) {
-            InfoText(stringResource(R.string.editor_restore_explanation))
-        }
-        Text(
-            pluralStringResource(R.plurals.editor_widgets_removed_count, count, count),
-            style = FitFaceType.numeric,
-            color = MaterialTheme.colorScheme.tertiary,
-        )
-        Text(
-            if (expanded) "▴" else "▾",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -2800,88 +2720,6 @@ private fun WidgetGuide.readingLabel(): String = when (val reading = sourceLabel
         // A widget that follows no reading of its own is better identified by its place
         // in the table than by a number that means nothing on it.
         stringResource(R.string.editor_widget_index, globalIndex)
-    }
-}
-
-/**
- * The reading a removed record followed, named the way a live row names it.
- *
- * The same three cases as [WidgetGuide.readingLabel] and deliberately worded identically:
- * the Removed list sits directly under the live one, and a record that read "Sprite ·
- * steps" before it was cut must not read "type 4 · seq 29" after.
- */
-@Composable
-private fun RemovedWidget.removedReadingLabel(): String = when (val reading = sourceLabel) {
-    is String -> reading
-    else -> if (followsReading) {
-        stringResource(R.string.editor_widget_reading_unnamed, sequenceId)
-    } else {
-        stringResource(R.string.editor_widget_index, globalIndex)
-    }
-}
-
-/**
- * What the removal reached: some number of numbered styles, or the always-on display.
- *
- * Not `recordsByVariant.size`, which counts *entries* — an always-on removal writes one
- * entry that is not a style, and it used to be reported as "1 styles". AOD is never joined
- * to a style edit, so the two cases do not overlap.
- */
-@Composable
-private fun RemovedWidget.removedScopeLabel(): String =
-    if (touchedAod) {
-        stringResource(R.string.editor_aod_label)
-    } else {
-        pluralStringResource(R.plurals.editor_row_removed_styles, styleCount, styleCount)
-    }
-
-
-@Composable
-private fun RemovedWidgetRow(
-    removed: RemovedWidget,
-    enabled: Boolean,
-    onRestore: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-            .padding(13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(
-            Modifier.width(3.dp).height(28.dp)
-                .background(MaterialTheme.fitColors.warning.copy(alpha = .6f)),
-        )
-        Column(Modifier.weight(1f)) {
-            Text(
-                stringResource(
-                    R.string.editor_selection_widget_or_unknown,
-                    removed.globalIndex.takeIf { it >= 0 }?.toString()
-                        ?: stringResource(R.string.editor_widget_index_unknown),
-                ),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            Text(
-                stringResource(
-                    R.string.editor_row_removed,
-                    removed.category.label,
-                    removed.removedReadingLabel(),
-                    removed.width,
-                    removed.height,
-                    removed.removedScopeLabel(),
-                ),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.fitText.secondary,
-            )
-        }
-        FitButton(
-            stringResource(R.string.editor_restore),
-            onRestore,
-            enabled = enabled,
-            style = FitButtonStyle.Secondary,
-        )
     }
 }
 
@@ -5300,6 +5138,12 @@ internal fun SetupChecklist(
         ),
     )
     val completed = steps.count { state.isStepDone(it.step) }
+    // Steps 1 and 2 are done once per phone and only come undone if the watch app goes or
+    // Nearby access is revoked. While both hold they fold into one row, so a return visit
+    // leads with the steps that repeat; either coming undone brings its row back by itself,
+    // because both are read live from the phone rather than remembered.
+    val phoneReady = state.phoneReady
+    var phoneStepsShown by rememberSaveable { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         FitInfoLink(stringResource(R.string.editor_setup_details)) {
@@ -5314,7 +5158,21 @@ internal fun SetupChecklist(
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
                 .clip(MaterialTheme.shapes.medium),
         ) {
+            if (phoneReady) {
+                PhoneReadyRow(
+                    detail = steps[0].done,
+                    expanded = phoneStepsShown,
+                    onToggle = { phoneStepsShown = !phoneStepsShown },
+                )
+            }
             steps.forEachIndexed { index, row ->
+                if (!setupStepShown(index, phoneReady, phoneStepsShown)) return@forEachIndexed
+                if (index > 0 || phoneReady) {
+                    Box(
+                        Modifier.fillMaxWidth().height(1.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant),
+                    )
+                }
                 val done = state.isStepDone(row.step)
                 val busy = state.isStepBusy(row.step)
                 // Step 1 is advisory — connecting the watch is something the reader may
@@ -5330,12 +5188,6 @@ internal fun SetupChecklist(
                     blocked = blocked,
                     enabled = enabled && !blocked && !busy,
                 )
-                if (index != steps.lastIndex) {
-                    Box(
-                        Modifier.fillMaxWidth().height(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant),
-                    )
-                }
             }
         }
         Text(
@@ -5431,32 +5283,7 @@ private fun SetupStepRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Box(
-            Modifier.size(22.dp)
-                .background(
-                    if (done) MaterialTheme.colorScheme.primary.copy(alpha = .16f)
-                    else Color.Transparent,
-                    RoundedCornerShape(11.dp),
-                )
-                .border(
-                    1.dp,
-                    if (done) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outlineVariant,
-                    RoundedCornerShape(11.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (busy) {
-                CircularProgressIndicator(Modifier.size(11.dp), strokeWidth = 2.dp)
-            } else {
-                Text(
-                    if (done) "✓" else number.toString(),
-                    style = FitFaceType.micro,
-                    color = if (done) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        StepBadge(number, done, busy)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -5490,6 +5317,94 @@ private fun SetupStepRow(
         if (!done && !busy) {
             Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+/**
+ * Whether the checklist draws step [index] (0-based) as its own row. Steps 1 and 2 fold into
+ * the Phone ready row while [phoneReady], unless that row has been opened.
+ */
+internal fun setupStepShown(index: Int, phoneReady: Boolean, phoneStepsShown: Boolean): Boolean =
+    index >= 2 || !phoneReady || phoneStepsShown
+
+/** The numbered circle of a setup step: a tick once done, a spinner while it runs. */
+@Composable
+private fun StepBadge(number: Int?, done: Boolean, busy: Boolean = false) {
+    Box(
+        Modifier.size(22.dp)
+            .background(
+                if (done) MaterialTheme.colorScheme.primary.copy(alpha = .16f)
+                else Color.Transparent,
+                RoundedCornerShape(11.dp),
+            )
+            .border(
+                1.dp,
+                if (done) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outlineVariant,
+                RoundedCornerShape(11.dp),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (busy) {
+            CircularProgressIndicator(Modifier.size(11.dp), strokeWidth = 2.dp)
+        } else {
+            Text(
+                if (done) "✓" else number?.toString().orEmpty(),
+                style = FitFaceType.micro,
+                color = if (done) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Steps 1 and 2, done, as one row in a done step's colours. Tapping it shows the two rows
+ * beneath it, ticked, for anyone who wants to see what was set up.
+ */
+@Composable
+private fun PhoneReadyRow(detail: String, expanded: Boolean, onToggle: () -> Unit) {
+    val title = stringResource(R.string.editor_setup_phone_ready)
+    val action = stringResource(
+        if (expanded) {
+            dev.fitface.studio.core.ui.R.string.ui_details_collapse
+        } else {
+            dev.fitface.studio.core.ui.R.string.ui_details_expand
+        },
+        title,
+    )
+    val stateText = stringResource(
+        if (expanded) {
+            dev.fitface.studio.core.ui.R.string.ui_details_expanded
+        } else {
+            dev.fitface.studio.core.ui.R.string.ui_details_collapsed
+        },
+    )
+    Row(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = .05f))
+            .clickable(role = Role.Button, onClickLabel = action, onClick = onToggle)
+            .semantics { stateDescription = stateText }
+            .padding(13.dp)
+            .heightIn(min = 52.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        StepBadge(number = null, done = true)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                stringResource(R.string.editor_setup_phone_ready_detail, detail),
+                modifier = Modifier.padding(top = 3.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Text(
+            if (expanded) "▴" else "▾",
+            modifier = Modifier.clearAndSetSemantics { },
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
