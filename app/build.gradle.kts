@@ -52,8 +52,8 @@ android {
         applicationId = "dev.fitface.studio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 21
-        versionName = "0.2.1"
+        versionCode = 30
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

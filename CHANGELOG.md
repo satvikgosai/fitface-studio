@@ -23,7 +23,7 @@ How to write this changelog
 - The initial release is one line.
 -->
 
-## Unreleased
+## 0.3.0 (code `30`) — 2026-11-10
 
 Fixed:
 

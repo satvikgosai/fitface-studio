@@ -4,7 +4,7 @@
 
 | Application ID | `dev.fitface.studio` |
 | --- | --- |
-| Version | `0.2.1` (code `21`) |
+| Version | `0.3.0` (code `30`) |
 | Android | 9.0 (SDK 28) or newer |
 
 An Android app for browsing, editing and installing Fit3 (SM-R390) watch faces.
