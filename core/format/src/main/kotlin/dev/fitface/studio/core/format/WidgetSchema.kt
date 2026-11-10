@@ -312,9 +312,9 @@ object WidgetSchema {
         sources = null,
         followsCommonSource = false,
         // Its frame table has the same shape as a Sprite's, so [ResizeModel.Raster] would
-        // fit — but no catalogue face carries one, [FaceRecordParser.referencedImages] has
-        // no case for it, so it has no drawn extent to resize *from*, and a resize offered
-        // on a type with no sample is a control nothing here can test. Fail closed.
+        // fit — but no catalogue face carries one, so a resize offered on a type with no
+        // sample is a control nothing here can test, and nobody has seen how the watch
+        // draws a resized one. Fail closed until an animation has been on a watch.
         resize = null,
     )
 

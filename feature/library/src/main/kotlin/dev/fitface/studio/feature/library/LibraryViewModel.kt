@@ -3,7 +3,9 @@ package dev.fitface.studio.feature.library
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.fitface.studio.core.model.CUSTOM_FACE_NUMBERS_FULL
 import dev.fitface.studio.core.model.CUSTOM_FACE_TEMPLATE_FACE_ID
+import dev.fitface.studio.core.model.PHOTO_ALBUM_FACE_ID
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.model.CatalogSort
@@ -13,6 +15,7 @@ import dev.fitface.studio.core.model.FaceCatalogRepository
 import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.model.isOutdated
+import dev.fitface.studio.core.model.nextCustomFaceId
 import dev.fitface.studio.core.model.ProjectSummary
 import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.WatchFaceException
@@ -40,6 +43,23 @@ data class LibraryUiState(
      * and then its neighbours.
      */
     val openingProjectId: Long? = null,
+    /**
+     * An editor has been asked for and the library has not been shown since.
+     *
+     * An open, a download or a custom face ends when its project is ready, but the editor
+     * only takes the screen once navigation gets to it — a moment on a fast phone, a second
+     * or more on a slow one. Clearing the busy flags at the end of the work left every row
+     * live in that gap, so a second tap opened a second project: the first editor arrived,
+     * and backing out of it landed in the second. This holds every open off until
+     * [LibraryViewModel.onLibraryShown] says the library is on screen again.
+     */
+    val editorHandoff: Boolean = false,
+    /**
+     * The editor [editorHandoff] waits for has been put on the back stack. Until it has, the
+     * library leaving and returning — a rotation, a theme change — is not the editor coming
+     * and going, and must neither release the hold nor close the sheet.
+     */
+    val editorNavigated: Boolean = false,
     val faces: List<CatalogFace> = emptyList(),
     val styleCount: Int = 0,
     val catalogFromCache: Boolean = false,
@@ -56,6 +76,12 @@ data class LibraryUiState(
      * them" is a question neither flow can answer alone.
      */
     val projects: List<ProjectSummary> = emptyList(),
+    /**
+     * Whether [projects] has been read at all. Until it has, an empty list means "not read
+     * yet", not "none": showing "Projects 0" and "No projects yet" to someone with saved work
+     * is alarming however briefly it lasts.
+     */
+    val projectsLoaded: Boolean = false,
     val projectQuery: String = "",
     val projectSort: ProjectSort = ProjectSort.RECENT,
     val projectSortReversed: Boolean = false,
@@ -134,6 +160,17 @@ data class LibraryUiState(
     val customFaceSource: CatalogFace?
         get() = faces.firstOrNull { it.faceId == CUSTOM_FACE_TEMPLATE_FACE_ID }
 
+    /**
+     * The watch's Photos face, which has no container to edit but takes the user's photos;
+     * null while the catalogue has none, or while [PHOTOS_FACE_OFFERED] is off. Whether its
+     * package really declares a photo album is read when its page opens.
+     */
+    val photosFace: CatalogFace?
+        get() = if (!PHOTOS_FACE_OFFERED) null
+        else faces.firstOrNull { it.faceId == PHOTO_ALBUM_FACE_ID.toString().padStart(5, '0') }
+
+    fun takesPhotos(face: CatalogFace): Boolean = face.productId == photosFace?.productId
+
     val isOpeningProject: Boolean
         get() = openingProjectId != null
 
@@ -146,23 +183,26 @@ data class LibraryUiState(
     val exportFileName: String?
         get() = exporting?.let { ProjectArchiveNaming.fileName(it.faceId, it.name) }
 
-    val isWorking: Boolean
-        get() = isLoadingCatalog || isOpeningProject || downloadingProductId != null ||
-            customFaceProgress != null
-
     /**
-     * Whether a tap on the grid may open the face sheet. Deliberately narrower than
-     * [isWorking], and the value the grid's cards should be enabled on.
+     * Something holds the repository's single editing session, or is about to: a project
+     * opening, a download or custom face that will open one, or an editor on its way. The
+     * project rows, IMPORT, Duplicate and the face cards all refuse while it is true.
      *
-     * The grid is painted from the on-disk cache before the network is touched, so
-     * `isLoadingCatalog` is true for the whole opening window of every launch while the
-     * screen already looks completely ready. Refusing the tap on [isWorking] made that
-     * window silent — no sheet, no row spinner, no message — and a catalogue refresh
-     * conflicts with nothing the sheet does: it only reads the face the tap carried.
-     * Opening a project and a download in flight do conflict, so those still refuse.
+     * A catalogue refresh is deliberately not part of it. The grid is painted from the
+     * on-disk cache before the network is touched, so `isLoadingCatalog` is true for the
+     * whole opening window of every launch while the screen already looks ready, and a
+     * refresh only writes the catalogue's own fields. Counting it here greyed out IMPORT
+     * and every project row for the length of each launch's sync and each REFRESH, for no
+     * conflict at all — the face sheet's download, which opens an editor too, never waited
+     * for it.
      */
+    val isBusy: Boolean
+        get() = isOpeningProject || downloadingProductId != null || customFaceProgress != null ||
+            editorHandoff
+
+    /** Whether a tap on the grid may open the face sheet: whenever nothing is [isBusy]. */
     val canSelectFace: Boolean
-        get() = !isOpeningProject && downloadingProductId == null && customFaceProgress == null
+        get() = !isBusy
 
     val visibleFaces: List<CatalogFace>
         get() {
@@ -305,7 +345,7 @@ class LibraryViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             repository.observeProjects().collect { saved ->
-                mutableState.update { it.copy(projects = saved) }
+                mutableState.update { it.copy(projects = saved, projectsLoaded = true) }
             }
         }
         viewModelScope.launch {
@@ -340,8 +380,8 @@ class LibraryViewModel @Inject constructor(
 
     /**
      * Makes a custom face and opens it: the face it is built from is downloaded — or read
-     * from the phone if it is already there — stripped to its clock, and saved as a new
-     * project called [name].
+     * from the phone if it is already there — stripped to its clock, given a face number of
+     * its own, and saved as a new project called [name].
      *
      * The download happens here, on the reader's tap, because that is the only way this app
      * obtains watch-face content: nothing is bundled. It refuses while anything else holds
@@ -351,12 +391,20 @@ class LibraryViewModel @Inject constructor(
         val current = mutableState.value
         val source = current.customFaceSource ?: return
         if (current.customFaceProgress != null || current.downloadingProductId != null) return
-        if (current.isOpeningProject) return
+        if (current.isOpeningProject || current.editorHandoff) return
+        // The catalogue's own numbers are never given out, in case it grows into the range.
+        val catalogueFaceIds = current.faces.mapTo(mutableSetOf(), CatalogFace::faceId)
         viewModelScope.launch {
             mutableState.update {
                 it.copy(customFaceProgress = CustomFaceProgress(0f, building = false), error = null)
             }
             runCatching {
+                // Refused before downloading anything when the list already shows every number
+                // in use. The repository asks again, under its lock, before it saves.
+                val used = current.projects.mapTo(mutableSetOf(), ProjectSummary::faceId)
+                if (current.projectsLoaded && nextCustomFaceId(used + catalogueFaceIds) == null) {
+                    throw WatchFaceException(CUSTOM_FACE_NUMBERS_FULL)
+                }
                 val downloaded = catalog.downloadPackage(source, source.styles.firstOrNull()?.id ?: 0) { progress ->
                     mutableState.update {
                         it.copy(customFaceProgress = CustomFaceProgress(progress.fraction, building = false))
@@ -365,10 +413,12 @@ class LibraryViewModel @Inject constructor(
                 mutableState.update {
                     it.copy(customFaceProgress = CustomFaceProgress(1f, building = true), customFaceCached = true)
                 }
-                repository.openTemplate(downloaded, name)
+                repository.openTemplate(downloaded, name, catalogueFaceIds)
             }.onSuccess { snapshot ->
+                // The bar stays on the card until the library is shown again, so nothing is
+                // live while the editor is on its way. See [LibraryUiState.editorHandoff].
+                mutableState.update { it.copy(editorHandoff = true) }
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
-                mutableState.update { it.copy(customFaceProgress = null) }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 mutableState.update { it.copy(customFaceProgress = null, error = error.userMessage()) }
@@ -448,7 +498,10 @@ class LibraryViewModel @Inject constructor(
                 selectedFace = face,
                 selectedStyleId = face.styles.firstOrNull()?.id,
                 selectedFaceCached = false,
-                sheetError = uneditableMessage.takeIf { _ -> face.appId in it.uneditableAppIds },
+                // The Photos face is not a dead end: its sheet sends photos instead.
+                sheetError = uneditableMessage.takeIf { _ ->
+                    face.appId in it.uneditableAppIds && !it.takesPhotos(face)
+                },
             )
         }
         viewModelScope.launch {
@@ -487,13 +540,13 @@ class LibraryViewModel @Inject constructor(
     fun downloadSelectedFace() {
         val face = mutableState.value.selectedFace ?: return
         val styleId = mutableState.value.selectedStyleId ?: return
-        // Not `isWorking`: a catalogue refresh is no reason to refuse, which is the whole
-        // point of the sheet opening during one. An open in flight is — it holds the
+        // A catalogue refresh is no reason to refuse, which is the whole point of the
+        // sheet opening during one. An open in flight is — it holds the
         // repository's single editing session and it is about to take the screen, and this
         // button sits under the rows that start one, live for the several seconds an open
         // takes. Two editors on the back stack was the result.
         if (mutableState.value.downloadingProductId != null) return
-        if (mutableState.value.isOpeningProject) return
+        if (mutableState.value.isOpeningProject || mutableState.value.editorHandoff) return
         if (mutableState.value.customFaceProgress != null) return
         viewModelScope.launch {
             mutableState.update {
@@ -510,15 +563,9 @@ class LibraryViewModel @Inject constructor(
                 }
                 repository.openPackage(downloaded)
             }.onSuccess { snapshot ->
-                mutableState.update {
-                    it.copy(
-                        downloadingProductId = null,
-                        downloadFraction = 0f,
-                        selectedFace = null,
-                        selectedStyleId = null,
-                        selectedFaceCached = false,
-                    )
-                }
+                // The sheet and its busy button stay until the editor has the screen; see
+                // [onLibraryHidden] and [onLibraryShown].
+                mutableState.update { it.copy(editorHandoff = true) }
                 eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
             }.onFailure { error ->
                 // `runCatching` catches Throwable, so it catches the cancellation that
@@ -546,38 +593,73 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun openProject(project: ProjectSummary) {
-        // Broader than `canSelectFace` on purpose. The repository holds one open
-        // editing session, so this must not race the download that is about to open one,
-        // and it navigates away from the library while the refresh is still writing into
-        // that screen's state — unlike the sheet, which only reads the face it was given.
-        if (mutableState.value.isWorking) return
+        // The repository holds one open editing session, so this must not race a download
+        // or custom face that is about to open one. A catalogue refresh is not a reason:
+        // it writes only the catalogue's fields, and this ViewModel outlives the editor
+        // it hands over to, as it does for the sheet's download.
+        if (mutableState.value.isBusy) return
         viewModelScope.launch {
             mutableState.update { it.copy(openingProjectId = project.id, error = null) }
             runCatching { repository.openProject(project.id) }
                 .onSuccess { snapshot ->
-                    // The face sheet closes here, the way a finished download already
-                    // closes it. The flag has to come off — the library keeps this
-                    // ViewModel while it sits under the editor, so one left set is a
-                    // screen that comes back with every row dead — and the moment it does,
-                    // the sheet's rows are live again for as long as the editor takes to
-                    // arrive. Those are the rows under the finger, so they go with it. The
-                    // editor is asked for first for the same reason, though a buffered
-                    // channel makes that ordering a courtesy rather than a guarantee.
+                    // The row keeps its spinner, and every other row stays inert, until the
+                    // library is shown again: clearing the flag here left them live while the
+                    // editor was still on its way, and a second tap opened a second project
+                    // behind the first. [onLibraryShown] takes it off, so the screen does not
+                    // come back with every row dead.
+                    mutableState.update { it.copy(editorHandoff = true) }
                     eventChannel.send(LibraryEvent.OpenEditor(snapshot.projectId))
-                    mutableState.update {
-                        it.copy(
-                            openingProjectId = null,
-                            selectedFace = null,
-                            selectedStyleId = null,
-                            selectedFaceCached = false,
-                        )
-                    }
                 }
                 .onFailure { error ->
                     mutableState.update {
                         it.copy(openingProjectId = null, error = error.userMessage())
                     }
                 }
+        }
+    }
+
+    /** The editor asked for in a hand-off is on the back stack; see [LibraryUiState.editorNavigated]. */
+    fun onEditorNavigated() {
+        if (!mutableState.value.editorHandoff) return
+        mutableState.update { it.copy(editorNavigated = true) }
+    }
+
+    /**
+     * The library has left the screen for the editor it asked for. The face sheet closes now,
+     * not when the open finished or when the editor was asked for: closed at either, the
+     * library drew the face grid for a frame before the editor arrived, a flash between the
+     * sheet's spinner and the editor. Nothing else leaves the library during a hand-off;
+     * outside one, this does nothing.
+     */
+    fun onLibraryHidden() {
+        if (!mutableState.value.editorHandoff || !mutableState.value.editorNavigated) return
+        mutableState.update {
+            it.copy(selectedFace = null, selectedStyleId = null, selectedFaceCached = false, sheetError = null)
+        }
+    }
+
+    /**
+     * The library is on screen. After an editor was asked for, this is the first moment it
+     * is safe to open another: the editor has come and gone. Clears what the handed-off work
+     * left showing — the row's spinner, the custom face's bar, the sheet and its download.
+     * The sheet is usually closed already by [onLibraryHidden]; backed out of during the
+     * editor's enter transition, the library never left, and it closes here instead.
+     */
+    fun onLibraryShown() {
+        if (!mutableState.value.editorHandoff || !mutableState.value.editorNavigated) return
+        mutableState.update {
+            it.copy(
+                editorHandoff = false,
+                editorNavigated = false,
+                openingProjectId = null,
+                customFaceProgress = null,
+                downloadingProductId = null,
+                downloadFraction = 0f,
+                selectedFace = null,
+                selectedStyleId = null,
+                selectedFaceCached = false,
+                sheetError = null,
+            )
         }
     }
 
@@ -608,7 +690,7 @@ class LibraryViewModel @Inject constructor(
      * default the new row can land anywhere in the list.
      */
     fun duplicateProject(project: ProjectSummary) {
-        if (mutableState.value.isWorking) return
+        if (mutableState.value.isBusy) return
         viewModelScope.launch {
             runCatching { repository.duplicateProject(project.id) }
                 .onSuccess { duplicate ->
@@ -681,13 +763,13 @@ class LibraryViewModel @Inject constructor(
     /**
      * Reads an archive the picker returned into a new project.
      *
-     * Refused while something else is working, like [openProject] and unlike a catalogue
-     * refresh: this parses a container and writes a project directory, which is the same
-     * conflict opening one has.
+     * Refused while something holds the editing session, like [openProject], but not during
+     * a catalogue refresh: this parses a container and writes a project directory, which
+     * conflicts with an open and not with the catalogue.
      */
     fun importProject(sourceUri: String?) {
         if (sourceUri == null) return
-        if (mutableState.value.isWorking) return
+        if (mutableState.value.isBusy) return
         viewModelScope.launch {
             runCatching { repository.importProject(sourceUri) }
                 .onSuccess { imported ->
@@ -801,3 +883,10 @@ class LibraryViewModel @Inject constructor(
             "This face is customised on the watch and cannot be edited here."
     }
 }
+
+/**
+ * Whether the library offers the Photos face: its Projects card, its catalogue badge and its
+ * sheet's Send photos to it. Off until it is ready for release; with it off the face reads as
+ * Not editable, as before. Everything behind those entry points stays built and tested.
+ */
+internal const val PHOTOS_FACE_OFFERED = false

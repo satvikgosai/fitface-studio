@@ -131,16 +131,11 @@ class ProjectTransferTest {
     }
 
     /**
-     * The removed-widget records are their own member of the archive, and their own way to
-     * lose an evening's work.
-     *
-     * Without `session.json` the import produces a project whose widget is missing from the
-     * face with nothing offering to put it back — the container remembers the removal and
-     * only this file remembers what was removed. It is the same reason `duplicateProject`
-     * copies the file by name rather than by a stored path.
+     * A deletion travels in the edited container: the import opens with the widget and its
+     * artwork gone, exactly as exported.
      */
     @Test
-    fun aRemovedWidgetComesBackRestorable() = runBlocking {
+    fun aDeletedWidgetStaysDeletedThroughTheArchive() = runBlocking {
         val original = repository.openPackage(facePackage())
         // Whichever the face lets go of. Removal is refused for a widget others are
         // positioned against, so the candidates are tried rather than assumed — this test
@@ -164,18 +159,13 @@ class ProjectTransferTest {
                 }.getOrNull()
             }
         assumeTrue("face 00046 has nothing removable", afterRemoval != null)
-        assertEquals("nothing was removed", 1, afterRemoval!!.removedWidgets.size)
+        assertEquals("nothing was removed", original.widgets.size - 1, afterRemoval!!.widgets.size)
 
         val imported = repository.importProject(export(original.projectId))
 
         val opened = repository.openProject(imported.id)
-        assertEquals(
-            "the removal records did not survive the archive",
-            1,
-            opened.removedWidgets.size,
-        )
-        val restored = repository.restoreWidget(opened.removedWidgets.single().id)
-        assertTrue("the restored widget could not be put back", restored.removedWidgets.isEmpty())
+        assertEquals(afterRemoval.widgets.size, opened.widgets.size)
+        assertEquals(afterRemoval.containerBytes, opened.containerBytes)
     }
 
     /**

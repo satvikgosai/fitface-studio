@@ -304,9 +304,48 @@ every unnamed fixed pointer in that group has the named typeface:
 | 15 | LED Digital | runtime slot 32 | selector-12 fallback |
 | 6, 13, 14, other | not dispatched | none | common fallback |
 
+**A family carries only some glyphs at some sizes.** On a watch (2026-10-14), two word
+labels of `00106` (`steps`, `bpm`; MiSans 24) were each pointed at an appended binding:
+Roboto Bold 40 (selector 2) and LED Digital 32 (selector 15). Both switched font, and both
+drew missing-glyph boxes for most letters (`bpm` became three boxes).
+
+A second run (2026-10-17) moved the four live numbers and the four labels of `00106` to
+other bindings, one each. Every one drew cleanly, so glyph coverage depends on family **and**
+size: Roboto Bold has these letters at 24 but not at 40.
+
+| Family (selector) | Size | Digits | Lowercase letters |
+| --- | ---: | --- | --- |
+| MiSans (0) | 16 | not tried | drawn |
+| MiSans (0) | 40 | drawn | drawn |
+| Roboto Regular (1) | 24 | not tried | drawn |
+| Roboto Regular (1) | 40 | drawn | not tried |
+| Roboto Bold (2) | 24 | not tried | drawn |
+| Roboto Bold (2) | 40 | drawn | **boxes** |
+| LED Digital (15) | 32 | drawn | **boxes** |
+
+The letters tried were those of `steps`, `bpm`, `kcal` and `active time`; uppercase and other
+scripts were not. The catalogue never draws a letter outside selector 0: in its English
+tables every Value or Comp string containing one uses selector 0, while selectors 1, 2, 3,
+9, 10 and 15 draw only digits and `% - / °`. A binding change is therefore safe only for a
+family, size and set of characters shown on a watch, as above or in a catalogue face.
+
 ### Glyph tables — the strings the watch draws
 
-Eight locale entries per face:
+The two reference faces carry eight locale entries each. The firmware opens
+`font_<language>.bin` for its current language and falls back to `font_en.bin` (local
+firmware notes, `%s/font_%s.bin`). So a language the face does not carry reads English,
+which is also what the preview assumes. Across the 99-container corpus:
+
+| Keyed tables | Faces |
+| --- | ---: |
+| 8 | 62 |
+| 7 | 1 |
+| 5 | 6 |
+| 2 | 2 |
+| `font_en.bin` only | 8 |
+| none | 20 |
+
+Every table has this layout:
 
 | Offset | Size | Field |
 | ---: | ---: | --- |
@@ -391,7 +430,9 @@ equals `numbered_font_file_count << 8` with no exception. Bytes `+0x10` and
 `+0x12/+0x13` have no effect.
 
 The header validator itself only requires nonzero widget count and widget-byte
-length. Image lookup computes `0x18 + widget_bytes + relative_offset`; it does
+length (instruction-level reading). The editor still allows an emptied style or AOD;
+see [identity, layout and structural edits](#identity-layout-and-structural-edits) for
+how Install treats one. Image lookup computes `0x18 + widget_bytes + relative_offset`; it does
 not use `+0x14`, and does not bound each image against `+0x0C`. Those stronger
 equalities remain mandatory writer checks.
 
@@ -429,11 +470,12 @@ The full corpus adds 50, 64, 80 and 140. Every observed byte is accounted for
 by its type schema. Type census:
 
 > **Geometry is type-specific.** `0x1C`/`0x1E` are alignment fields on
-> Static/Hand and endpoints on Rule, not universal extents. Face `00079` stores
-> width 1 for digit sprites whose frames are 52 px wide, and `00022` stores height
-> 20 for frames that are 136 px tall. For any widget that addresses a raster, the
-> raster's own dimensions are authoritative and the stored extent may be a
-> placeholder. Pair, Comp, Badge, vector Arc, image Arc and LineBar constructors
+> Static/Hand and endpoints on Rule, not universal extents. On Sprite they are not
+> read at all. `00079`'s `(1, 0)` beside 52 px digit frames and `00022`'s `(0, 20)`
+> beside 136 px ones are not stored extents. They are the producer's alignment-style
+> values, codes {0, 1} and targets {0, 10, 20, 40, 50} across the corpus, written on
+> a type that ignores them. For any widget that addresses a raster, the raster's
+> own dimensions are authoritative. Pair, Comp, Badge, vector Arc, image Arc and LineBar constructors
 > do consume explicit geometry; image Arc and LineBar additionally reference a
 > raster.
 >
@@ -488,7 +530,16 @@ it, and update validity masks come from global runtime state rather than the
 record. The inert handlers read no raw-record byte; `0x0E` is their loader-
 proven minimum, while `0x10` is the safer writer convention because it retains
 the ordinary global-index halfword. No vendor producer sample exists for type
-4, type 9, or an inert type. The exact byte schemas for every observed
+4, type 9, or an inert type.
+
+**Type 4 on a watch** (one SM-R390, 2026-10-14; probes from `WatchProbesTest`, appended
+to the custom-face template). An appended Animation plays. `+0x26` is milliseconds per
+frame: period 1000 advanced once a second (10 cycles of 4 frames in about 40 s), and
+twelve full-panel RGB565 frames at period 100 played smoothly with no reboot and the
+face picker still working. Repeat 3 did **not** stop after three cycles, and the
+animation restarts at frame 1 when the screen wakes, so treat every animation as looping.
+Indexed8 frames honour palette alpha. In the always-on display the same animation ran
+about three times slower (period 1000: 5 cycles in about 60 s). The exact byte schemas for every observed
 type are implemented and JVM-tested in the format layer, and the per-type
 behaviour below supersedes the original two-face guesses.
 
@@ -502,7 +553,7 @@ package cannot define a new one. The map is:
 | 5 | AM/PM |
 | 9; 10/11 | minute; minute tens/units |
 | 13; 14/15 | second; second tens/units |
-| 17 | weekday |
+| 17 | weekday, Monday first (0 = Monday … 6 = Sunday; `00013`'s seven weekday frames render MON…SUN) |
 | 18/19/20 | day; day tens/units |
 | 21; 22/23 | month; month tens/units (Sprite 21 is zero-based artwork) |
 | 24; 25/26/27/28 | year; year thousands/hundreds/tens/units |
@@ -635,13 +686,13 @@ renumber these references with them, and a widget that others are positioned
 against cannot simply be removed.
 
 A reference resolves only against an earlier record, so "names nothing" depends on where
-the record sits. An appended record — a duplicate, or a restored widget — goes after every
+the record sits. An appended record — a duplicate — goes after every
 index, and a value that named nothing where its source sat can name a real widget there:
 `00016`'s date names 20, and once duplicating it grew the face past 20, each further copy
 aligned to copy #20 and was drawn off the face, as the watch would draw it. So an appended
 record whose target was at or after its former index, and would now resolve, takes
 `WidgetImporter.ROOT_TARGET` (`0xFFFF`), as an import does; one that still names nothing
-keeps its bytes. `AppendedAlignmentTest` covers copies and restores.
+keeps its bytes. `AppendedAlignmentTest` covers copies.
 
 ### Badge: geometry is a line segment — **proven for the one record**
 
@@ -682,6 +733,11 @@ transparent RGB565+A canvas; zero uses an ordinary label. Comp is therefore auth
 dictionary index and source must be designed with the locale files rather than
 copied independently.
 
+Swapping the numeric day (18) and month (21) sources of every date Comp on `00003` turned
+its month-first date into day-first on a watch (2026-10-14, showed `14/10`). That run
+checked English only; the permutation item at `+0x62` was left as it was, and Italian
+already stores `3214` there.
+
 Numeric selectors are exact: 0/1 use `%d`, 2–6 use `%02d` through `%06d`, and
 any value at least 7 falls back to `%d`. Pair has the analogous wider table
 through selector 8 (`%08d`) and falls back to `%d` at 9 or above. Pair source
@@ -710,6 +766,13 @@ Formats: `0x0082` = RGB565, 2 bytes/px, little-endian half-word with R in bits
 3 bytes/px. `0x0088` = a 1,024-byte, 256-entry BGRA palette followed by one
 8-bit palette index per pixel. These map to GUI image-format enums 4, 5 and 10
 respectively; they are the only codes in the 7,306-image style/AOD corpus.
+No other code gives a smaller layout: rasters with codes `0x83`, `0x86`, `0x87`, `0x89` and
+`0x8A`, written as 1-, 2- and 4-bit palette images, drew on a watch as two bytes a pixel
+(probe F1, one SM-R390, 2026-11-05). The parser refuses any code but these three.
+A palette entry's alpha byte is honoured: Indexed8 animation frames whose background
+entry has alpha 0 showed the style background through them on a watch (2026-10-14).
+An appended Static with an RGB565+A raster also blends its partial alpha over both the
+background and the widgets beneath it.
 
 **All 171 records in both files have a trailer of exactly four bytes** after
 their format-specific pixel plane, with no exceptions.
@@ -816,7 +879,23 @@ The header CRC covers the directory even though the tested watch ignores CRCs on
 install. Whole-style relocation leaves section-relative pointers unchanged; changes
 inside the image section require the declared pointer map. Download identity, bounds,
 mutation selectors and schemas are checked before commit. Final delivery checks
-one-byte face/sampler IDs, canonical filename, copied payload size and SHA-256.
+one-byte face/sampler IDs (face 1–255, sampler 0–9), canonical filename, copied payload
+size and SHA-256.
+
+`DeliveryChecks` then refuses a well-formed container that does not describe itself
+consistently:
+
+- container version not 4;
+- `setting.bin`, `preview.bin`, `aod.bin` or `style0.bin` missing or duplicated;
+- entry paths, `setting.bin +0x10` and the package naming different faces;
+- `setting.bin` without `LQ_WF` and its struct magic;
+- `+0x34` not the number of styles present, or `+0x35` naming no style;
+- more than ten styles, or styles not numbered from zero without gaps.
+
+All 99 vendor containers and every edit the app makes pass these checks. The
+`setting.bin` name slots are deliberately not checked: the watch never reads them, and
+`00018` stores `"00018_Overall image(Large)"` there.
+
 Unusual bounded vendor joins remain warnings; edit errors block commit and delivery.
 
 ### The size ceiling
@@ -824,6 +903,11 @@ Unusual bounded vendor joins remain warnings; edit errors block commit and deliv
 `WATCH_CONTAINER_BYTE_CEILING` is **4 MiB exactly**, confirmed on an SM-R390 and
 enforced by `rebuild` and `Session.validatedBytes()`. This is a settled application
 constraint based on firmware behaviour, not a limit of the `u32` format fields.
+
+The firmware states it directly. The normal `AT^WF_ADD` extractor range-checks the file
+size before reading the header: `(size - 0x18561) < 0x3E7AA0`, an inclusive range of
+99,681 bytes through exactly 4,194,304 (instruction-level, local firmware notes). The
+smallest catalogue container is about ten times that minimum.
 Oversized files can validate, transfer and be accepted while the old face remains.
 
 Recorded background-addition runs (205,880 bytes per style):
@@ -838,7 +922,7 @@ Recorded background-addition runs (205,880 bytes per style):
 All 99 vendor containers fit; largest `00072` is 4,149,034 bytes. The measured
 accept/reject interval is `4,149,034..4,365,626`; the app treats 4 MiB as settled.
 `00022` is 4,117,664 bytes, only 76,640 below the ceiling: this explains its old
-oversized-resize rejection, not a separate prohibition on restoring shipped artwork.
+oversized-resize rejection, not a separate prohibition on enlarging shipped artwork.
 Imports and raster growth can also cross the ceiling.
 
 ### Identity, layout and structural edits
@@ -846,8 +930,9 @@ Imports and raster growth can also cross the ceiling.
 | Contract | Evidence / implementation |
 | --- | --- |
 | Panel geometry comes from the declared entry path, not image 0 | `panelSize`; `00022` starts with a 37×28 icon; `00108` styles 0–3 with a 204×204 dial |
-| Backgrounds are exactly widgets drawing panel-sized rasters | Multiple layers are legal (`00076`, `00089`); `backgroundImage` may be null |
+| Backgrounds are exactly widgets drawing panel-sized rasters | Multiple layers are legal (`00076`, `00089`); `backgroundImage` may be null. A raster widget is classed as a background layer by size only when its artwork is **exactly** the panel: all 388 such layers in the catalogue are exactly 256 × 402, and artwork larger than the panel is a widget turned or added past the edges (a 200 × 400 picture turned to 45° is 424 × 424) that must stay selectable |
 | Position is `origin + stored` | `WidgetLayout`, `drawLeft/drawTop`; write-back subtracts origin, never guesses from the sign |
+| A widget may hang past the panel edge | Vendor faces ship it: a 2026-10 census of the 99 containers found 44 rasters on five faces (`00002`, `00016`, `00023`, `00024`, `00096`) drawn up to 11 px past an edge, plus 159 text boxes; none is wholly off. The editor's one clamp, `constrainDragCoordinate` with `offFaceKeepVisible`, keeps a tenth of the drawn outline per axis (at least 10 px, at most all of it) on the panel for drag, nudge, set nudge and typed positions, and admits a starting position already further out. Write-back and the signed 16-bit range are unchanged. On a watch (2026-10-14), a Static, a Sprite, a Value and a turned Composite each placed half off a different edge were clipped cleanly at the panel, with nothing wrapped or moved |
 | Hand selection differs from rendering | `WidgetPlacement.HIDDEN` suppresses a false axis-aligned outline; hands still render and can be selected from the list |
 | Exact type schemas, not a generic minimum size | All 4,034 producer records have their type's exact size; a 40-byte Composite is not a valid 100-byte record |
 | Four alignment-reference fields only | Static/Hand `+0x1E`, Value/Composite `+0x22`, enabled by the adjacent code; see §7 |
@@ -855,7 +940,7 @@ Imports and raster growth can also cross the ceiling.
 | Original identity survives index changes | Schema-3 checkpoints persist `SessionLineage` native sources and duplicate status; operations remap current indices explicitly. Legacy migration uses `originalWidgetSources` once. Unknown originals cannot be resized. Never use raw offsets or `originalRecords[globalIndex]` as identity. |
 | Source IDs are not identities | Static source is zero in 678/681 records; Sprite `(type, source)` happens to be unique in 1,486/1,518, not universally |
 | Every declared raster pointer is relocated | Static `+0x20`, Sprite's exact frame-count words, Hand `words[1]`, Arc `words[4]` (30/30), LineBar `words[2]` (16/16) |
-| Empty widget tables are valid | Removing the last widget retains the image section; snapshot, restore, preview and installer accept zero widgets |
+| Empty widget tables are legal while editing | Deleting the last widget keeps one raster (the smallest) so the image section survives; snapshot, import, picture and preview accept zero widgets. The firmware's style-header validator requires a nonzero count (§6), so Install sends an emptied style or AOD with a warning naming it. On a watch (2026-10-14) an emptied style installed and drew black while the always-on display kept its clock; swiping to a tile and back flashed "no watch face" for a moment |
 
 Sign-based anchoring misplaced 62 records on ten faces (`00015`, `00016`, `00018`,
 `00023`, `00027`, `00030`, `00051`, `00066`, `00089`, `00096`): 43 off-panel
@@ -863,7 +948,7 @@ primitives, 14 Values and 5 centred Composites. `WidgetCensusTest` checks zero
 layout disagreements. Scanning arbitrary words as indices blocked 68% of removals
 and left 18/99 faces without a removable widget; named-field checks replace it.
 
-Identity regression cases: on `00022`, remove/restore moves the seq-10 hour sprite
+Identity regression cases: on `00022`, a remove/restore (when the editor offered Restore) moved the seq-10 hour sprite
 to an index originally occupied by seq-37 battery; direct indexing erased the wrong
 rectangle and lost the sprite. Raw-pointer comparison lost the nine identical
 Statics on `00003` after image relocation. Leaving Static `+0x20` stale lost artwork
@@ -875,9 +960,8 @@ fixed point, direction and pixel gaps. Rotating around top-left displaced `00046
 hour by 8×76px and second hand by 8×120px. Use the stored `+0x24/+0x26` sweep.
 `ResizedWidgetLeavesNoGhostTest` covers stale pixels; `EmptyStyleTest` covers zero records.
 
-Native removal preserves all rasters and saves record bytes for restore. Restore
-appends at the end (thus changes z-order), renumbering and relocating saved pointers
-as needed. Duplication appends rather than inserting mid-table. Unsupported operations
+Removal deletes; see [Deleting widgets](#deleting-widgets). Duplication appends rather
+than inserting mid-table. Unsupported operations
 include arbitrary construction, middle insertion, font replacement, unknown-pointer
 rewriting and universal cross-firmware conversion. Manual schema-level opportunities
 are not necessarily editor features: a hand pivot, existing glyph-group reference
@@ -888,6 +972,24 @@ A file cannot supply a new live data source or arbitrary font program, recover l
 RGB565 precision, or safely change the panel identity/geometry. The two reference
 files contain no unreferenced raster or compression stage; shrinking artwork and
 bounded imported-resource deletion are separate editing mechanisms.
+
+### Renumbering a face
+
+`FaceIdentity.renumber` moves a container to another five-digit face ID at the same length.
+It rewrites the two places the watch reads the ID: each entry path's `SM-R390_<id>_256x402/`
+directory and `setting.bin +0x10`. The rebuild recomputes the entry and header CRCs. The name
+slots (`+0x39`, `+0x79` after their lead bytes) keep the old name. The watch never reads them,
+and those are exactly the bytes the T3 probes installed: `00201` and `00202`, both selectable
+beside Info_4, with slots still reading `SM-R390_00006_256x402`
+([recorded](direct-install.md#recorded-on-a-watch)).
+
+Only custom faces are renumbered, once, when they are made
+([architecture](architecture.md#a-custom-face)). `FaceIdentityTest` checks that:
+
+- the renumbered template changes only the header CRC, each directory record's path and CRC,
+  and `setting.bin`'s five ID bytes;
+- every catalogue container renumbers to `00201`, passes `DeliveryChecks` there, and
+  renumbers back byte for byte.
 
 ### Deleting numbered styles
 
@@ -902,8 +1004,7 @@ Select the corresponding complete `PreviewStream.RECORD_STRIDE` frames from
 the style payload, one 74-byte directory record and one 99,696-byte picker frame.
 
 Session metadata composes current-to-pristine variant identities through repeated
-deletions. Remap native/donor origins and saved removed records; discard records
-owned only by deleted styles. Pristine resizing, original-angle resets, shipped
+deletions. Remap native/donor origins; discard origins owned only by deleted styles. Pristine resizing, original-angle resets, shipped
 image counts and packaged PNG lookup all resolve through that mapping. The active
 style follows its survivor; deleting it selects the next survivor, otherwise the
 previous one. AOD selection stays AOD. Reset restores the project's full pristine
@@ -919,7 +1020,7 @@ offer style management. Persistence and archive contracts are in
 
 `StyleDeletionTest` sweeps corpus deletion candidates and survivor shapes, alongside
 synthetic default, path and invalid-selection cases. `CanvasIntegrityTest` compares
-survivor renders; repository tests cover resize/restore, shared imported resources,
+survivor renders; repository tests cover resize/deletion, shared imported resources,
 rollback, reopening, archives, copies, previews and Reset. These software checks do
 not establish arbitrary style deletion on hardware. Verify middle/active removal,
 remaining picker frames, AOD, wake/reboot and subsequent installs on a watch; the
@@ -937,8 +1038,7 @@ Before accepting, compare every resolved placement's origin, basis and mapped
 referent. Refuse loss of an existing anchor or activation of a forward reference,
 even if its current coordinates happen to agree with panel placement. Self references
 remain self references; nonexistent producer targets remain unchanged. Unsupported
-alignment codes refuse arrangement. Saved removed records carry their named targets
-through the same permutation before later Restore.
+alignment codes refuse arrangement.
 
 The repository commits the permutation with native and donor identities atomically.
 Selection follows the moved widget, pending moves are cancelled, and review/thumbnail
@@ -947,8 +1047,8 @@ those identities into each current table; current indices must never select sibl
 after reorder. Ambiguous duplicate counterparts are skipped. Arrangement itself is
 selected-variant-only, including isolated AOD.
 
-`WidgetReorderTest` checks synthetic dependencies, mixed record sizes, saved removals
-and corpus round trips. `CanvasIntegrityTest` checks actual opaque overlap and unchanged
+`WidgetReorderTest` checks synthetic dependencies, mixed record sizes and corpus round
+trips. `CanvasIntegrityTest` checks actual opaque overlap and unchanged
 per-widget artwork. Emulator checks do not establish watch-side acceptance of changed
 record order; deliberate hardware verification remains outstanding.
 
@@ -1124,14 +1224,13 @@ angle itself (`SessionLineage.artworkTurns`; persistence in
   the saved turn, and a turn lands on the rung the pool is on now. Turning back to zero at
   full size reproduces the shipped bytes.
 - **Keyed by artwork.** The turn is saved under the original variant and lowest original
-  image index, or the import origin, so widget removal, restore, duplication and reordering
+  image index, or the import origin, so widget deletion, duplication and reordering
   keep it. Saving one moves the project to checkpoint/archive schema 4.
 
 A turned digit turns in place: the time does not swing as a group about a common centre.
 A resize keeps the top-left and a turn keeps the centre, so mixing them moves a widget —
 an 80 px picture turned 45°, halved, then turned back sits about 9 px from where it began —
-while the artwork itself stays exact. A widget removed before its artwork was turned keeps
-its saved position when restored over the larger image.
+while the artwork itself stays exact.
 
 A turn keeps the resize rung: the same percentage of the original, now turned. A widget
 enlarged near its limit may not fit that rung at the new angle, and then takes the largest
@@ -1143,7 +1242,9 @@ style-local and the selected style's pixel size would squash a sibling turned di
 rung down while turned. `ArtworkTurnTest` covers quarter and arbitrary turns, aligned and
 shared widgets, opaque pictures, refusals and resize while turned, and turns 168 distinct
 artwork pools in the first style of the 99 faces and back to their shipped bytes. `CanvasIntegrityTest`
-checks a turned line, arc or picture changes only pixels inside rectangles that changed.
+checks a turned line, arc or picture changes only pixels inside rectangles that changed,
+and that a widget pushed to the off-panel limit past each edge keeps its artwork and changes
+only pixels inside rectangles that moved.
 Rotation editing has software/corpus/emulator coverage; physical-watch checks of changed
 live text, clipping, turned lines, arcs and artwork, and wake behaviour remain unperformed.
 Resized artwork with new dimensions is accepted on hardware; turned artwork, including an
@@ -1167,7 +1268,8 @@ All 1,320 of these colour words in the 99-face catalogue are opaque. A recolour 
 same-size patch: the colour word, plus each copy that still equals it before the edit, so a
 record that broke the convention keeps its own bytes. The requested colour must be opaque;
 the selected record must carry an opaque colour word, and a sibling style that does not is
-skipped. Picture widgets have no colour field; tinting their pixels is not offered.
+skipped. Image widgets have no colour field. A picture added as a widget takes a colour only
+while it is placed, baked into its pixels ([Adding a picture](#adding-a-picture)).
 
 Colour is not identity: `payloadKey` masks colour words as it masks angles. Reset returns
 **each style in scope to its own original** — the import baseline, or the original (or
@@ -1183,10 +1285,34 @@ pixels. Pair colour is hardware-proven; Composite, Rule and arc colour have not 
 ### Adding or replacing backgrounds
 
 Fourteen faces lack backgrounds in every style; `00011`/`00108` lack them in some.
-Replacement/tint edits styles that have a background, skipping others and failing
-only if none does. `FaceEditor.tintBackgrounds` maps each current sample to the tint colour
+Replacement/tint edits styles that have a background, failing only if none does. A
+whole-face replacement also gives each bare style in it one by the addition below, as many
+as fit, selected first, so All styles writes every style even after Remove background.
+
+**Removal.** `StructuralEditor.deleteBackground` deletes a style's still background outright:
+its Static and its raster, leaving the style as the faces that ship without one are. Widgets
+positioned against it are positioned against a panel-sized rectangle at the origin — the
+whole face — so their references become `WidgetImporter.ROOT_TARGET`, which names nothing and
+falls back to the whole face. It applies only where one Static at the panel's origin draws
+the raster and it is not the style's only raster (`deletableBackground`; see
+[Deleting widgets](#deleting-widgets) for why a section is never emptied); anything else is
+painted black through the same-size replacement, as Remove did before. `CanvasIntegrityTest`
+deletes all 380 catalogue style and AOD backgrounds: each draws pixel for pixel what painting
+it black draws, frees exactly its Static and raster (`deletedBackgroundBytes`), and leaves
+every other entry byte-identical. Not yet sent to a watch; the result is the shape of the
+fourteen faces without a background.
+
+**Scope.** Replacement, addition and import write every style by default, as they always
+did. **This style only** (`thisStyleOnly`) writes the selected style alone: a replacement
+needs that style to carry a background, and a style painting onto black is *given* one, by
+the addition below, even while its siblings carry theirs, which the whole-face edit cannot do
+on `00011`/`00108`. AOD is always its own scope either way. `BackgroundScopeRepositoryTest`
+checks every other entry stays byte-identical on `00112` and `00108`, for import too. `FaceEditor.tintBackgrounds` maps each current sample to the tint colour
 scaled by its luminance, so tints compound and darken with every application; the app does
-not offer it. A tint control must tint from the untinted background and save its colour. `backgroundStyles` describes actual targets before image selection.
+not offer it. Colour is offered only while a new image is placed (`ImagePlacement.tint`):
+the picked picture's decoded pixels are recoloured once by the same rule (`tintedColor`)
+before encoding, so nothing compounds; a picture added as a widget takes the same control.
+`backgroundStyles` describes actual targets before image selection.
 RGB565+A replacement changes colour only: preserve the rounded-corner mask (656 of
 102,912 pixels on `00003`). Indexed replacement requantizes colour and opacity;
 `00002` style0 is the sole indexed raster in the 99-container catalogue.
@@ -1237,7 +1363,7 @@ use the background path. Other constructors have no producer samples.
 | --- | --- |
 | Rasters | Follow `WidgetSchema` pointers, including every frame. Preserve sharing within one import; separate imports get independent pools; duplicates share |
 | Alignment | Resolve donor geometry, rebase against panel with target `0xFFFF`, retain code for justification. Widget-count bound keeps that target unreachable |
-| Fonts | Reuse identical binding or append, at most ten; synchronize all variant font counts without changing their widgets/rasters |
+| Fonts | Reuse a binding that draws alike: the same 72 selectors and pixel size; the unread role name is ignored. Otherwise overwrite an appended binding nothing names any more (`FontSlots`), otherwise append; at most ten. Synchronize all variant font counts without changing their widgets/rasters |
 | Dictionaries | Preserve target prefix, append donor tables; missing locale uses corresponding English table or refuses. Rebase actual references, never Composite numeric presence flags |
 
 Refuse unknown alignment, unsupported dynamic indexing, incomplete resources,
@@ -1259,29 +1385,183 @@ prior successful commits remain saved and the UI reports partial results. A revi
 set composes donor layers in pick order; copied pixels and checked donor-position
 invariance make its z-order/placement match the successive commits.
 
-### Removing imported widgets
+### Adding a picture
 
-`deleteWidget` permanently removes an imported record and its uniquely owned appended
-rasters; native removal remains restorable. A measured `00013` project retained 52
-unused rasters (1,370,656 bytes) after nine imported digits were removed by the old path.
+`PictureWidget.insert` adds a picked picture as an import in every way the rest of the
+editor sees: one 40-byte Static appended to the
+selected variant's table (alignment code 0, target `0xFFFF`, source and interaction flag
+zero) and its raster appended after every existing image. The insert checks that every
+earlier record and image is byte-identical afterwards, and that the new widget is a
+canvas widget at the expected place and size.
 
-- Never delete an image below the pristine entry's image count.
-- Never delete an image referenced by another live widget or a saved removed record.
-- Preserve survivor image order, relocate declared pointers and saved records through
-  `relocateSavedWidget`, and assert identical artwork and non-pointer bytes.
-- Keep font resources (removing them renumbers others) and an import-origin table
-  entry while added resources remain, even when no imported widget is live. An empty
-  provenance table would make reopen reject the foreign resources.
+| Rule | Contract |
+| --- | --- |
+| Raster | `IMAGE_RGB565` when every pixel is opaque, otherwise `IMAGE_RGB565_ALPHA`; a fully transparent pixel stores black; 4-byte zero trailer. Appended RGB565+A pictures with soft edges blend on the watch (probe T7, 2026-10-14) |
+| Baseline | The picture fitted within the panel width and one pixel less than its height, never enlarged. It is saved as a one-record entry, like an import's, and every resize and turn is drawn from it. A colour chosen while placing it (`tintedColor`: by brightness, alpha and near-black kept) is baked into the baseline, so resizes and turns keep it |
+| Size and place | A rung of the baseline's resize ladder, sampled with `RasterResampler` exactly as a resize to that rung would be (`PictureWidgetTest` compares the bytes), with its top-left where it was placed |
+| Never a background | Covering the whole panel both ways is refused; the baseline rule makes it impossible. With the exact-size rule above, turning or enlarging past the panel keeps it a widget |
+| Cost | `PictureWidget.addedBytes`: 40 + 12 + w × h × (2 or 3) + 4, equal to the container's growth (tested). Growth past the 4 MiB ceiling is refused by `rebuild` |
+| Provenance | `WidgetImportOrigin.kind` `PICTURE` with an empty face ID, validated as exactly one Static placed on the panel. Donor origins omit `kind`, so their JSON is unchanged |
 
-`ImportedWidgetDeletionTest` checks import/delete byte restoration and retained
-references. Hardware acceptance of a decreased image count is still unverified.
+Deleting a picture uses the imported deletion below and gives back the face it was;
+deleting the last one drops a table of nothing but pictures, so the project returns to
+checkpoint schema 3 or 4. The checkpoint and archive schema rules are in
+[Architecture](architecture.md#the-project-archive). An added picture on a watch is
+covered by T7's mechanics, not yet by a session adding one through the app.
 
-A copy of a stock widget (`SessionLineage` marks it `duplicate`) is also deleted rather
-than saved under Removed: its record is cut exactly as a native removal cuts it, but no
-`RemovedWidget` is kept. Its rasters stay, because a stock duplicate owns none — it draws
-the pool of the widget it copied, which is live or itself saved under Removed. Originals
-remain restorable; repeated duplicate-and-remove no longer accumulates restorable copies.
-A new copy is also moved `DuplicateOffset` (8 px) right and down in the same commit — the
+### Adding a moving background
+
+`MovingBackgroundEditor.insert` adds a GIF's frames as one type-4 Animation that plays under
+every widget of the selected variant (a numbered style or the always-on display).
+`GifDecoder` composites the frames as a viewer shows them. `AnimationTiming` turns the
+delays into the record's period and frame table, and the repository places every frame
+like a still background.
+
+| Rule | Contract |
+| --- | --- |
+| Frames | One `IMAGE_INDEXED8` raster per stored frame at the panel rectangle the placed picture covers (`movingBackgroundBounds`: its `placedRect` rounded outward and cut to the panel), a 256-colour median-cut palette (`IndexedImage.quantize`), a byte a pixel, zero trailer. Translucent pixels are laid over black first. The rest of the panel is black, the still background deleted when one is added, so it is not stored. A kept frame with exactly the same source pixels as an earlier kept one is not stored again; its entries name the earlier raster (`AnimationSource.firstOf`, `AnimationPlan.kept` against `frames`), which the watch plays (P1). Appended after every existing image, so nothing moves |
+| Record | Type 4, `+0x0C` index and size, mode 0, `+0x24` table length (≤ 255), `+0x25` repeat `0xFF`, `+0x26` period in ms, then one pointer an entry. A frame held for several periods is several entries naming one raster. Full-panel frames: position 0,0 and nothing else set, byte for byte as before. Smaller frames: the rectangle's corner at `+0x18/+0x1A` and `"BKGD"` in `+0x1C..+0x1F`, which the firmware never reads (`ANIMATION_BACKGROUND_TAG`), because the size no longer says it is a background. Confirmed on a watch below |
+| Fit | CONTAIN, COVER and STRETCH as for a still background, and NATIVE, the picture's own pixels one to one at zoom 1 with its corner on a whole pixel. NATIVE is offered only here and never remembered as the preferred fit. The frame step is chosen again for the new rectangle whenever the fit changes |
+| Timing | Delays under 20 ms count as 100 ms; a dropped frame's time goes to the frame kept before it; the period is the delays' GCD, falling back to the average with one entry a frame past 255 entries. The watch loops it whatever `+0x25` says (T1b), and plays it about 3× slower on the always-on display (T1e) |
+| Layer | Directly above the variant's last full-panel layer, or index 0 on a bare one; every later record moves up one and named alignment targets are renumbered. The insert checks every earlier record draws identical artwork at an identical place, and that the new record names exactly its own frames in table order |
+| Not "the" background | `FaceRecordParser.backgroundImage` skips rasters only an Animation draws, so Replace, tint and import edit the still background (or report none) and never one frame. Its guide is still `BACKGROUND` (by size, or by the tag for smaller frames), so Arrange pins it, it is never counted as a moving picture, and the widget overlay drawn over a background being placed leaves it out |
+| Cost | `animationAddedBytes`: stored frames × (12 + 1024 + w × h + 4) + 40 + 4 × entries at the stored rectangle, equal to the growth (tested); 103,952 bytes a frame at 256 × 402, 8,540 at a 100 × 75 GIF's own size. One a variant: a new moving, still or imported background deletes it in the same commit, its room counted free (tested). Adding one deletes the variant's still background in the same commit, as Remove background does, its room counted free too (`EditorSnapshot.stillBackgroundBytes`), so deleting it later leaves none |
+| Provenance | None new: an added widget with no original (`NativeWidgetOrigin()`), as an added still background is. Removing it deletes the record and every frame only it drew; Undo brings it back |
+
+`MovingBackgroundEditorTest` adds one to the first style of every catalogue face that has
+room and removes it again byte for byte.
+
+A video becomes the same frames: `AndroidVideoSource` reads a clip of it (`VideoClip`: ten
+frames a second) with the platform's `MediaMetadataRetriever`, upright and just large enough
+to cover the panel, into a cache file at three bytes a pixel (`CachedVideoFrames`; how long
+it is kept is in the [architecture](architecture.md)). Where the video gives its frame count it is read in one pass, runs of
+consecutive frames with the one nearest each sample time kept (`VideoFramePlan`,
+`getFramesAtIndex`); otherwise, or if that fails, one frame at a time (`OPTION_CLOSEST`),
+which decodes from a keyframe for every frame. A frame that cannot be decoded repeats the one
+before it, so a frame's position always says its time. Each frame then lasts 100 ms; nothing
+else differs from a GIF.
+
+Both are added a part at a time (`AnimationParts`), a `VideoClip` on the source's own
+timeline. The editor opens at every frame of the longest part from the start that fits the
+room at what a frame costs, and fits the longest part again whenever the frames kept, the fit
+or the start change; Shorter and Longer then trim it, Longer no further than fits. A GIF's
+part is cut from frames already decoded, a frame belonging to it when it starts inside it at
+the frame nearest the half second asked for. A video is read once when it is picked, all one
+read takes from its start (`VideoClip.window`, after `WatchFaceRepository.probeVideo`), and
+every later change is cut from those frames; only a start past them, or a part from a later
+start whose every frame read fits, is read again. Both count repeats exactly
+(`AnimationParts.fittingFrames`). A GIF under a
+second (`AnimationParts.MIN_GIF_MS`) or of two frames is kept whole, at the smallest step that
+fits, as every source was before parts. A pinch, Size, Reset or a drag partly off the face
+changes what a frame costs, and fits the part again too, cut from the frames read and never
+reading, so the part and how far Longer goes always match the room.
+
+Neither source has a frame or length cap of its own. `GifDecoder` stops at 64 MiB of decoded
+ARGB frames, and the GIF file itself is read up to 32 MiB. One video read takes at most a
+minute (`VideoClip.MAX_READ_MS`) and 256 MiB of cached frames (`MAX_CACHED_BYTES`): all of
+the minute for a portrait video, about 31 s of a landscape 1080p one read at 715 × 402.
+What is kept is then decided by the record and the container: the table holds at most 255
+entries, so a part keeping every frame is at most 255 frames long, and every 2nd frame
+doubles that.
+
+**On a watch** (one SM-R390, 2026-10-22; probes from `MovingBackgroundProbesTest` and the
+app's own flow), every case played as the Canvas showed it:
+
+- on a custom face, one frame named by four table entries was held four times as long: ten
+  loops took 27–28 s against 2.75 s a loop, and it restarted at its first frame on wake;
+- above `00046`'s still background, with no widget missing or moved;
+- on the always-on display, period 500 ran at the expected 1.5 s a frame. With T1e's
+  1000 ms at about 3 s, that supports a 3× multiplier rather than a fixed floor;
+- 25 full-panel frames at 100 ms played smoothly under a moving picture;
+- a background added in the app from a GIF, and one from a video clip.
+
+**Smaller frames on a watch** (one SM-R390, 2026-11-05; probes P1–P4 from
+`FramePackingProbesTest`, after the same flow in the app on an emulator): a moving background
+stored at a rectangle draws at its corner, under the time with black around it, on
+a custom face and over `00046`'s still background under its hands, in a style and on the
+always-on display; one raster named twice and out of order in the table plays. A 100 × 75 GIF
+at NATIVE kept all 200 frames in 2.06 MB and played smoothly; at CONTAIN across the width it
+kept every 3rd frame in 3.71 MB.
+
+**Several Animations do not stay in step** (same watch and day, probes T1–T5). A full-panel
+sweep cut into tiles, one Animation each with the same table and period, played straight
+after a restart, but entering the face from the picker started a later group of
+records about 75 ms behind an earlier one, for good: 24 tiles in row order broke across the
+face at the record boundary, the same tiles in column order broke down it, and 6 full-width
+strips broke too. 24 tiles advanced about every 150 ms against a stored 100, 48 crawled, and
+one full-panel Animation was smooth. So a picture is never split across Animations: tiles
+sharing rasters, which would have stored a flat GIF 2–4× smaller, are not used.
+
+### Adding a moving picture
+
+`MovingPicture.insert` adds a GIF or video clip as a widget: one type-4 Animation on top of
+the selected variant, drawing frames of its own.
+
+| Rule | Contract |
+| --- | --- |
+| Frames | One `IMAGE_INDEXED8` raster per kept frame at the chosen size. When any pixel is under half alpha, palette entry 0 is clear (all four bytes zero) and those pixels take it; the other 255 entries are median cut (`IndexedImage.quantizeWithClear`). T1d proved an alpha-0 entry draws through; partial palette alpha is unproven, so nothing between is written. Appended after every existing image |
+| Record | As a moving background's, with its position at `+0x18/+0x1A`: panel coordinates, since an Animation has no alignment fields (the T1 probes' 64 px animation played at 96, 200) |
+| Layer | Appended: the last record, so it draws on top and nothing is renumbered. The insert checks every existing record and image byte is unchanged and the new guide sits at the requested place and size |
+| Size | Chosen before adding, from the picture ladder; the frames are resampled once from the source. Refused when it would cover the whole panel both ways (it would read as a background). `WidgetSchema.ANIMATION.resize` stays null, so it is not resized once added |
+| Provenance | None new, as for a moving background. The snapshot recognises one from its record (type 4, no original, not full-panel) and reports `AddedWidgetKind.MOVING_PICTURE`, which is never written into import origins (a table claiming one is refused). Remove deletes it with the frames no other record draws: a duplicate shares them |
+
+`MovingPictureTest` adds one to the first style of every catalogue face and removes it byte
+for byte. On a watch (2026-10-22), two over `00112`'s widgets each played at its own
+period and showed the face through their clear pixels. The one hanging 40 px past the
+right edge played smoothly and was clipped cleanly at the panel, not wrapped, as T2's
+Static, Sprite, Value and Composite overhangs were. Moving pictures added in the app, from a GIF and from a video, played over
+a moving background.
+
+The canvas plays every Animation it can decode: the composer returns each one's distinct
+frames, table and period beside the layers, and the Canvas page draws the still runs
+between animations once and each animation's current frame between them.
+
+### Deleting widgets
+
+`StructuralEditor.deleteWidget` is the only removal the editor makes, for every widget —
+stock, imported, a duplicate or added. It cuts the record from each targeted variant
+(refusing a widget others are positioned against), then drops every image record in that
+variant no live widget points at, through `dropImages`. There is no Removed list and no
+Restore: Undo, Reset and importing the widget again from the same face bring one back. This
+replaced a model where stock removals kept their rasters for Restore. On 2026-11-06, the 789
+stock widgets of `style0.bin` that can be deleted one at a time across the 99 faces freed
+13,822,710 bytes between them (each measured alone from the shipped face).
+
+- **Shared artwork stays.** A raster another widget still points at is drawn, so it is kept:
+  a duplicate's pool, the digits an hour-tens sprite shares with hour-units (`00011`).
+- **Undrawn means unneeded.** No `style*.bin` in the 99-container catalogue carries a raster
+  nothing draws, so purging every undrawn image takes nothing a face relies on. It also takes
+  what an older build kept for a Restore: saved removals in old checkpoints and archives are
+  read and ignored, and their rasters go with the next deletion in that variant.
+- **Never an empty section.** Every later edit refuses a style without an image section
+  (`requireContiguousWidgets`), so deleting the last widget keeps the smallest raster, and
+  `dropImages` refuses to take every image.
+- **Relocation is checked.** `dropImages` rebuilds the section from survivors in order,
+  rewrites every declared pointer through `relocatePointers` and asserts each survivor draws
+  byte-identical artwork with otherwise identical record bytes.
+- **Identity is the lineage.** Pristine-based resize and artwork turns (keyed by original
+  image index) read the pristine entry through the saved `SessionLineage`, so a lower image
+  count does not move them. The stateless pairing (`originalWidgetSources`, `payloadKey`)
+  names rasters by index and stops matching once a shipped raster has gone; it is only a
+  fallback for a project with no lineage yet, whose rasters are intact. Every commit
+  saves the lineage, and `CanvasIntegrityTest` carries one through its edit chains. Lineage and import origins are renumbered for the cut record;
+  import origins with no live widget are pruned (one donor table is kept while its added
+  fonts remain).
+- Keep font resources (removing them renumbers others). A kept binding is not lost to later
+  imports (issue #11). An import may overwrite an appended binding in place, a same-size
+  patch that renumbers nothing, when no live Value or Composite record in any style or the
+  always-on display names it and no kept import baseline does. Vendor bindings, the pristine
+  count, are never rewritten. `FontSlotsTest` replays the add-and-remove cycle that used to
+  fill all ten slots.
+
+`WidgetDeletionTest` sweeps every deletable stock widget of `style0.bin` on every face
+(exact rasters freed, survivors' artwork identical, validation clean), import/delete byte
+round trips, shared digits, emptied styles and leftovers from older builds.
+`WidgetOriginPairingTest` and `CanvasIntegrityTest` check pairing and rendering after
+deletions that renumber the table and move rasters. Hardware acceptance of an image count
+below the shipped one, and of a style reduced to one raster, is **not yet verified**.
+
+Duplicates are deleted the same way. A new copy is also moved `DuplicateOffset` (8 px) right and down in the same commit — the
 other way near the panel edge, not at all for hands and other outline-less widgets — so it
 does not sit invisibly on its original (`duplicateOffset`).
 
@@ -1303,6 +1583,22 @@ All 99 vendor containers carry `aod.bin`: 442 widgets, 991 rasters; 66 digital a
 33 analog faces. Only 32 have panel rasters (26 RGB565, 6 RGB565+A); 67 compose on
 black. It has the same entry grammar and editing rules as styles.
 
+The stock always-on envelope is narrower than a style's:
+
+| Widget type | Sources used in stock AODs |
+| --- | --- |
+| Hands | hour 1 and minute 9 only (33 each), never seconds |
+| Sprites | clock digits 2, 3, 10 and 11 (66 each), plus one each of 17, 106, 107, 109 and 110 |
+| Values | 0, 5, 17, 18, 116 and 125 |
+| Composites | dates |
+| Statics | 68 |
+
+No stock AOD carries an animation, a battery reading or a health metric. That is a
+corpus fact. An added Animation does play there, about three times slower (T1e, and a
+moving background in 2026-10-22's M1). Whether the firmware draws a battery reading or a
+health metric in AOD is unknown, which matters for the always-on display warnings in
+imports.
+
 `Session.editTargets` enforces isolation in both directions, tested byte-for-byte by
 `AodIsolationTest`. `AOD_ENTRY_NAME` belongs to `:core:model`. `selectedVariant`
 chooses what is shown/edited; `activeStyleName` selects the numbered style to install
@@ -1319,12 +1615,21 @@ marker and tint changes, Pair position/colour, type-aware background/Sprite relo
 non-final removal and append duplication on `00106`, added backgrounds, widget resize,
 widget import, and original/modified standalone-BIN installation.
 
+Probe results from one watch on 2026-10-14 are recorded where each feature is
+described: type-4 animations (§7), palette alpha and appended RGB565+A pictures (§8),
+half-off overhangs and empty styles (identity and structural edits), changed font
+bindings (§5) and a swapped date order (Comp, §7). A session on 2026-10-22 covered
+moving backgrounds and moving pictures, from GIFs and video, made by probes and through
+the app, on a custom face started in the app
+([moving background](#adding-a-moving-background), [moving picture](#adding-a-moving-picture)).
+
 These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
 need particular attention; imported type/source combinations remain incompletely
 verified. Composite, Rule and vector arc recolours are software/corpus/emulator checked
-only. No AOD edit (including added background), imported-image deletion, or the
-single-style custom-template recipe has been verified on a watch. Resource preview
-tests prove joins and edit invariants, not exact ROM fonts, antialiasing or live data.
+only. Apart from added Animations (T1e, M1), no AOD edit, including an added still
+background, and no imported-image deletion has been verified on a watch. Resource
+preview tests prove joins and edit invariants,
+not exact ROM fonts, antialiasing or live data.
 `AodCanvasSweepTest` covers all 99 AOD entries in software. Other firmware may
 read fields treated as no-effect here. Delivery recovery gaps
 are tracked in [Direct install](direct-install.md#unverified).

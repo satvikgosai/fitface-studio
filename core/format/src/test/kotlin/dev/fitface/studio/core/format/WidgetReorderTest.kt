@@ -98,19 +98,6 @@ class WidgetReorderTest {
         assertThrows(Fit3FormatException::class.java) { StructuralEditor.reorderWidget(source,"style0.bin",1,5,999,0,0,2) }
         assertArtworkPreserved(source, reorder(source, 1, 2, "aod.bin"), "aod.bin")
     }
-    @Test fun savedRemovalRetainsItsNamedAnchorAfterReorderAndRestore() {
-        val source = synthetic(mapOf(2 to (1 to 1)))
-        val w = FaceRecordParser.scanWidgets(source.entryByBasename("style0.bin"))[2]
-        val cut = StructuralEditor.removeWidget(source, listOf("style0.bin"), 2, w.widgetType, w.sequenceId, w.x, w.y, false)
-        val moved = reorder(cut.container, 0, 2)
-        val raw = StructuralEditor.remapSavedAlignmentTargets(moved.edit.container.entryByBasename("style0.bin"),
-            cut.removedRecords.getValue("style0.bin"), moved.indices)
-        assertEquals(0, raw.u16(0x22))
-        val restored = StructuralEditor.appendWidget(moved.edit.container, listOf("style0.bin"), mapOf("style0.bin" to raw)).container
-        val place = FaceRecordParser.placements(restored.entryByBasename("style0.bin")).getValue(3)
-        assertEquals(0, place.targetGlobalIndex)
-        assertEquals(PlacementBasis.ALIGNED_TO_WIDGET, place.basis)
-    }
     @Test fun everyCorpusVariantEitherRefusesAlignmentChangesOrReordersLosslessly() {
         val root = Path.of(requireNotNull(System.getProperty("fit3.corpusRoot"))).resolve("SM_R390")
         assumeTrue(Files.isDirectory(root))

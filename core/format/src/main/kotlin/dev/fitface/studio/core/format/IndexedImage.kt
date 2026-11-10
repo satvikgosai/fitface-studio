@@ -37,32 +37,75 @@ internal object IndexedImage {
         return output
     }
 
-    private fun buildPalette(argb: IntArray): IntArray {
+    /**
+     * As [quantize], for a frame drawn over the face rather than under it: a pixel under half
+     * alpha is see-through and takes palette entry 0, the one entry with alpha 0, and the rest
+     * are median cut into the other 255, all opaque. Partial palette alpha has not been on a
+     * watch, so nothing in between is written. A frame with nothing see-through is [quantize]'s.
+     */
+    fun quantizeWithClear(argb: IntArray): ByteArray {
+        require(argb.isNotEmpty()) { "cannot quantize an empty image" }
+        val clear = BooleanArray(argb.size) { argb[it] ushr 24 < 0x80 }
+        if (clear.none { it }) return quantize(argb)
+        val opaque = argb.filterIndexed { index, _ -> !clear[index] }.toIntArray()
+        val colours = if (opaque.isEmpty()) IntArray(INDEXED_PALETTE_ENTRIES - 1)
+            else buildPalette(opaque, INDEXED_PALETTE_ENTRIES - 1)
+        val output = ByteArray(INDEXED_PALETTE_BYTES + argb.size)
+        // Entry 0 stays all zero: black with alpha 0.
+        colours.forEachIndexed { index, color ->
+            val base = (index + 1) * 4
+            output[base] = (color and 0xFF).toByte()
+            output[base + 1] = (color ushr 8 and 0xFF).toByte()
+            output[base + 2] = (color ushr 16 and 0xFF).toByte()
+            output[base + 3] = 0xFF.toByte()
+        }
+        val exact = HashMap<Int, Int>(colours.size * 2)
+        colours.forEachIndexed { index, color -> exact.putIfAbsent(color, index) }
+        argb.forEachIndexed { pixel, color ->
+            output[INDEXED_PALETTE_BYTES + pixel] = if (clear[pixel]) 0 else {
+                val rgb = color and 0x00FF_FFFF
+                ((exact[rgb] ?: nearest(colours, rgb).also { exact[rgb] = it }) + 1).toByte()
+            }
+        }
+        return output
+    }
+
+    private fun buildPalette(argb: IntArray, entries: Int = INDEXED_PALETTE_ENTRIES): IntArray {
         val distinct = LinkedHashSet<Int>()
         for (color in argb) {
             distinct += color and 0x00FF_FFFF
-            if (distinct.size > INDEXED_PALETTE_ENTRIES) break
+            if (distinct.size > entries) break
         }
-        if (distinct.size <= INDEXED_PALETTE_ENTRIES) {
-            val palette = IntArray(INDEXED_PALETTE_ENTRIES)
+        if (distinct.size <= entries) {
+            val palette = IntArray(entries)
             distinct.forEachIndexed { index, color -> palette[index] = color }
             // Unused slots repeat the last real colour so no index can decode to
             // an accidental black.
             val fill = distinct.lastOrNull() ?: 0
-            for (index in distinct.size until INDEXED_PALETTE_ENTRIES) palette[index] = fill
+            for (index in distinct.size until entries) palette[index] = fill
             return palette
         }
 
-        var boxes = listOf(argb.map { it and 0x00FF_FFFF }.toIntArray())
-        while (boxes.size < INDEXED_PALETTE_ENTRIES) {
-            val target = boxes.filter { it.size > 1 }.maxByOrNull(::spread) ?: break
-            val split = split(target) ?: break
-            boxes = boxes.flatMap { if (it === target) split.toList() else listOf(it) }
+        // Each box's spread is measured once, when it is made: re-measuring every box for each
+        // of 255 splits was most of the time a video frame took. Same boxes, same order.
+        val boxes = mutableListOf(IntArray(argb.size) { argb[it] and 0x00FF_FFFF })
+        val spreads = mutableListOf(spread(boxes[0]))
+        while (boxes.size < entries) {
+            var target = -1
+            for (index in boxes.indices) {
+                if (boxes[index].size > 1 && (target < 0 || spreads[index] > spreads[target])) target = index
+            }
+            if (target < 0) break
+            val split = split(boxes[target]) ?: break
+            boxes[target] = split[0]
+            spreads[target] = spread(split[0])
+            boxes.add(target + 1, split[1])
+            spreads.add(target + 1, spread(split[1]))
         }
-        val palette = IntArray(INDEXED_PALETTE_ENTRIES)
+        val palette = IntArray(entries)
         boxes.forEachIndexed { index, box -> palette[index] = average(box) }
         val fill = palette[(boxes.size - 1).coerceAtLeast(0)]
-        for (index in boxes.size until INDEXED_PALETTE_ENTRIES) palette[index] = fill
+        for (index in boxes.size until entries) palette[index] = fill
         return palette
     }
 
@@ -113,7 +156,13 @@ internal object IndexedImage {
             greenRange -> 8
             else -> 0
         }
-        val sorted = box.sortedBy { (it ushr shift) and 0xFF }.toIntArray()
+        // A stable counting sort on the widest channel: the order a stable sort gives, without
+        // boxing a hundred thousand colours.
+        val starts = IntArray(257)
+        for (color in box) starts[((color ushr shift) and 0xFF) + 1]++
+        for (value in 1..256) starts[value] += starts[value - 1]
+        val sorted = IntArray(box.size)
+        for (color in box) sorted[starts[(color ushr shift) and 0xFF]++] = color
         val middle = sorted.size / 2
         if (middle == 0 || middle == sorted.size) return null
         return arrayOf(sorted.copyOfRange(0, middle), sorted.copyOfRange(middle, sorted.size))

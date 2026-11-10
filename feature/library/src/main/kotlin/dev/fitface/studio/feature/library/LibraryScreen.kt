@@ -1,9 +1,9 @@
 package dev.fitface.studio.feature.library
 
 import android.text.format.DateUtils
-import androidx.annotation.StringRes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,30 +23,31 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,29 +77,33 @@ import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.FaceStyleOption
 import dev.fitface.studio.core.model.ProjectArchiveNaming
 import dev.fitface.studio.core.model.ProjectSort
-import dev.fitface.studio.core.model.isOutdated
 import dev.fitface.studio.core.model.ProjectSummary
+import dev.fitface.studio.core.model.isOutdated
+import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.DiagnosticsDialog
 import dev.fitface.studio.core.ui.FitBadge
-import dev.fitface.studio.core.ui.FitDetails
-import dev.fitface.studio.core.ui.FitIconButton
 import dev.fitface.studio.core.ui.FitButton
-import dev.fitface.studio.core.ui.AppMenuAction
 import dev.fitface.studio.core.ui.FitChip
 import dev.fitface.studio.core.ui.FitDropdownMenu
-import dev.fitface.studio.core.ui.FitMenuEntry
 import dev.fitface.studio.core.ui.FitFaceType
-import dev.fitface.studio.core.ui.fitColors
-import dev.fitface.studio.core.ui.fitText
+import dev.fitface.studio.core.ui.FitHeading
+import dev.fitface.studio.core.ui.FitIconButton
+import dev.fitface.studio.core.ui.FitInfo
+import dev.fitface.studio.core.ui.FitMenuEntry
 import dev.fitface.studio.core.ui.FitStatus
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
+import dev.fitface.studio.core.ui.fitColors
+import dev.fitface.studio.core.ui.fitText
 import dev.fitface.studio.core.ui.styleLabel
 import java.io.File
 
 @Composable
 fun LibraryRoute(
+    returns: Int,
     onOpenEditor: (Long) -> Unit,
+    onOpenPhotos: () -> Unit,
     onAbout: () -> Unit,
     onCheckForUpdate: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
@@ -106,9 +111,19 @@ fun LibraryRoute(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
+    // Leaving composition after the editor was put on the back stack is the editor taking the
+    // screen: the sheet closes then, unseen. A rotation before that leaves it alone.
+    DisposableEffect(viewModel) { onDispose { viewModel.onLibraryHidden() } }
+    // [returns] counts pops back to the library. Usually the library has left composition and
+    // this runs as it comes back; backed out of during the editor's enter transition, it never
+    // left, and only the count changing says the hand-off is over.
+    LaunchedEffect(viewModel, returns) { viewModel.onLibraryShown() }
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
-            if (event is LibraryEvent.OpenEditor) onOpenEditor(event.projectId)
+            if (event is LibraryEvent.OpenEditor) {
+                onOpenEditor(event.projectId)
+                viewModel.onEditorNavigated()
+            }
         }
     }
     // Cleared after the snackbar has been shown: clearing first changed this effect's
@@ -224,6 +239,11 @@ fun LibraryRoute(
         onDeleteProject = viewModel::startDelete,
         onImportProject = { importPicker.launch(ProjectArchiveNaming.ImportMimeTypes) },
         onStartCustomFace = viewModel::startCustomFace,
+        onOpenPhotos = onOpenPhotos,
+        onSendPhotos = {
+            viewModel.dismissFace()
+            onOpenPhotos()
+        },
     )
 }
 
@@ -263,6 +283,8 @@ private fun LibraryScreen(
     onDeleteProject: (ProjectSummary) -> Unit,
     onImportProject: () -> Unit,
     onStartCustomFace: (String) -> Unit,
+    onOpenPhotos: () -> Unit,
+    onSendPhotos: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
     Scaffold(
@@ -277,7 +299,7 @@ private fun LibraryScreen(
             LibraryHeader(
                 page = page,
                 state = state,
-                projectCount = state.projects.size,
+                projectCount = state.projects.size.takeIf { state.projectsLoaded },
                 loading = state.isLoadingCatalog,
                 onPage = { page = it },
                 onRefresh = onRefresh,
@@ -299,7 +321,7 @@ private fun LibraryScreen(
                 )
                 LibraryPage.Projects -> ProjectsList(
                     state = state,
-                    enabled = !state.isWorking,
+                    enabled = !state.isBusy,
                     openingProjectId = state.openingProjectId,
                     onQuery = onProjectQuery,
                     onSort = onProjectSort,
@@ -311,6 +333,7 @@ private fun LibraryScreen(
                     onExport = onExportProject,
                     onRemove = onDeleteProject,
                     onStartCustomFace = onStartCustomFace,
+                    onOpenPhotos = onOpenPhotos,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -325,13 +348,15 @@ private fun LibraryScreen(
             downloading = state.downloadingProductId == face.productId,
             downloadFraction = state.downloadFraction,
             uneditable = face.appId in state.uneditableAppIds,
+            takesPhotos = state.takesPhotos(face),
             packageOnDevice = state.selectedFaceCached,
-            projectsEnabled = !state.isWorking,
+            projectsEnabled = !state.isBusy,
             openingProjectId = state.openingProjectId,
             error = state.sheetError,
             onDismiss = onDismissFace,
             onStyle = onStyle,
             onDownload = onDownload,
+            onSendPhotos = onSendPhotos,
             onOpenProject = onProjectClick,
         )
     }
@@ -348,7 +373,8 @@ private val ACTION_TOUCH_TARGET = 48.dp
 internal fun LibraryHeader(
     page: LibraryPage,
     state: LibraryUiState,
-    projectCount: Int,
+    /** Null until the projects have been read, so the tab never claims none. */
+    projectCount: Int?,
     loading: Boolean,
     onPage: (LibraryPage) -> Unit,
     onRefresh: () -> Unit,
@@ -411,7 +437,7 @@ internal fun LibraryHeader(
                     )
                 }
             } else {
-                TextButton(onClick = onImport, enabled = !state.isWorking) {
+                TextButton(onClick = onImport, enabled = !state.isBusy) {
                     Text(
                         stringResource(R.string.library_action_import),
                         style = MaterialTheme.typography.labelMedium,
@@ -482,7 +508,8 @@ internal fun LibraryHeader(
                 modifier = Modifier.weight(1f),
             )
             FitChip(
-                text = stringResource(R.string.library_tab_projects, projectCount),
+                text = projectCount?.let { stringResource(R.string.library_tab_projects, it) }
+                    ?: stringResource(R.string.library_tab_projects_loading),
                 selected = page == LibraryPage.Projects,
                 onClick = { onPage(LibraryPage.Projects) },
                 modifier = Modifier.weight(1f),
@@ -526,7 +553,7 @@ private fun WatchFaceGrid(
                 sortOptions = CatalogSort.entries,
                 sort = state.sort,
                 sortReversed = state.sortReversed,
-                // `canSelectFace`, not `isWorking`. The grid is painted from the on-disk
+                // `canSelectFace`, which leaves out a catalogue refresh. The grid is painted from the on-disk
                 // cache before the network is touched, so `isLoadingCatalog` is true for the
                 // whole opening window of every launch while the screen already looks ready
                 // — and re-sorting a list conflicts with a refresh no more than opening the
@@ -566,25 +593,20 @@ private fun WatchFaceGrid(
                         stringResource(R.string.library_no_matches_title),
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    Text(
-                        stringResource(R.string.library_no_matches_detail),
-                        modifier = Modifier.padding(top = 7.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
                 }
             }
         } else {
             gridItems(state.visibleFaces, key = CatalogFace::productId) { face ->
                 WatchFaceCard(
                     face = face,
-                    // `canSelectFace`, like the sort chips above — not `isWorking`. The
+                    // `canSelectFace`, like the sort chips above, which leaves out a refresh. The
                     // grid is drawn from the on-disk cache before the network is touched,
                     // so `isLoadingCatalog` is true for the whole opening window of every
                     // launch while the screen already looks ready, and a card refusing the
                     // tap there is the silence that predicate was added to end.
                     enabled = state.canSelectFace,
                     uneditable = face.appId in state.uneditableAppIds,
+                    takesPhotos = state.takesPhotos(face),
                     projectCount = projectCounts[face.faceId] ?: 0,
                     onClick = { onFace(face) },
                 )
@@ -594,8 +616,13 @@ private fun WatchFaceGrid(
 }
 
 @Composable
-private fun CatalogLoading() {
-    val loadingDescription = stringResource(R.string.library_loading_a11y)
+private fun CatalogLoading() = LoadingRow(
+    stringResource(R.string.library_loading_title),
+    stringResource(R.string.library_loading_a11y),
+)
+
+@Composable
+private fun LoadingRow(title: String, loadingDescription: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -607,12 +634,7 @@ private fun CatalogLoading() {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        Column {
-            Text(
-                stringResource(R.string.library_loading_title),
-                style = MaterialTheme.typography.titleSmall,
-            )
-        }
+        Text(title, style = MaterialTheme.typography.titleSmall)
     }
 }
 
@@ -651,6 +673,7 @@ private fun WatchFaceCard(
     face: CatalogFace,
     enabled: Boolean,
     uneditable: Boolean,
+    takesPhotos: Boolean,
     projectCount: Int,
     onClick: () -> Unit,
 ) {
@@ -664,7 +687,9 @@ private fun WatchFaceCard(
         styleCount
     }
     val cardDescription = stringResource(
-        if (uneditable) {
+        if (takesPhotos) {
+            R.string.library_face_card_a11y_photos
+        } else if (uneditable) {
             R.string.library_face_card_a11y_not_editable
         } else {
             R.string.library_face_card_a11y
@@ -695,9 +720,11 @@ private fun WatchFaceCard(
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 contentScale = ContentScale.Fit,
             )
-            if (uneditable) {
+            if (uneditable || takesPhotos) {
                 Text(
-                    stringResource(R.string.library_not_editable_badge),
+                    stringResource(
+                        if (takesPhotos) R.string.library_photos_badge else R.string.library_not_editable_badge,
+                    ),
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(6.dp)
@@ -759,6 +786,8 @@ private fun FaceDetailsSheet(
     downloading: Boolean,
     downloadFraction: Float,
     uneditable: Boolean,
+    /** The Photos face: no container to edit, so its one action sends photos to it. */
+    takesPhotos: Boolean,
     packageOnDevice: Boolean,
     projectsEnabled: Boolean,
     openingProjectId: Long?,
@@ -766,6 +795,7 @@ private fun FaceDetailsSheet(
     onDismiss: () -> Unit,
     onStyle: (Int) -> Unit,
     onDownload: () -> Unit,
+    onSendPhotos: () -> Unit,
     onOpenProject: (ProjectSummary) -> Unit,
 ) {
     val selected = face.styles.singleOrNull { it.id == selectedStyleId } ?: face.styles.first()
@@ -885,22 +915,15 @@ private fun FaceDetailsSheet(
                     modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    MicroLabel(stringResource(R.string.library_sheet_package))
+                    FitHeading(stringResource(R.string.library_sheet_package)) {
+                        InfoText(stringResource(R.string.library_download_cache_note))
+                    }
+                    // A package already here costs nothing to open, and that is what this
+                    // line says instead of a size nobody will download.
                     Text(
-                        formatBytes(face.packageSize),
+                        if (packageOnDevice) stringResource(R.string.library_size_on_device) else formatBytes(face.packageSize),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                // Keep expanding reference inside the scroll, so the action stays reachable.
-                FitDetails(
-                    label = stringResource(R.string.library_download_details),
-                    modifier = Modifier.padding(top = 14.dp),
-                ) {
-                    Text(
-                        stringResource(R.string.library_download_cache_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary,
                     )
                 }
             }
@@ -923,7 +946,16 @@ private fun FaceDetailsSheet(
                         ),
                     )
                 }
-                FitButton(
+                if (takesPhotos) {
+                    val photosNote = stringResource(R.string.library_send_photos_note)
+                    FitButton(
+                        text = stringResource(R.string.library_send_photos),
+                        onClick = onSendPhotos,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = openingProjectId == null,
+                        info = { InfoText(photosNote) },
+                    )
+                } else FitButton(
                     // UPDATE and NEW_PROJECT run the same code — `onDownload` always fetches
                     // the version the catalogue is serving now, which *is* the newest. They
                     // differ only in what the button says, and that was the part that was
@@ -941,33 +973,32 @@ private fun FaceDetailsSheet(
                     },
                     onClick = onDownload,
                     modifier = Modifier.fillMaxWidth(),
-                    // `openingProjectId`, not `projectsEnabled`: the latter is `isWorking`,
-                    // and a catalogue refresh must not close this button any more than it
-                    // closes the sheet. An open in flight must, and did not — it is the
-                    // control directly under the rows that start one.
+                    // `openingProjectId`, not `projectsEnabled`: the latter is `isBusy`, which
+                    // this button's own download sets. An open in flight must close it, and
+                    // did not once — it is the control directly under the rows that start one.
                     enabled = !downloading && !uneditable && openingProjectId == null,
                     loading = downloading,
                 )
                 // Only while bytes are actually arriving. A determinate bar over a cached
                 // package would jump straight to full and say nothing true on the way.
-                if (action == FaceAction.DOWNLOADING) {
+                if (action == FaceAction.DOWNLOADING && !takesPhotos) {
                     LinearProgressIndicator(
                         progress = { downloadFraction },
                         modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     )
                 }
-                val actionNote = when {
-                    action == FaceAction.UPDATE -> R.string.library_update_note
-                    packageOnDevice && action != FaceAction.NOT_EDITABLE -> R.string.library_new_project_note
-                    else -> null
-                }
-                actionNote?.let {
-                    Text(
-                        stringResource(it),
-                        modifier = Modifier.padding(top = 10.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary,
-                    )
+                // An update starts over in a new project, which is worth saying before the
+                // tap; that the old project's edits stay behind is behind its ⓘ.
+                if (!takesPhotos && action == FaceAction.UPDATE) {
+                    Row(
+                        Modifier.padding(top = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        val note = stringResource(R.string.library_update_short)
+                        Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
+                        FitInfo(note, stringResource(R.string.library_update_note))
+                    }
                 }
             }
         }
@@ -1044,6 +1075,7 @@ private fun ProjectsList(
     onExport: (ProjectSummary) -> Unit,
     onRemove: (ProjectSummary) -> Unit,
     onStartCustomFace: (String) -> Unit,
+    onOpenPhotos: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val projects = state.visibleProjects
@@ -1065,9 +1097,19 @@ private fun ProjectsList(
         contentPadding = LibraryPageInsets,
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
+        if (!state.projectsLoaded) {
+            item {
+                LoadingRow(
+                    stringResource(R.string.library_projects_loading_title),
+                    stringResource(R.string.library_projects_loading_a11y),
+                )
+            }
+            return@LazyColumn
+        }
         if (state.projects.isEmpty()) {
             item { ProjectsEmptyState(onBrowse) }
             item { CustomFaceCard(state, startCustomFace) }
+            item { PhotosCard(state, onOpenPhotos) }
             return@LazyColumn
         }
         // The same controls the catalogue has, in the same place, scrolling with the list.
@@ -1090,21 +1132,16 @@ private fun ProjectsList(
                         R.string.library_projects_local_count,
                         projects.size,
                     ),
+                    // Only once two projects share a face, which is when it can bite.
+                    sourceInfo = if (sharesAFace) stringResource(R.string.library_projects_shared_face_note) else null,
                 )
-                if (sharesAFace) {
-                    Text(
-                        stringResource(R.string.library_projects_shared_face_note),
-                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.fitText.secondary,
-                    )
-                }
             }
         }
         // Under the controls, never above them: both pages lay their controls out in the
         // same place so the search field does not move when the tab changes, and a card
         // above them on this page alone would move it by its own height.
         item { CustomFaceCard(state, startCustomFace) }
+        item { PhotosCard(state, onOpenPhotos) }
         if (projects.isEmpty()) {
             item {
                 Column(
@@ -1114,12 +1151,6 @@ private fun ProjectsList(
                     Text(
                         stringResource(R.string.library_projects_no_matches_title),
                         style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        stringResource(R.string.library_projects_no_matches_detail),
-                        modifier = Modifier.padding(top = 7.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
@@ -1146,18 +1177,19 @@ private fun ProjectsList(
 /**
  * Starts a custom face: a face's clock on an empty panel, to build on.
  *
- * It says two things before it is tapped, because both are costs the reader should choose
- * knowingly. **Whether it downloads**: nothing ships with this app, so the face it is built
- * from comes from the store like any other, and the card says how big that is or that the
- * package is already here. **What it replaces on the watch**: it is built on another face's
- * slot, so installing it takes that face's place, and one custom face replaces another.
+ * Shaped like the project rows under it — 84dp, a 38×60 plate, a title, two one-line meta
+ * lines, `›` — so the list reads as one column of the same thing, with this one tinted as the
+ * action. It says before the tap **whether it downloads**, in the line where a project shows
+ * when it was edited: nothing ships with this app, so the face it is built from comes from the
+ * store like any other. **Where it goes on the watch** — its own face number, a blank tile in
+ * Galaxy Wearable — is behind the title's ⓘ. While it runs, the two meta lines are the progress.
  */
 @Composable
 private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
     val source = state.customFaceSource
     val progress = state.customFaceProgress
     val enabled = source != null && progress == null && !state.isOpeningProject &&
-        state.downloadingProductId == null
+        state.downloadingProductId == null && !state.editorHandoff
     val sourceName = source?.name ?: stringResource(R.string.library_custom_face_source_fallback)
     val cost = when {
         source == null && state.isLoadingCatalog -> stringResource(R.string.library_custom_face_waiting)
@@ -1165,52 +1197,56 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
         state.customFaceCached -> stringResource(R.string.library_custom_face_cached)
         else -> stringResource(R.string.library_custom_face_download, formatBytes(source.packageSize))
     }
-    val slot = stringResource(R.string.library_custom_face_slot, sourceName)
+    val slot = stringResource(R.string.library_custom_face_slot)
     val title = stringResource(R.string.library_custom_face_title)
     val detail = stringResource(R.string.library_custom_face_detail)
-    val description = "$title. $detail $cost. $slot"
-    Column(
+    val more = stringResource(R.string.library_custom_face_info)
+    val description = "$title. $detail. $cost. $slot"
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 84.dp)
             .alpha(if (source == null) .6f else 1f)
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.primary.copy(alpha = .06f))
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .35f), MaterialTheme.shapes.medium)
             .clickable(enabled = enabled, role = Role.Button, onClick = onStart)
             .semantics { contentDescription = description }
-            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+            .padding(start = 14.dp, top = 12.dp, end = 10.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(13.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(13.dp),
+        // A project thumbnail's plate, with the mark for adding one, so the plates line up.
+        val plate = RoundedCornerShape(8.dp)
+        Box(
+            Modifier
+                .width(38.dp)
+                .height(60.dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), plate)
+                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), plate),
+            contentAlignment = Alignment.Center,
         ) {
-            // The empty state's tile, with the mark for adding one.
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), MaterialTheme.shapes.medium)
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), MaterialTheme.shapes.medium),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
-            }
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    detail,
-                    modifier = Modifier.padding(top = 3.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.fitText.secondary,
-                )
-            }
+            Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
         }
-        if (progress != null) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    title,
+                    Modifier.weight(1f, fill = false),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                FitInfo(title) {
+                    InfoText(more)
+                    InfoText(slot)
+                }
+            }
+            if (progress != null) {
                 if (progress.building) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 9.dp))
                 } else {
-                    LinearProgressIndicator({ progress.fraction }, Modifier.fillMaxWidth())
+                    LinearProgressIndicator({ progress.fraction }, Modifier.fillMaxWidth().padding(top = 9.dp))
                 }
                 Text(
                     if (progress.building) {
@@ -1219,22 +1255,78 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
                         stringResource(R.string.library_custom_face_downloading, sourceName,
                             (progress.fraction * 100).toInt())
                     },
+                    modifier = Modifier.padding(top = 6.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.fitText.secondary,
                 )
+            } else {
+                Text(
+                    detail,
+                    modifier = Modifier.padding(top = 3.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.fitText.secondary,
+                )
+                Text(
+                    cost,
+                    modifier = Modifier.padding(top = 3.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (state.customFaceCached && source != null) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.fitText.secondary
+                    },
+                )
             }
-        } else {
+        }
+        ProjectRowTrailing(opening = false)
+    }
+}
+
+/**
+ * Opens the Photos face's page. Shown only while the catalogue has that face, because its
+ * package is what says the face takes photos and which backgrounds it already has.
+ */
+@Composable
+private fun PhotosCard(state: LibraryUiState, onOpen: () -> Unit) {
+    if (state.photosFace == null) return
+    val title = stringResource(R.string.library_photos_title)
+    val detail = stringResource(R.string.library_photos_detail)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .clickable(enabled = !state.isOpeningProject && !state.editorHandoff, role = Role.Button, onClick = onOpen)
+            .semantics(mergeDescendants = true) { contentDescription = "$title. $detail" }
+            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(13.dp),
+    ) {
+        Box(
+            Modifier
+                .size(44.dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), MaterialTheme.shapes.medium)
+                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), MaterialTheme.shapes.medium),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("▣", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
             Text(
-                cost.uppercase(),
-                style = FitFaceType.micro,
-                color = if (state.customFaceCached && source != null) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.fitText.secondary
-                },
+                detail,
+                modifier = Modifier.padding(top = 3.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
             )
         }
-        Text(slot, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.fitText.secondary)
     }
 }
 

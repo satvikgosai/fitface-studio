@@ -6,7 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,7 +39,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
-import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.Hsv
 import dev.fitface.studio.core.model.WidgetGuide
 import dev.fitface.studio.core.model.colorHex
@@ -48,7 +47,9 @@ import dev.fitface.studio.core.model.hsvOf
 import dev.fitface.studio.core.model.parseColorHex
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
-import dev.fitface.studio.core.ui.MicroLabel
+import dev.fitface.studio.core.ui.FitChip
+import dev.fitface.studio.core.ui.FitHeading
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.fitText
 
 /**
@@ -64,51 +65,108 @@ internal val WidgetColorPresets: List<Pair<Int, Int>> = listOf(
 )
 
 /**
- * Colour in Edit widget: presets, any colour by hue, saturation and brightness or `#RRGGBB`,
- * and a reset — on the page, under its preview, like rotation.
- *
- * A preset commits when tapped. The custom colour commits on Apply, because every commit
- * rewrites and validates the container: a slider that committed while dragging would save
- * dozens of edits for one choice.
- *
- * [onColor] with null resets: each style in scope returns to the colour *it* shipped with.
+ * Colour in Edit widget, on the shared [ColourPicker]: a preset or Original colours commits on
+ * the tap, the hex field and the sliders on Apply. Original colours resets — each style in
+ * scope returns to the colour *it* shipped with ([onColor] with null).
  */
 @Composable
 internal fun ColorControls(
     widget: WidgetGuide,
-    snapshot: EditorSnapshot,
-    allStyles: Boolean,
     enabled: Boolean,
     onColor: (Int?) -> Unit,
 ) {
     val current = widget.colorArgb ?: return
     val original = widget.originalColorArgb ?: current
-    val start = hsvOf(current)
-    var hue by rememberSaveable(widget.globalIndex, current) { mutableFloatStateOf(start.hue) }
-    var saturation by rememberSaveable(widget.globalIndex, current) { mutableFloatStateOf(start.saturation) }
-    var brightness by rememberSaveable(widget.globalIndex, current) { mutableFloatStateOf(start.value) }
-    var hex by rememberSaveable(widget.globalIndex, current) { mutableStateOf(colorHex(current)) }
+    ColourPicker(
+        selected = current,
+        original = current == original,
+        enabled = enabled,
+        commits = true,
+        onColour = onColor,
+        stateKey = widget.globalIndex,
+        info = { InfoText(stringResource(R.string.editor_color_watch_depth)) },
+        details = {
+            Text(
+                if (current == original) {
+                    colorHex(current)
+                } else {
+                    stringResource(R.string.editor_color_changed, colorHex(current), colorHex(original))
+                },
+            )
+        },
+    )
+}
+
+/**
+ * Colour, the one control for it on every page: Original colours, five presets, a swatch with
+ * `#RRGGBB`, and hue, saturation and brightness.
+ *
+ * [commits] decides when a choice lands. Edit widget commits: a preset or Original colours on
+ * the tap, the hex field and the sliders on Apply, because every commit rewrites and validates
+ * the container and a slider that committed while dragging would save dozens of edits for one
+ * choice. A background or picture being placed only previews until Use or Add, so there every
+ * choice is drawn on the face as it is made, sliders included.
+ *
+ * [selected] is the colour shown now, or null for the original colours; [onColour] with null
+ * asks for them back. [stateKey] names what is being coloured: the fields start again for the
+ * next one.
+ */
+@Composable
+internal fun ColourPicker(
+    selected: Int?,
+    original: Boolean,
+    enabled: Boolean,
+    commits: Boolean,
+    onColour: (Int?) -> Unit,
+    stateKey: Any?,
+    /** How this colour works; behind the heading's ⓘ. */
+    info: (@Composable ColumnScope.() -> Unit)? = null,
+    details: @Composable () -> Unit = {},
+    footer: @Composable () -> Unit = {},
+) {
+    // Where the sliders open while the original colours are shown: white, the colour a shape
+    // drawn white takes.
+    val seed = selected ?: 0xFFFF_FFFF.toInt()
+    // A committed colour comes back as a new [selected]; a previewed one is this control's own.
+    val resetKey = if (commits) selected else null
+    val start = hsvOf(seed)
+    var hue by rememberSaveable(stateKey, resetKey) { mutableFloatStateOf(start.hue) }
+    var saturation by rememberSaveable(stateKey, resetKey) { mutableFloatStateOf(start.saturation) }
+    var brightness by rememberSaveable(stateKey, resetKey) { mutableFloatStateOf(start.value) }
+    var hex by rememberSaveable(stateKey, resetKey) { mutableStateOf(selected?.let(::colorHex).orEmpty()) }
     val pending = parseColorHex(hex)
+    fun show(colour: Int?) {
+        hex = colour?.let(::colorHex).orEmpty()
+        colour?.let(::hsvOf)?.let { hue = it.hue; saturation = it.saturation; brightness = it.value }
+    }
     fun fromSliders(next: Hsv) {
         hue = next.hue; saturation = next.saturation; brightness = next.value
-        hex = colorHex(colorOf(next))
+        val colour = colorOf(next)
+        hex = colorHex(colour)
+        if (!commits) onColour(colour)
     }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        MicroLabel(stringResource(R.string.editor_color))
-        Text(stringResource(R.string.editor_color_current, colorHex(current), colorHex(original)))
-        Text(
-            if (!snapshot.isAodSelected && allStyles && widget.importedFromFaceId == null) {
-                stringResource(R.string.editor_rotation_scope_all)
-            } else {
-                stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename))
+    ControlCard(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        FitHeading(stringResource(R.string.editor_image_colour), key = stateKey, info = info)
+        details()
+        FitChip(
+            stringResource(R.string.editor_image_colour_original),
+            selected = original,
+            // Enabled even when chosen, so it reads as chosen; choosing it again changes nothing.
+            onClick = {
+                if (!original) {
+                    if (!commits) show(null)
+                    onColour(null)
+                }
             },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
+            enabled = enabled,
         )
         // Five 48dp targets need 240dp, inside even a 320dp phone's page.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            WidgetColorPresets.forEach { (label, color) ->
-                ColorSwatch(color, label, selected = color == current, enabled = enabled) { onColor(color) }
+            WidgetColorPresets.forEach { (label, colour) ->
+                ColorSwatch(colour, label, selected = colour == selected, enabled = enabled) {
+                    if (!commits) show(colour)
+                    onColour(colour)
+                }
             }
         }
         Row(
@@ -116,7 +174,7 @@ internal fun ColorControls(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val shown = pending ?: current
+            val shown = pending ?: selected ?: seed
             Box(
                 Modifier.size(48.dp)
                     .background(Color(shown), MaterialTheme.shapes.small)
@@ -127,43 +185,31 @@ internal fun ColorControls(
                 value = hex,
                 onValueChange = { text ->
                     hex = text
-                    parseColorHex(text)?.let(::hsvOf)?.let {
-                        hue = it.hue; saturation = it.saturation; brightness = it.value
+                    parseColorHex(text)?.let { colour ->
+                        hsvOf(colour).let { hue = it.hue; saturation = it.saturation; brightness = it.value }
+                        if (!commits) onColour(colour)
                     }
                 },
                 modifier = Modifier.weight(1f),
                 enabled = enabled,
                 singleLine = true,
-                label = { Text(stringResource(R.string.editor_color_hex)) },
-                isError = pending == null,
+                label = { Text(stringResource(R.string.editor_image_colour_hex)) },
+                isError = hex.isNotBlank() && pending == null,
             )
         }
-        if (pending == null) {
+        if (hex.isNotBlank() && pending == null) {
             Text(stringResource(R.string.editor_color_hex_invalid), color = MaterialTheme.colorScheme.error)
         }
         ColorSliders(Hsv(hue, saturation, brightness), enabled, ::fromSliders)
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        if (commits) {
             FitButton(
                 stringResource(R.string.editor_color_apply),
-                { pending?.let(onColor) },
-                enabled = enabled && pending != null && pending != current,
-                style = FitButtonStyle.Secondary,
-            )
-            FitButton(
-                stringResource(R.string.editor_color_reset),
-                { onColor(null) },
-                enabled = enabled && original != current,
+                { pending?.let(onColour) },
+                enabled = enabled && pending != null && pending != selected,
                 style = FitButtonStyle.Secondary,
             )
         }
-        Text(
-            stringResource(R.string.editor_color_watch_depth),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
+        footer()
     }
 }
 
@@ -177,7 +223,13 @@ internal fun ColorControls(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ColorSliders(hsv: Hsv, enabled: Boolean, onChange: (Hsv) -> Unit) {
+internal fun ColorSliders(
+    hsv: Hsv,
+    enabled: Boolean,
+    onChange: (Hsv) -> Unit,
+    /** When a drag ends: the Canvas's Colour page saves here rather than on every step. */
+    onRelease: () -> Unit = {},
+) {
     val labels = listOf(
         R.string.editor_color_hue,
         R.string.editor_color_saturation,
@@ -217,6 +269,7 @@ private fun ColorSliders(hsv: Hsv, enabled: Boolean, onChange: (Hsv) -> Unit) {
                     },
                     modifier = Modifier.weight(1f).semantics { contentDescription = name },
                     enabled = enabled,
+                    onValueChangeFinished = onRelease,
                     thumb = {
                         // A ring, so the track's colour under it stays visible; the dark edge
                         // keeps the white ring readable on the white end of a track.
@@ -246,7 +299,7 @@ private fun ColorSliders(hsv: Hsv, enabled: Boolean, onChange: (Hsv) -> Unit) {
 
 /** One preset: a filled circle in a 48dp target, ringed when it is the current colour. */
 @Composable
-private fun ColorSwatch(color: Int, @StringRes label: Int, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+internal fun ColorSwatch(color: Int, @StringRes label: Int, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val name = stringResource(label)
     Box(
         Modifier.size(48.dp)
@@ -265,4 +318,25 @@ private fun ColorSwatch(color: Int, @StringRes label: Int, selected: Boolean, en
                 .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
         )
     }
+}
+
+/**
+ * Colour for an image being placed — a background, a moving background, a picture — on the
+ * shared [ColourPicker]: its own colours, or one colour by brightness
+ * ([dev.fitface.studio.core.model.tintedColor]). White takes the colour, the shades between
+ * keep their steps, and black and transparent parts stay as they are, so a shape drawn white
+ * anywhere can be any colour here. Drawn on the face as it is chosen; nothing is saved until
+ * Use or Add. [stateKey] names the image, so the next one starts fresh.
+ */
+@Composable
+internal fun ImageColourControls(tint: Int?, enabled: Boolean, onTint: (Int?) -> Unit, stateKey: Any? = null) {
+    ColourPicker(
+        selected = tint,
+        original = tint == null,
+        enabled = enabled,
+        commits = false,
+        onColour = onTint,
+        stateKey = stateKey,
+        info = { InfoText(stringResource(R.string.editor_image_colour_detail)) },
+    )
 }

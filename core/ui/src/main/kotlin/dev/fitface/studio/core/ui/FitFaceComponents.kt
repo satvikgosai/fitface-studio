@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -21,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -60,6 +62,12 @@ fun FitButton(
      * the one people actually aim at.
      */
     compact: Boolean = false,
+    /**
+     * What the action does beyond its label, behind an ⓘ inside the button after the label —
+     * not beside the button, where it read as a second, smaller control. The ⓘ takes its own
+     * tap; the rest of the button is the action.
+     */
+    info: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     FitButton(
         onClick = onClick,
@@ -71,6 +79,10 @@ fun FitButton(
         compact = compact,
     ) {
         Text(text, style = MaterialTheme.typography.labelLarge)
+        if (info != null) {
+            Spacer(Modifier.width(6.dp))
+            FitInfo(text, tint = LocalContentColor.current, content = info)
+        }
     }
 }
 
@@ -88,6 +100,8 @@ fun FitButton(
     style: FitButtonStyle = FitButtonStyle.Primary,
     interactionSource: MutableInteractionSource? = null,
     compact: Boolean = false,
+    /** Narrower than the default for a tile in a row of four, like Arrange layers'. */
+    contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     content: @Composable RowScope.() -> Unit,
 ) {
     val isEnabled = enabled && !loading
@@ -99,6 +113,7 @@ fun FitButton(
             modifier = modifier.heightIn(min = minHeight),
             shape = MaterialTheme.shapes.small,
             interactionSource = interactionSource,
+            contentPadding = contentPadding,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -128,6 +143,7 @@ fun FitButton(
             modifier = modifier.heightIn(min = minHeight),
             shape = MaterialTheme.shapes.small,
             interactionSource = interactionSource,
+            contentPadding = contentPadding,
             border = BorderStroke(1.dp, color.copy(alpha = if (enabled) .38f else .12f)),
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = color,
@@ -235,6 +251,25 @@ fun FitIconButton(
      */
     selected: Boolean = false,
 ) {
+    FitIconButton(contentDescription, onClick, modifier, enabled, tint, selected) {
+        Text(glyph, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+/**
+ * [FitIconButton] with drawn content in place of a glyph — a colour swatch, a drawn mark — so
+ * a row of them shares one size, border and **on** look with the glyph buttons beside it.
+ */
+@Composable
+fun FitIconButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tint: Color? = null,
+    selected: Boolean = false,
+    content: @Composable () -> Unit,
+) {
     val accent = MaterialTheme.colorScheme.primary
     OutlinedButton(
         onClick = onClick,
@@ -261,7 +296,7 @@ fun FitIconButton(
             disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = .28f),
         ),
     ) {
-        Text(glyph, style = MaterialTheme.typography.titleLarge)
+        content()
     }
 }
 
@@ -318,6 +353,8 @@ fun StatusBanner(
             FitStatus.Fail -> R.string.ui_status_fail
         },
     ),
+    /** Why, or what to do, beyond the one line a banner should hold; behind an ⓘ. */
+    info: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val color = when (status) {
         FitStatus.Pass -> MaterialTheme.colorScheme.primary
@@ -341,6 +378,7 @@ fun StatusBanner(
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = .82f),
             style = MaterialTheme.typography.bodyMedium,
         )
+        if (info != null) FitInfo(label, tint = color, content = info)
     }
 }
 

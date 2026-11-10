@@ -47,6 +47,101 @@ format, storage full and a full favourites list; none of those reach the phone
 here, which is exactly why a face that transfers cleanly and never appears has to
 be diagnosed from the watch rather than from the app.
 
+The reply's layout is `44 16 <status> 04 <id> 1D <sampler>`.
+
+| Status | Meaning (stock plugin enum) |
+| ---: | --- |
+| 1 | success |
+| 2 | low watch battery |
+| 3 | file not found at the given path |
+| 4 | wrong binary format |
+| 5 | favourites list full |
+| 6 | installed-face storage full |
+
+Two sources corroborate the layout and codes: the stock plugin's own parser
+(`InstallBandFaceResponseParser`, plugin 2.2.14) and Fit3-App, an independent
+implementation that owns the link and decodes them. Neither is a capture on this
+app's route.
+
+Fit3-App also shows the watch registering a completed `/user/wf` file and replying
+on its own after `32`. So the watch probably sends two such replies per install, both
+to the plugin's component.
+
+Should a reply ever reach `WatchfaceDeliveryAgent` anyway, it is decoded, never
+taken as success merely for arriving:
+
+- only a reply naming the pending face and style settles the request;
+- status 1 counts as delivered;
+- statuses 2–6 fail with a plain reason;
+- anything else is ignored.
+
+Both agents record received bytes, at most eight as hex, in
+`DirectInstallState.watchReplies` for the diagnostics report. A hardware run then shows
+where replies go.
+
+## Photos for the Photos face
+
+The watch's Photos face (`00254`) is preloaded in firmware. Its store package carries no
+container, only `assets/bandface_info_myPhoto.json`, which declares one `layer_background`
+setting with `gallery_menu: yes` and the face's own preloaded background
+(`photo_clock_default_bg.png`). `Fit3Apk.photoAlbumFace` recognises the face by that
+declaration and reads the preloaded names from it; nothing about the face is bundled.
+
+**Evidence: Supported, from the stock plugin 2.2.14's code. None of this has been seen on a
+watch yet** (Stage 0 tests T9a–T9f). The layouts are the plugin's builders and parsers
+(`AddImageListRequestBuilder`, `SetEditInfoRequestBuilder`, `DeleteImageListRequestBuilder`,
+`GetEditInfoRequestBuilder`, `CancelEditInfoRequestBuilder`, `SetCurrentBandFaceRequestBuilder`
+and their response parsers); `PhotoAlbumProtocolTest` pins each byte layout.
+
+Each photo is a 256 × 402 PNG named `<md5 of its bytes>.png`, as the plugin prepares one,
+drawn onto black and, if a colour was chosen, recoloured once by the Background page's rule.
+`AlbumPhoto` refuses anything else before it can be sent: the signature, an IHDR of exactly
+256 × 402 at 8-bit RGB or RGBA without interlace, every chunk's length and CRC, IEND last, and
+at most 512 KiB. It travels over the same transfer as a face, one channel per photo:
+the same file-info message, then the descriptor `33png,/user/wf/album/<name>,<size>`, where a
+container's is `33bin,/user/wf/<name>,<size>`. The plugin keeps one SPP session open across
+several files; this app repeats the proven per-file cycle instead.
+
+A request runs in this order, each command after the framework's `onSent` for the one before
+and a one-second pause:
+
+| Step | Command (watch-face service) | Layout |
+| --- | --- | --- |
+| Before the photos | get-edit-info (6) | `06 04 FE` |
+| Each photo | the transfer above | |
+| After them | add-image-list (11) | `0B 04 FE 1B <n> (1C <len> <name>)…` |
+| | set-edit-info (7) | `07 18 02 04 FE 1B <n> (13 <len> <name> 1F <selected>)…` |
+| | set-current-face (3) | `03 04 FE 1D 00` |
+| A removal instead | delete-image-list (12), then set-edit-info | `8C 04 FE 1B <n> (1C <len> <name>)…` |
+| After a failure in between | cancel-edit-info (8), best effort | `08 04 FE` |
+
+The set-edit-info list is every background the face shows afterwards: its preloaded ones
+first, then this app's photos, with the first new photo selected. The plugin also sends
+`0D <clock type>` and `1E <clock colour>`, because its own bundled copy of the face's settings
+lists them; the store package lists the background alone, so this app sends only that and
+leaves the clock as the watch has it. Whether the watch accepts that shorter message is T9b.
+
+Replies go to the plugin's component, as install replies do. If one reaches this app it is
+recorded and read: add-image-list `4B 04 FE 1A <status> …` (1 success, 2 too many photos,
+3 a wrong name) and set-edit-info `47 1A <result> …`; a refusal fails the request.
+
+The plugin lets the album hold **7** photos (its gallery takes 20 at a time, but refuses past
+7 held). This app keeps each photo it has sent and not removed, exactly as sent, with the
+reduced original it was drawn from (`PhotoAlbumRepository`; paths in
+[Architecture](architecture.md#persistence)), and counts against that record; photos sent from
+Galaxy Wearable cannot be seen here, so the watch may still refuse with status 2. The record is
+written once the closing commands are handed over, which, as for faces, is the most the app can
+know.
+
+Other requests use the same commands:
+
+| Request | Transfer | Closing commands |
+| --- | --- | --- |
+| Show another sent photo | none | set-edit-info, set-current-face |
+| Change a sent photo (placed again from its kept original) | the new PNG | add-image-list (new), delete-image-list (old), set-edit-info, set-current-face |
+| Remove one, or all | none | delete-image-list, set-edit-info |
+| Send them all again | every kept PNG, unchanged | add-image-list, set-edit-info, set-current-face |
+
 ## Channel handover
 
 Discovery needs the stock plugin connected; transfer needs its channel released.
@@ -157,6 +252,10 @@ worker alive; abandonment must make it unable to send or publish afterward.
 
 - `OtaTransferDeliveryAgent` compares the attempt token in listeners, SPP polls and
   delayed handlers. Never reuse a boolean the next attempt can clear.
+- `BT_CLOSE` (`03`) goes out once per attempt that sent `BT_OPEN`, through `BtCloseGate`.
+  `cancelTransfer()` closes the attempt it abandons before advancing the token; the worker's
+  `finally` closes only while it is still live. A late close from an abandoned worker could
+  otherwise close the session a retry has opened.
 - `WatchfaceDeliveryAgent.cancelInstall()` clears pending payload so a late `onSent`
   cannot finalize it.
 - `DeliveryProgress.accepts` runs **inside** the installer's atomic state update;
@@ -222,9 +321,26 @@ Keep the plugin installed; release only after peers are cached. If the watch dis
 the companion becomes unstable or protocol state diverges, restore the plugin before
 recovery. Never disable the accessory framework or unpair as part of handover.
 
+## Recorded on a watch
+
+One SM-R390, 2026-10-14, with probes built by `WatchProbesTest`:
+
+- **Face IDs outside the catalogue.** The custom-face template installed under `00201` and
+  `00202` sat beside Info_4 rather than replacing it, and each could be selected on the
+  watch. Galaxy Wearable listed both as blank tiles and, with one of them current, showed
+  the Photos face's picture on its main screen. Those probes changed the entry paths and
+  `setting.bin +0x10` only; their name slots still read `SM-R390_00006_256x402`. Custom
+  faces are renumbered exactly that way. On 2026-10-22 the probes `00210` and `00211` and a
+  custom face started and numbered in the app installed the same way, each as a face of its
+  own. Not yet recorded: reinstalling one number alone and survival across a reboot.
+- **The stock plugin did not overwrite an edit** after the plugin was given back its
+  access and Galaxy Wearable reconnected. The research's re-send path (Fit3-App report
+  §6.1) was not observed in that run.
+
 ## Unverified
 
-Bluetooth delivery is device-proven on an SM-R390. Timeout recovery and deliberately
+Bluetooth delivery is device-proven on an SM-R390. Sending photos to the Photos face is not
+yet: every command in that section is read from the stock plugin's code. Timeout recovery and deliberately
 slow-but-healthy transfers have not been staged on a watch. `TimeoutRecoveryTest`
 checks decisions and `TransferWatchdogBudgetTest` checks budgets; manually maintained
 progress gaps are not proof of runtime callback placement. The Android 11-and-earlier

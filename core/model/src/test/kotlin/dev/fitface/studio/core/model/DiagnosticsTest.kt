@@ -135,4 +135,26 @@ class DiagnosticsTest {
 
         assertTrue(report.render().contains("watch=<mac>"))
     }
+
+    @Test
+    fun theCrashFileIsScrubbedLikeTheLog() {
+        // A crash's own message used to be written to disk unscrubbed and only scrubbed when
+        // the report was rendered: nested causes are where a path or address hides.
+        val crash = IllegalStateException(
+            "send failed to AA:BB:CC:11:22:33",
+            IllegalArgumentException(
+                "decoding /storage/emulated/0/DCIM/private.jpg",
+                RuntimeException("GET https://example.org/a?extuk=secret from content://media/1"),
+            ),
+        )
+        val log = DiagnosticsLog().apply { info("Editor", "opened project") }
+
+        val text = crashFileText(crash, log.snapshot())
+
+        assertTrue(text, text.startsWith("crash=IllegalStateException: send failed to <mac>"))
+        listOf("AA:BB", "/storage/", "DCIM", "secret", "content://").forEach { leaked ->
+            assertFalse("$leaked in:\n$text", text.contains(leaked))
+        }
+        assertTrue(text, text.contains("+0.000s I Editor  opened project"))
+    }
 }

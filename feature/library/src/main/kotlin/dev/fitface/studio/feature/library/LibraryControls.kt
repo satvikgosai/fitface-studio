@@ -2,9 +2,9 @@ package dev.fitface.studio.feature.library
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -23,7 +23,9 @@ import androidx.compose.ui.unit.dp
 import dev.fitface.studio.core.model.CatalogSort
 import dev.fitface.studio.core.model.ProjectSort
 import dev.fitface.studio.core.ui.FitChip
+import dev.fitface.studio.core.ui.FitHeading
 import dev.fitface.studio.core.ui.FitIconButton
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.fitText
 
@@ -222,6 +224,8 @@ internal fun <T> LibraryPageControls(
     sourceLabel: String,
     countLabel: String,
     modifier: Modifier = Modifier,
+    /** Something true of the list as a whole worth knowing, behind an ⓘ by its label. */
+    sourceInfo: String? = null,
 ) {
     Column(modifier) {
         LibrarySearchField(
@@ -245,7 +249,10 @@ internal fun <T> LibraryPageControls(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MicroLabel(sourceLabel)
+            FitHeading(
+                sourceLabel,
+                info = sourceInfo?.let { text -> { InfoText(text) } },
+            )
             Text(
                 countLabel,
                 style = MaterialTheme.typography.labelMedium,

@@ -108,6 +108,8 @@
     <string name="ui_always_on_display">Always-on display</string>
     <string name="ui_widget_number">Widget #%1$d</string>
     <string name="ui_clear_selection">Clear</string>
+    <!-- FitInfo's ⓘ glyph is drawn, so this is its whole label; the argument is what it explains. -->
+    <string name="ui_info_about">About %1$s</string>
     <string name="ui_details_expand">Expand %1$s</string>
     <string name="ui_details_collapse">Collapse %1$s</string>
     <string name="ui_details_expanded">Expanded</string>

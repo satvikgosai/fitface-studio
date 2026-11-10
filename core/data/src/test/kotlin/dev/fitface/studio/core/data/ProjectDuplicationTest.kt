@@ -137,13 +137,9 @@ class ProjectDuplicationTest {
         )
     }
 
-    /**
-     * A removed widget lives in `session.json`, which no column names — so it is copied by
-     * convention or not at all. Without it the duplicate shows the widget gone with nothing
-     * offering to put it back, which is worse than either keeping or dropping the edit.
-     */
+    /** A widget the original deleted, artwork and all, is deleted in the copy too. */
     @Test
-    fun aDuplicateCanRestoreAWidgetTheOriginalHadRemoved() = runBlocking {
+    fun aDuplicateKeepsAWidgetTheOriginalDeleted() = runBlocking {
         val original = repository.openPackage(facePackage())
         // Not simply the first drawable widget: that is the style's background, and
         // every other widget on the face is positioned against it, so cutting it out is
@@ -162,20 +158,13 @@ class ProjectDuplicationTest {
             requireFinal = false,
             applyToAllStyles = false,
         )
-        assertEquals(1, removed.removedWidgets.size)
+        assertEquals(original.widgets.size - 1, removed.widgets.size)
 
         val duplicate = repository.duplicateProject(original.projectId)
         val opened = repository.openProject(duplicate.id)
 
-        assertEquals(
-            "the copy cannot put back what the original cut out",
-            1,
-            opened.removedWidgets.size,
-        )
-        assertEquals(
-            removed.widgets.size + 1,
-            repository.restoreWidget(opened.removedWidgets.first().id).widgets.size,
-        )
+        assertEquals(removed.widgets.size, opened.widgets.size)
+        assertEquals(removed.containerBytes, opened.containerBytes)
     }
 
     @Test

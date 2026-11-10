@@ -135,7 +135,18 @@ class SppResponseWaitTest {
             awaitToken(ByteArrayInputStream("331".toByteArray()), 8_000L, SPP_DESCRIPTOR_RESPONSE)
         }
 
-        assertEquals(SppResponseWait.TIMED_OUT, failure.message)
+        // Still a timeout, after the full wait, but naming what the watch said instead.
+        assertEquals("${SppResponseWait.TIMED_OUT} (the watch answered \"331\")", failure.message)
+    }
+
+    @Test
+    fun unprintableReplyBytesAreShownAsHex() {
+        val failure = assertThrowsIo {
+            awaitToken(ByteArrayInputStream(byteArrayOf('3'.code.toByte(), 0x00, '"'.code.toByte())),
+                8_000L, SPP_DESCRIPTOR_RESPONSE)
+        }
+
+        assertEquals("${SppResponseWait.TIMED_OUT} (the watch answered \"3\\x00\\x22\")", failure.message)
     }
 
     private fun assertThrowsIo(block: () -> Unit): IOException = try {

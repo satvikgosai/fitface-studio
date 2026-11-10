@@ -55,25 +55,6 @@ data class SessionLineage(
 
     fun originalEntry(original: Fit3Container, variant: String) = original.entryByBasename(variants.getValue(variant))
 
-    fun validateRemoved(original: Fit3Container, current: Fit3Container, variant: String,
-        raw: ByteArray, origin: NativeWidgetOrigin) {
-        require(variant in variants) { "Removed widget names a missing variant." }
-        val entry = current.entryByBasename(variant)
-        val header = StyleHeader.parse(entry)
-        val data = WidgetImporter.styleBytes(entry.data, raw, 1,
-            entry.data.copyOfRange(header.storedImageOffset, entry.data.size), header.fontBindingCount)
-        val saved = entry.copy(data = data, size = data.size)
-        val record = FaceRecordParser.scanWidgets(saved).single()
-        FaceRecordParser.imagePointerFields(record, FaceRecordParser.imagesByRelativeOffset(saved))
-        origin.originalIndex?.let { index ->
-            val pristine = FaceRecordParser.scanWidgets(originalEntry(original, variant)).singleOrNull { it.globalIndex == index }
-            require(pristine != null && pristine.widgetType == record.widgetType &&
-                pristine.sequenceId == record.sequenceId && pristine.recordSize == record.recordSize) {
-                "A removed widget's original identity is inconsistent."
-            }
-        }
-    }
-
     fun validate(original: Fit3Container, current: Fit3Container, imports: WidgetImportOrigins?) {
         require(originalSha256 == WidgetImportOrigins.digest(original.toByteArray())) { "Widget identities belong to another face." }
         val names = FaceResources.variantEntries(current).map { it.basename }.toSet()

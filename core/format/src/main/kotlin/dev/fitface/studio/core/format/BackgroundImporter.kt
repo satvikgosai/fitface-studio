@@ -16,11 +16,16 @@ object BackgroundImporter {
         return BackgroundDonorVariant(image?.let { FaceRecordParser.decodeImage(entry, it) }, backgrounds.size)
     }
 
-    fun prepare(target: Fit3Container, targetVariant: String, donor: ContainerEntry): BackgroundImportEdit {
+    /**
+     * @param thisStyleOnly write [targetVariant] alone rather than every style; the always-on
+     *   display is always written alone.
+     */
+    fun prepare(target: Fit3Container, targetVariant: String, donor: ContainerEntry,
+        thisStyleOnly: Boolean = false): BackgroundImportEdit {
         StyleWidgetMatch.requireVariantEntry(target.entryByBasename(targetVariant))
         val background = read(donor).background
             ?: throw Fit3FormatException("This source style has no background image. Choose another style.")
-        val scope = if (targetVariant == AOD_ENTRY_NAME) listOf(target.entryByBasename(AOD_ENTRY_NAME))
+        val scope = if (targetVariant == AOD_ENTRY_NAME || thisStyleOnly) listOf(target.entryByBasename(targetVariant))
             else FaceResources.variantEntries(target).filter { it.basename != AOD_ENTRY_NAME }
         val existing = scope.filter { FaceRecordParser.backgroundImage(it) != null }
         val adding = existing.isEmpty()

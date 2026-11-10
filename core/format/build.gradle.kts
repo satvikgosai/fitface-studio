@@ -29,4 +29,8 @@ dependencies {
 tasks.withType<Test>().configureEach {
     // Corpus-backed tests skip when this directory is absent; see the root build file.
     systemProperty("fit3.corpusRoot", (rootProject.extra["fit3CorpusRoot"] as File).absolutePath)
+    // Watch-test probes are written only when a directory is named; see docs/development.md.
+    providers.gradleProperty("fit3.probeOut").orNull?.let {
+        systemProperty("fit3.probeOut", rootProject.file(it).absolutePath)
+    }
 }

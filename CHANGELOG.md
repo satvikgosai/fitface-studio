@@ -4,6 +4,71 @@ User-visible changes per version. APKs are on the
 [releases page](https://github.com/satvikgosai/fitface-studio/releases); technical references are in
 the [documentation index](docs/README.md).
 
+<!--
+How to write this changelog
+
+- One section per released version, newest first:
+  `## <versionName> (code <versionCode>) — <tag date>`, with `Fixed:` before `Added:`.
+- Work not yet tagged goes under `## Unreleased`. When the release is tagged, rename that
+  heading to the version line above; do not start a second section for it.
+- Write for people who use the app: what they can now do, or what no longer goes wrong.
+  One short bullet per change, in plain words, with on-screen names in **bold**.
+- Leave out refactors, tests, documentation, version bumps, developer-only tools and
+  features that are built but hidden from users.
+- Leave out bugs that were introduced and fixed within the same unreleased cycle: users of
+  the last release never saw them. Describe the finished behaviour instead.
+- A bug fix says what went wrong for the user and what happens now, not the cause.
+  Detailed causes and safeguards belong in the canonical reference, linked from
+  [docs/README.md](docs/README.md).
+- The initial release is one line.
+-->
+
+## 0.3.0 (code `30`) — 2026-11-10
+
+Fixed:
+
+- On a face with several styles, replacing, adding or importing a background changed it in
+  every style. It now changes the selected style, unless you choose **All styles**.
+- Adding text widgets from other faces again and again could run out of room for their
+  fonts. Imported text now shares the fonts the face already has.
+- The **Projects** tab showed **0** projects while it was still reading them. It now says
+  it is loading, and projects open faster.
+- A quick second tap could open two projects at once.
+- Opening a project no longer flashes a second loading screen.
+- **IMPORT** on **Projects**, and the project list, were greyed out while the watch-face
+  catalogue refreshed. They now stay usable.
+- **Remove** now deletes a widget with its artwork, freeing room for GIFs and videos.
+  **Undo** brings it back; **Restore** is gone.
+
+Added:
+
+- **Undo** and **Redo** under the face, one step for each change, kept until you leave
+  the project.
+- **Add an image, GIF or video**, on the **Widgets** page or as a background. It plays on
+  the Canvas as on the watch, keeping every frame of the longest part that fits; choose the
+  part, fewer frames, or **NATIVE** size to fit more.
+- **Remove background**, freeing its room. Any new background now replaces the current
+  one, moving or still.
+- Choose **This style only** or **All styles** when replacing, adding or importing a
+  background.
+- Swipe the controls under a selected widget for two more pages: **Colour**, with
+  one-tap colours, a hex code and sliders, and **Layers**, with layer order, the
+  all-styles switch, and buttons to add widgets, images or videos.
+- The face stays in view at the top of editing pages while their controls scroll.
+  Position, size and colour work the same way on every page, and a position can be
+  typed exactly.
+- Widgets can sit partly off the edge of the face.
+- Each new custom face gets its own face number, from 201 to 250, so it installs beside
+  your other faces instead of replacing one.
+- **Install** checks that a face's number and styles agree before sending, warns about
+  styles with no widgets, lists likely reasons if the watch does not change face, and
+  folds its one-time setup steps into **Phone ready** once done.
+- Editing pages show their controls first: explanations are behind an **ⓘ** you can tap,
+  and a gesture you have not used yet gets a one-line hint until you try it.
+- Adding widgets and backgrounds from other faces is no longer marked **Experimental**.
+- After **Update thumbnail**, the **Projects** list shows that project with its new
+  face-picker thumbnail, the picture the watch's face picker shows.
+
 ## 0.2.1 (code `21`) — 2026-10-07
 
 Fixed:

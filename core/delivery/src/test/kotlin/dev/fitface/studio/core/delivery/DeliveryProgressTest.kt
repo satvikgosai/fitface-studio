@@ -25,6 +25,33 @@ class DeliveryProgressTest {
     }
 
     /**
+     * A Photos request: opened from VERIFYING, later photos verified mid-transfer, closing
+     * commands from TRANSFERRING (or VERIFYING for a removal), and progress only while waiting
+     * on commands. None of it is welcome once the request has stopped.
+     */
+    @Test
+    fun aPhotosRequestMovesOnlyFromThePhaseWaitingForIt() {
+        assertTrue(accepts(DirectInstallPhase.VERIFYING, DeliveryEvent.ALBUM_OPENED))
+        assertFalse(accepts(DirectInstallPhase.TRANSFERRING, DeliveryEvent.ALBUM_OPENED))
+        assertTrue(accepts(DirectInstallPhase.TRANSFERRING, DeliveryEvent.NEXT_FILE_VERIFIED))
+        assertFalse(accepts(DirectInstallPhase.VERIFYING, DeliveryEvent.NEXT_FILE_VERIFIED))
+        assertTrue(accepts(DirectInstallPhase.TRANSFERRING, DeliveryEvent.ALBUM_COMMANDS_REQUESTED))
+        assertTrue(accepts(DirectInstallPhase.VERIFYING, DeliveryEvent.ALBUM_COMMANDS_REQUESTED))
+        assertFalse(accepts(DirectInstallPhase.INSTALLING, DeliveryEvent.ALBUM_COMMANDS_REQUESTED))
+        assertTrue(accepts(DirectInstallPhase.INSTALLING, DeliveryEvent.COMMAND_PROGRESS))
+        assertTrue(accepts(DirectInstallPhase.VERIFYING, DeliveryEvent.COMMAND_PROGRESS))
+        assertFalse(accepts(DirectInstallPhase.TRANSFERRING, DeliveryEvent.COMMAND_PROGRESS))
+        for (stopped in listOf(DirectInstallPhase.FAILED, DirectInstallPhase.COMPLETE, DirectInstallPhase.IDLE)) {
+            for (event in listOf(
+                DeliveryEvent.ALBUM_OPENED, DeliveryEvent.NEXT_FILE_VERIFIED,
+                DeliveryEvent.ALBUM_COMMANDS_REQUESTED, DeliveryEvent.COMMAND_PROGRESS,
+            )) {
+                assertFalse("$event in $stopped", accepts(stopped, event))
+            }
+        }
+    }
+
+    /**
      * A window is acknowledged 12 s into a retry the watchdog gave up on at 20 s.
      * `MAX_WINDOW_RETRIES` is 3 over a `0..3` loop, so one window can spend four
      * `WINDOW_TIMEOUT_MS` waits — 48 s against a 20 s watchdog — which is why this is

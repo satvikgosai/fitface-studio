@@ -13,13 +13,13 @@ import org.junit.Test
 /**
  * A widget's global index is not its identity once a structural edit has run.
  *
- * `removeWidget` renumbers every record after the one it cuts, and `appendWidget` puts
- * it back at the end with the next free number. So on face `00022` a remove-and-restore
- * leaves the seq-10 hour sprite at index 10, which in the *original* container is the
- * seq-37 battery. Everything that resolved the original by raw index then read a
- * different widget: the composer cleared the battery's rectangle, the frame lookup
- * resolved against its 11-frame table and returned null, and the restored sprite
- * disappeared from the canvas leaving only an empty outline.
+ * Deleting a widget renumbers every record after the one it cuts, and takes its artwork,
+ * moving every raster after that. On face `00022` a remove-and-restore (when the editor still
+ * offered Restore) left the seq-10 hour sprite at index 10, which in the *original* container
+ * is the seq-37 battery. Everything that resolved the original by raw index then read a
+ * different widget: the composer cleared the battery's rectangle, the frame lookup resolved
+ * against its 11-frame table and returned null, and the sprite disappeared from the canvas
+ * leaving only an empty outline.
  *
  * These sweeps run the structural edits over the whole corpus and assert the pairing
  * still names the same widget. The invariant is deliberately about *identity*, not
@@ -58,7 +58,7 @@ class WidgetOriginPairingTest {
     }
 
     @Test
-    fun removeAndRestoreKeepsEveryWidgetPairedWithItsOwnOriginal() {
+    fun deletionKeepsEverySurvivorPairedWithItsOwnOriginal() {
         val failures = mutableListOf<String>()
         var checked = 0
 
@@ -70,11 +70,11 @@ class WidgetOriginPairingTest {
                 .firstOrNull { it.basename.matches(Regex("""style\d+\.bin""")) }
                 ?: return@forEach
             val records = FaceRecordParser.scanWidgets(style)
-            // A widget that is not last, so the removal actually renumbers the table —
-            // removing the final record would hide the bug entirely.
-            val victim = records.dropLast(1).firstNotNullOfOrNull { record ->
+            // A widget that is not last, so the deletion actually renumbers the table —
+            // deleting the final record would hide the bug entirely.
+            val (deleted, edited) = records.dropLast(1).firstNotNullOfOrNull { record ->
                 runCatching {
-                    StructuralEditor.removeWidget(
+                    StructuralEditor.deleteWidget(
                         source = original,
                         entryBasenames = listOf(style.basename),
                         globalIndex = record.globalIndex,
@@ -82,71 +82,40 @@ class WidgetOriginPairingTest {
                         sequenceId = record.sequenceId,
                         x = record.x,
                         y = record.y,
-                        requireFinal = false,
-                    )
+                        targetIndices = mapOf(style.basename to record.globalIndex),
+                    ).container
                 }.getOrNull()?.let { record to it }
             } ?: return@forEach
-            val (removedRecord, removal) = victim
-
-            val restored = runCatching {
-                StructuralEditor.appendWidget(
-                    source = removal.container,
-                    entryBasenames = removal.removedRecords.keys.toList(),
-                    recordsByStyle = removal.removedRecords,
-                ).container
-            }.getOrNull() ?: run {
-                failures += "$face: could not restore widget #${removedRecord.globalIndex}"
-                return@forEach
-            }
             checked++
 
-            val editedStyle = restored.entryByBasename(style.basename)
+            val editedStyle = edited.entryByBasename(style.basename)
             val sources = FaceRecordParser.originalWidgetSources(editedStyle, style)
             val originalsByIndex = records.associateBy(WidgetRecord::globalIndex)
-            val edited = FaceRecordParser.scanWidgets(editedStyle)
+            val survivors = FaceRecordParser.scanWidgets(editedStyle)
 
-            if (edited.size != records.size) {
-                failures += "$face: ${edited.size} records after round trip, expected ${records.size}"
+            if (survivors.size != records.size - 1) {
+                failures += "$face: ${survivors.size} records after deletion, expected ${records.size - 1}"
                 return@forEach
             }
-            // Every record pairs, and pairs with a widget of the same identity.
-            edited.forEach { record ->
+            // Every survivor pairs with an original of its own identity. Identical records (nine
+            // alike Statics on some faces) may pair with each other's index — the editor tracks
+            // identity in its lineage, not through this heuristic — but never with a different
+            // kind of widget, and never with the one that was deleted unless a twin remains.
+            survivors.forEach { record ->
                 val source = sources[record.globalIndex]
-                if (source == null) {
-                    failures += "$face: widget #${record.globalIndex} " +
-                        "(type ${record.widgetType} seq ${record.sequenceId}) lost its original"
-                    return@forEach
-                }
-                val paired = originalsByIndex.getValue(source)
-                if (paired.widgetType != record.widgetType ||
-                    paired.sequenceId != record.sequenceId
-                ) {
+                val paired = source?.let(originalsByIndex::get)
+                if (paired == null || paired.widgetType != record.widgetType || paired.sequenceId != record.sequenceId) {
                     failures += "$face: widget #${record.globalIndex} " +
                         "(type ${record.widgetType} seq ${record.sequenceId}) paired with " +
-                        "original #$source (type ${paired.widgetType} seq ${paired.sequenceId})"
+                        "original #$source (type ${paired?.widgetType} seq ${paired?.sequenceId})"
                 }
             }
-            // And the pairing is a bijection — nothing claims someone else's original.
-            val claimed = sources.values
-            if (claimed.size != claimed.distinct().size) {
-                failures += "$face: two widgets claim the same original after a round trip"
-            }
-            // The restored widget specifically resolves back to the record it came from.
-            val restoredWidget = edited.singleOrNull {
-                it.widgetType == removedRecord.widgetType &&
-                    it.sequenceId == removedRecord.sequenceId &&
-                    it.x == removedRecord.x && it.y == removedRecord.y
-            }
-            if (restoredWidget != null) {
-                assertEquals(
-                    "$face: the restored widget must resolve to the record it was cut from",
-                    removedRecord.globalIndex,
-                    sources[restoredWidget.globalIndex],
-                )
+            if (sources.values.size != sources.values.distinct().size) {
+                failures += "$face: two survivors claim the same original after deleting #${deleted.globalIndex}"
             }
         }
 
-        assumeTrue("corpus holds no removable widget", checked > 0)
+        assumeTrue("corpus holds no deletable widget", checked > 0)
         assertTrue(failures.take(10).joinToString("\n"), failures.isEmpty())
     }
 
@@ -203,9 +172,13 @@ class WidgetOriginPairingTest {
         assertTrue(failures.take(10).joinToString("\n"), failures.isEmpty())
     }
 
-    /** The exact sequence from the report: resize, remove, restore, resize again. */
+    /**
+     * The report's sequence with a deletion in place of the remove-and-restore: resize the
+     * hour sprite, delete a widget ahead of it (renumbering it and moving its frames), resize
+     * again. It must keep resolving to original #4, and keep drawing.
+     */
     @Test
-    fun faceOoo22SurvivesResizeRemoveRestoreResize() {
+    fun faceOoo22SurvivesResizeDeleteResize() {
         val path = containers.firstOrNull { it.fileName.toString().contains("00022") }
         assumeTrue("face 00022 not in corpus", path != null)
         val original = Fit3Container.parse(Files.readAllBytes(path!!))
@@ -225,58 +198,41 @@ class WidgetOriginPairingTest {
             .single { it.sequenceId == 10 && it.type == 3 }
         assertEquals("the sprite starts at index 4", 4, guide.globalIndex)
 
-        val removal = StructuralEditor.removeWidget(
-            source = resized,
-            entryBasenames = styles,
-            globalIndex = guide.globalIndex,
-            widgetType = guide.type,
-            sequenceId = guide.sequenceId,
-            x = guide.x,
-            y = guide.y,
-            requireFinal = false,
-        )
-        val restored = StructuralEditor.appendWidget(
-            source = removal.container,
-            entryBasenames = removal.removedRecords.keys.toList(),
-            recordsByStyle = removal.removedRecords,
-        ).container
+        val (_, deleted) = FaceRecordParser.scanWidgets(resized.entryByBasename("style0.bin"))
+            .filter { it.globalIndex < guide.globalIndex }
+            .firstNotNullOf { record ->
+                runCatching {
+                    record to StructuralEditor.deleteWidget(resized, listOf("style0.bin"), record.globalIndex,
+                        record.widgetType, record.sequenceId, record.x, record.y,
+                        targetIndices = mapOf("style0.bin" to record.globalIndex)).container
+                }.getOrNull()
+            }
 
-        val editedStyle = restored.entryByBasename("style0.bin")
+        val editedStyle = deleted.entryByBasename("style0.bin")
         val moved = FaceRecordParser.widgetGuides(editedStyle)
             .single { it.sequenceId == 10 && it.type == 3 }
-        assertEquals("the restore renumbers it to the end", 10, moved.globalIndex)
+        assertEquals("the deletion renumbers it", 3, moved.globalIndex)
 
-        // Index 10 in the original is the seq-37 battery. The pairing must not say so.
         val sources = FaceRecordParser.originalWidgetSources(editedStyle, originalStyle)
-        assertEquals(
-            "the restored hour sprite must resolve to original #4, not whatever now " +
-                "holds index 10",
-            4,
-            sources[moved.globalIndex],
-        )
+        assertEquals("the hour sprite must resolve to original #4", 4, sources[moved.globalIndex])
         assertEquals(
             "and the battery must still resolve to itself",
             10,
-            sources[FaceRecordParser.widgetGuides(editedStyle)
-                .single { it.sequenceId == 37 }.globalIndex],
+            sources[FaceRecordParser.widgetGuides(editedStyle).single { it.sequenceId == 37 }.globalIndex],
         )
+        assertEquals("one fewer widget pairs", FaceRecordParser.scanWidgets(originalStyle).size - 1, sources.size)
 
         // Its frames still resolve, so it still draws.
-        val preview = original.entryByBasename("preview.bin")
-        val reference = FaceRecordParser.decodeImage(
-            preview,
-            FaceRecordParser.scanImages(preview).first(),
-        )
         val layer = FaceRecordParser
             .widgetImageLayers(editedStyle)
             .singleOrNull { it.globalIndex == moved.globalIndex }
-        assertNotNull("the restored sprite must keep an image layer to draw", layer)
+        assertNotNull("the sprite must keep an image layer to draw", layer)
         assertEquals(99, layer!!.frame.width)
         assertEquals(119, layer.frame.height)
 
         // And it can still be resized after all of that.
         val again = resizeBySource(
-            source = restored,
+            source = deleted,
             entryBasenames = styles,
             sequenceId = 10,
             width = 86,

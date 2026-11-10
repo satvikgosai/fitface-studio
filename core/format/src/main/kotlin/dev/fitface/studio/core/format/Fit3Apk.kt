@@ -1,11 +1,16 @@
 package dev.fitface.studio.core.format
 
+import dev.fitface.studio.core.model.PhotoAlbumFace
+import dev.fitface.studio.core.model.PhotoAlbumRequest
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -142,6 +147,92 @@ data class Fit3Apk(
         fun isFaceBinary(name: String): Boolean = facePattern.containsMatchIn(name)
 
         fun parse(apkBytes: ByteArray, retainMembers: Boolean = true): Fit3Apk {
+            val members = readMembers(apkBytes)
+            val matches = members.mapNotNull { member ->
+                facePattern.find(member.name)?.let { match -> member to match.groupValues[1] }
+            }
+            if (matches.isEmpty()) {
+                // Some catalogue entries are companion/customisation apps rather than
+                // watch-face content. The "Photos" face (00254) is the live example:
+                // 601 members, none of them a container — the watch renders it from a
+                // preinstalled face plus a photo the plugin pushes separately.
+                throw Fit3NoContainerException(
+                    members.any { it.name.startsWith("assets/bandface_info") },
+                )
+            }
+            if (matches.size != 1) {
+                throw Fit3FormatException(
+                    "expected exactly one Fit3 watch-face binary, found ${matches.size}",
+                )
+            }
+            val (member, faceId) = matches.single()
+            val container = Fit3Container.parse(member.data)
+            val report = container.validate()
+            if (!report.isValid) {
+                throw Fit3FormatException(
+                    "embedded watch face is invalid: ${report.errors.joinToString { it.code }}",
+                )
+            }
+            return Fit3Apk(
+                faceId = faceId,
+                samplerId = parseSamplerId(members),
+                faceName = parseFaceName(members),
+                binaryMember = member.name,
+                binary = member.data.copyOf(),
+                // Kept even when the members are dropped: they are a few kilobytes
+                // each and they are the only style artwork available offline.
+                stylePreviews = parseStylePreviews(members),
+                members = if (retainMembers) members else emptyList(),
+            )
+        }
+
+        /**
+         * The Photos face as its package declares it, or null for any other package.
+         *
+         * That package has no container. Its metadata member (`assets/bandface_info_myPhoto.json`
+         * for `00254`) declares a `layer_background` setting whose `gallery_menu` is `yes`, the
+         * stock plugin's own sign that the face takes the user's photos, and lists the face's own
+         * backgrounds as `preloaded` entries. The face is recognised by that declaration, not by
+         * its ID alone.
+         */
+        fun photoAlbumFace(apkBytes: ByteArray): PhotoAlbumFace? {
+            val members = readMembers(apkBytes)
+            if (members.any { isFaceBinary(it.name) }) return null
+            return members
+                .filter { it.name.startsWith("assets/bandface_info") && it.name.endsWith(".json") }
+                .firstNotNullOfOrNull { member -> runCatching { albumDeclaration(member.data) }.getOrNull() }
+        }
+
+        private fun albumDeclaration(json: ByteArray): PhotoAlbumFace? {
+            val info = Json.parseToJsonElement(json.decodeToString()).jsonObject["info"]?.jsonObject
+                ?: return null
+            val faceId = info["wf_unique"]?.jsonPrimitive?.content
+                ?.let { Regex("^SM-R390_(\\d{5})$").matchEntire(it) }
+                ?.groupValues?.get(1)?.toInt()
+                ?.takeIf { it in 1..255 }
+                ?: return null
+            val background = info["Settings"]?.objects().orEmpty().firstOrNull { setting ->
+                setting["setting_type"]?.jsonPrimitive?.content == "layer_background" &&
+                    setting["BackgroundImageSelections"]?.jsonObject
+                        ?.get("gallery_menu")?.jsonPrimitive?.content == "yes"
+            } ?: return null
+            val preloaded = background["BackgroundImageSelections"]!!.jsonObject["BackgroundImageSelection"]
+                ?.objects().orEmpty()
+                .filter { it["type"]?.jsonPrimitive?.content == "preloaded" }
+                .mapNotNull { it["ImageName"]?.jsonPrimitive?.content }
+                .filter(PhotoAlbumRequest::isPreloadedName)
+                .distinct()
+            return PhotoAlbumFace(faceId, preloaded).takeIf { preloaded.isNotEmpty() }
+        }
+
+        /** A metadata field the vendor writes as one object or as a list of them. */
+        private fun JsonElement.objects(): List<JsonObject> = when (this) {
+            is JsonObject -> listOf(this)
+            is JsonArray -> mapNotNull { it as? JsonObject }
+            else -> emptyList()
+        }
+
+        private fun readMembers(apkBytes: ByteArray): List<Member> {
             val members = mutableListOf<Member>()
             var inflated = 0L
             try {
@@ -179,42 +270,7 @@ data class Fit3Apk(
             } catch (error: Exception) {
                 throw Fit3FormatException("APK is not a readable ZIP: ${error.message}", error)
             }
-            val matches = members.mapNotNull { member ->
-                facePattern.find(member.name)?.let { match -> member to match.groupValues[1] }
-            }
-            if (matches.isEmpty()) {
-                // Some catalogue entries are companion/customisation apps rather than
-                // watch-face content. The "Photos" face (00254) is the live example:
-                // 601 members, none of them a container — the watch renders it from a
-                // preinstalled face plus a photo the plugin pushes separately.
-                throw Fit3NoContainerException(
-                    members.any { it.name.startsWith("assets/bandface_info") },
-                )
-            }
-            if (matches.size != 1) {
-                throw Fit3FormatException(
-                    "expected exactly one Fit3 watch-face binary, found ${matches.size}",
-                )
-            }
-            val (member, faceId) = matches.single()
-            val container = Fit3Container.parse(member.data)
-            val report = container.validate()
-            if (!report.isValid) {
-                throw Fit3FormatException(
-                    "embedded watch face is invalid: ${report.errors.joinToString { it.code }}",
-                )
-            }
-            return Fit3Apk(
-                faceId = faceId,
-                samplerId = parseSamplerId(members),
-                faceName = parseFaceName(members),
-                binaryMember = member.name,
-                binary = member.data.copyOf(),
-                // Kept even when the members are dropped: they are a few kilobytes
-                // each and they are the only style artwork available offline.
-                stylePreviews = parseStylePreviews(members),
-                members = if (retainMembers) members else emptyList(),
-            )
+            return members
         }
 
         /**

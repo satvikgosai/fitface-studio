@@ -7,6 +7,65 @@ enum class ImageFit {
     CONTAIN,
     COVER,
     STRETCH,
+    /**
+     * The picture's own pixels, one to one with the panel's at zoom 1. Offered for a moving
+     * background only, whose frames are stored at the size they cover, so a small GIF costs
+     * what its own pixels do; never remembered as the preferred fit.
+     */
+    NATIVE,
+    ;
+
+    companion object {
+        /** The fits a still background or photo offers: it is stored full-panel whatever the fit. */
+        val STILL = listOf(CONTAIN, COVER, STRETCH)
+    }
+}
+
+/** Where a placed picture's rectangle lands, in the pixels of the frame it is placed on. */
+data class PlacedRect(val left: Float, val top: Float, val width: Float, val height: Float) {
+    val right: Float get() = left + width
+    val bottom: Float get() = top + height
+}
+
+/** The zoom a placement may take, as the pinch and the drawing both clamp it. */
+const val MIN_PLACEMENT_ZOOM = 0.25f
+const val MAX_PLACEMENT_ZOOM = 8f
+/** How far, in frames, a placed picture's centre may move from the frame's. */
+const val MAX_PLACEMENT_OFFSET = 2f
+
+/**
+ * Where [placement] draws a [sourceWidth] × [sourceHeight] picture on a [targetWidth] ×
+ * [targetHeight] frame: fitted, zoomed about its centre, then moved by a share of the frame.
+ * The one geometry the decoder draws with and the editor previews and prices with.
+ */
+fun placedRect(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    targetWidth: Float,
+    targetHeight: Float,
+    placement: ImagePlacement,
+): PlacedRect {
+    require(sourceWidth > 0 && sourceHeight > 0) { "a placed picture needs a size" }
+    val widthScale = targetWidth / sourceWidth
+    val heightScale = targetHeight / sourceHeight
+    val (baseWidth, baseHeight) = when (placement.fit) {
+        ImageFit.CONTAIN -> minOf(widthScale, heightScale).let { sourceWidth * it to sourceHeight * it }
+        ImageFit.COVER -> maxOf(widthScale, heightScale).let { sourceWidth * it to sourceHeight * it }
+        ImageFit.STRETCH -> targetWidth to targetHeight
+        ImageFit.NATIVE -> sourceWidth.toFloat() to sourceHeight.toFloat()
+    }
+    val zoom = placement.zoom.coerceIn(MIN_PLACEMENT_ZOOM, MAX_PLACEMENT_ZOOM)
+    val width = baseWidth * zoom
+    val height = baseHeight * zoom
+    val centerX = targetWidth / 2f + placement.offsetX.coerceIn(-MAX_PLACEMENT_OFFSET, MAX_PLACEMENT_OFFSET) * targetWidth
+    val centerY = targetHeight / 2f + placement.offsetY.coerceIn(-MAX_PLACEMENT_OFFSET, MAX_PLACEMENT_OFFSET) * targetHeight
+    if (placement.fit == ImageFit.NATIVE) {
+        // On whole pixels, so its own pixels land on the panel's one to one rather than
+        // filtered across two: an odd size centred would sit half a pixel off.
+        return PlacedRect(kotlin.math.floor(centerX - width / 2f + 0.5f), kotlin.math.floor(centerY - height / 2f + 0.5f),
+            width, height)
+    }
+    return PlacedRect(centerX - width / 2f, centerY - height / 2f, width, height)
 }
 
 /**
@@ -147,6 +206,15 @@ fun widgetResizeLimit(shippedExtent: Int, kind: WidgetResizeKind): Int = when (k
  */
 const val WATCH_CONTAINER_BYTE_CEILING: Int = 4 * 1024 * 1024
 
+/**
+ * The most numbered styles a face can carry, so sampler IDs run 0 to 9.
+ *
+ * The stock plugin's and Fit3-App's install encoders both restrict the sampler to `0..9`,
+ * and no catalogue face has more than ten styles. Delivery refuses an eleventh rather than
+ * send a style number the watch has never been shown to accept.
+ */
+const val WATCH_MAX_STYLES: Int = 10
+
 /** Container sizes in the unit the watch's limit is quoted in, e.g. `4.16 MiB`. */
 fun mebibytes(bytes: Int): String =
     String.format(java.util.Locale.US, "%.2f MiB", bytes / (1024.0 * 1024.0))
@@ -156,6 +224,8 @@ data class ImagePlacement(
     val zoom: Float = 1f,
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
+    /** The colour the image is recoloured to by brightness ([tintedColor]), or null for its own. */
+    val tint: Int? = null,
 )
 
 data class ReplacementImage(
@@ -361,9 +431,33 @@ private fun <T> Comparator<T>.maybeReversed(reversed: Boolean): Comparator<T> =
 /**
  * The face a custom face is built from — Info_4, whose clock carries alpha and whose other
  * widgets are anchored to nothing, so stripping them leaves a clean canvas. A custom face
- * installs into this face's slot on the watch, which the screen offering it has to say.
+ * made before [CUSTOM_FACE_NUMBERS] still carries this ID and installs into Info_4's slot.
  */
 const val CUSTOM_FACE_TEMPLATE_FACE_ID = "00006"
+
+/**
+ * The face numbers a custom face is given, one each, when it is made, so it installs as a
+ * face of its own beside every other. Clear of the catalogue's 1–124 and the Photos face's
+ * 254, and under the install command's one-byte face ID. A watch installed `00201` and
+ * `00202` beside Info_4 (T3).
+ */
+val CUSTOM_FACE_NUMBERS: IntRange = 201..250
+
+/** Whether [faceId] is one of [CUSTOM_FACE_NUMBERS]: a custom face with a number of its own. */
+fun isCustomFaceNumber(faceId: String): Boolean =
+    faceId.length == 5 && faceId.all(Char::isDigit) && faceId.toInt() in CUSTOM_FACE_NUMBERS
+
+/**
+ * The lowest of [CUSTOM_FACE_NUMBERS] not in [taken], as a five-digit face ID, or null when
+ * every one is. Deleting a custom face frees its number for the next one.
+ */
+fun nextCustomFaceId(taken: Set<String>): String? =
+    CUSTOM_FACE_NUMBERS.asSequence().map { it.toString().padStart(5, '0') }.firstOrNull { it !in taken }
+
+/** Why a custom face cannot be started: every one of [CUSTOM_FACE_NUMBERS] is in use. */
+const val CUSTOM_FACE_NUMBERS_FULL =
+    "All 50 custom face numbers (201–250) are in use. Delete a custom face you no longer " +
+        "need, then try again."
 
 class FacePackage(
     val sourceKey: String,
@@ -658,8 +752,13 @@ data class WidgetGuide(
      */
     val opaqueArtwork: Boolean = false,
     val duplicateSourceGlobalIndex: Int? = null,
-    /** Imports are edited only in the variant where they were added. */
+    /** The face an imported widget came from; null for a picture, which has none. */
     val importedFromFaceId: String? = null,
+    /**
+     * How the editor added this widget, or null for one the face shipped. Every added widget
+     * is edited only in the variant it was added to, and deleted outright with its artwork.
+     */
+    val addedKind: AddedWidgetKind? = null,
     val supportMessage: String,
 ) {
     /** Whether the editor may offer to resize this widget at all. */
@@ -725,67 +824,6 @@ data class EditorVariant(
     }
 }
 
-/**
- * A widget record that was removed from the container and can be appended back.
- * [recordsByVariant] holds the exact bytes that were cut out of each face entry.
- *
- * It carries the *facts* the Removed list shows and no assembled copy: this module is
- * framework-free and cannot reach a resource table, so a label built here is a string no
- * translator can see and no screen can reword. It used to hold `label = "Widget #12"` for
- * exactly that reason, spelled differently from the `Widget #%1$d` two lines away in the
- * editor's own resources.
- */
-data class RemovedWidget(
-    val id: Long,
-    /**
-     * Where the record sat when it was cut, which is a historical marker rather than a
-     * live address: `removeWidget` renumbers everything after the record it cuts, so this
-     * names the widget the reader removed and must not be used to resolve it. Negative
-     * when it is not known, which is only a session written before this field existed.
-     */
-    val globalIndex: Int,
-    val widgetType: Int,
-    val sequenceId: Int,
-    val x: Int,
-    val y: Int,
-    val width: Int,
-    val height: Int,
-    /**
-     * The live reading it followed, named, or null where the format names none — the same
-     * two fields [WidgetGuide] carries, copied at removal because the guide is gone once
-     * the record is out of the container.
-     */
-    val sourceLabel: String? = null,
-    val followsReading: Boolean = false,
-    val recordsByVariant: Map<String, ByteArray>,
-    val importOriginId: String? = null,
-    val nativeIdentityRecorded: Boolean = false,
-    val nativeSourceIndices: Map<String, Int> = emptyMap(),
-    val duplicateSourceVariants: Set<String> = emptySet(),
-) {
-    /** What it draws, named — the same label the widget list shows for a live record. */
-    val category: WidgetCategory get() = WidgetCategory.forWidgetType(widgetType)
-
-    /**
-     * How many **numbered styles** the record was cut from.
-     *
-     * Counted rather than taken from `recordsByVariant.size`, which counts *entries*: an
-     * always-on removal writes one entry that is not a style, and reporting it as "1
-     * styles" is the same mistake `editor_audit_detail_aod` exists to avoid. AOD is never
-     * joined to a style edit, so in practice this is either the style count or zero.
-     */
-    val styleCount: Int
-        get() = recordsByVariant.keys.count { EditorVariant.styleNumberOf(it) != null }
-
-    /** Whether the record was cut from the always-on display. */
-    val touchedAod: Boolean get() = AOD_ENTRY_NAME in recordsByVariant
-
-    override fun equals(other: Any?): Boolean = this === other ||
-        (other is RemovedWidget && other.id == id)
-
-    override fun hashCode(): Int = id.hashCode()
-}
-
 data class PreviewFrame(
     val width: Int,
     val height: Int,
@@ -808,6 +846,15 @@ data class EditAuditSummary(
     val operation: String = "Edit",
     val sizeDelta: Int = 0,
 )
+
+/**
+ * What one undo step changed, in the words the editor shows: "Undo move", "Redo resize".
+ * Coarse on purpose; the diagnostics history keeps the precise operation.
+ */
+enum class EditKind {
+    MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, DUPLICATE, IMPORT, BACKGROUND,
+    STYLES, THUMBNAIL, TEXT, PICTURE, MOVING_BACKGROUND, MOVING_PICTURE,
+}
 
 data class EditorSnapshot(
     val projectId: Long,
@@ -862,7 +909,6 @@ data class EditorSnapshot(
     val widgetOverlay: PreviewFrame,
     val widgetImageLayers: List<WidgetImageLayer>,
     val widgets: List<WidgetGuide>,
-    val removedWidgets: List<RemovedWidget> = emptyList(),
     /**
      * Style name → the package's own preview image for that style, on disk.
      *
@@ -898,6 +944,12 @@ data class EditorSnapshot(
      */
     val backgroundAddTargets: List<String> = emptyList(),
     /**
+     * On a face with a background in some styles but not all, the bare styles a whole-face
+     * replacement gives one to as well — a style whose own was removed, or one that shipped
+     * painting onto black — in the order it writes them, as many as fit under the ceiling.
+     */
+    val replacementAddTargets: List<String> = emptyList(),
+    /**
      * The same two facts for the always-on display, which the style lists above say
      * nothing about: 32 of the corpus's 99 carry a panel raster and the rest compose over
      * black, independently of what their styles do.
@@ -907,14 +959,58 @@ data class EditorSnapshot(
      * group — see [canReplaceBackground], which is what the page reads.
      */
     val aodHasBackground: Boolean = false,
+    /**
+     * Whether the selected style, when it has no background, has room under the ceiling to be
+     * given one on its own: what "This style only" adds to.
+     */
+    val selectedCanTakeBackground: Boolean = false,
     /** Whether AOD has room under the ceiling to be *given* a background. */
     val aodCanTakeBackground: Boolean = false,
+    /** The selected variant's moving background, which the Background page shows and removes. */
+    val movingBackground: MovingBackground? = null,
+    /**
+     * Whether the selected variant shows a background: a moving one, or a still one that draws
+     * more than black. A background that could not be removed outright was painted black, so
+     * this, not [selectedVariantHasBackground], is what decides whether Remove is offered.
+     */
+    val selectedBackgroundShown: Boolean = false,
+    /**
+     * What the selected variant's still background takes — its Static and raster — which a
+     * moving background added there deletes, so its room is the new one's; 0 when it has none
+     * or it would be painted black instead.
+     */
+    val stillBackgroundBytes: Int = 0,
+    /** The active style's moving background: what Install says will play on the watch. */
+    val activeMovingBackground: MovingBackground? = null,
+    /**
+     * How many Animations the active style draws on top of the face — moving pictures, whether
+     * this app added them or the face arrived with them — which Install says will play too.
+     */
+    val activeMovingPictures: Int = 0,
+    /**
+     * The selected variant's animations, frames decoded, for the canvas to play: a moving
+     * background, moving pictures and any a face shipped with. [widgetImageLayers] draws each
+     * at its first frame.
+     */
+    val widgetAnimations: List<WidgetAnimation> = emptyList(),
     /** Size of the container as it stands, measured against the watch's ceiling. */
     val containerBytes: Int = 0,
     val imageCount: Int,
     val validationErrors: List<String>,
     val validationWarnings: List<String>,
+    /**
+     * Why this container would be refused at send although it is well formed: its paths,
+     * `setting.bin` and package disagree about which face it is, or its declared style count
+     * is wrong. Codes only; empty for every face the app produces.
+     */
+    val deliveryRefusals: List<String> = emptyList(),
+    /** Styles, and the always-on display, with no widgets: sendable, but say so first. */
+    val emptyVariants: List<String> = emptyList(),
     val isDirty: Boolean,
+    /** What Undo would take back, or null when there is nothing to undo. */
+    val undoKind: EditKind? = null,
+    /** What Redo would put back, or null when there is nothing to redo. */
+    val redoKind: EditKind? = null,
     val thumbnailRefreshed: Boolean = false,
     /**
      * The face-picker thumbnail of [activeStyleName] as it is stored now: one frame of
@@ -1039,6 +1135,30 @@ data class EditorSnapshot(
     val selectedVariantHasBackground: Boolean
         get() = if (isAodSelected) aodHasBackground else selectedVariant.basename in backgroundStyles
 
+    /**
+     * Whether the Background page offers to write the selected style alone. Never for the
+     * always-on display, which a background edit already writes alone, nor for a face with one
+     * style, where the two scopes are the same edit.
+     */
+    val offersBackgroundScope: Boolean
+        get() = !isAodSelected && styleNames.size > 1
+
+    /**
+     * Whether a background edit with this scope adds one rather than replacing one. For the
+     * selected style alone it is that style's own answer: a style painting onto black is given
+     * one even while its siblings carry theirs.
+     */
+    fun backgroundAdds(thisStyleOnly: Boolean): Boolean =
+        if (thisStyleOnly && offersBackgroundScope) !selectedVariantHasBackground else canAddBackground
+
+    /** Whether a background can be placed at all with this scope. */
+    fun canPlaceBackground(thisStyleOnly: Boolean): Boolean =
+        if (thisStyleOnly && offersBackgroundScope) {
+            selectedVariantHasBackground || selectedCanTakeBackground
+        } else {
+            canReplaceBackground || canAddBackground
+        }
+
     /** Widgets the canvas can draw and the user can drag. */
     val canvasWidgets: List<WidgetGuide>
         get() = widgets.filter { it.placement.isVisibleOnCanvas }
@@ -1051,18 +1171,22 @@ data class EditorSnapshot(
 class DirectInstallPayload(
     val faceId: Int,
     val samplerId: Int,
-    val fileName: String,
-    val sha256: String,
+    override val fileName: String,
+    override val sha256: String,
     bytes: ByteArray,
-) {
+) : WatchFile {
     private val payload = bytes.copyOf()
 
-    val size: Int
+    override val size: Int
         get() = payload.size
 
     init {
-        require(faceId in 0..255) { "Face ID must fit in the Fit3 protocol byte" }
-        require(samplerId in 0..255) { "Sampler ID must fit in the Fit3 protocol byte" }
+        // One byte each in the install command, but not every byte value is a face: no face
+        // has ID 0, and the stock plugin's own encoder caps the sampler at 9.
+        require(faceId in 1..255) { "Face ID must be 1 to 255 for the Fit3 install command" }
+        require(samplerId in 0 until WATCH_MAX_STYLES) {
+            "Sampler ID must be 0 to ${WATCH_MAX_STYLES - 1} for the Fit3 install command"
+        }
         require(
             fileName == "SM-R390_${faceId.toString().padStart(5, '0')}_256x402.bin",
         ) { "Binary filename does not match face ID $faceId" }
@@ -1078,7 +1202,7 @@ class DirectInstallPayload(
         }
     }
 
-    fun copyBytes(): ByteArray = payload.copyOf()
+    override fun copyBytes(): ByteArray = payload.copyOf()
 
     /**
      * Whether this payload ends exactly on a transfer window boundary.
@@ -1091,7 +1215,7 @@ class DirectInstallPayload(
      * the risk — but it is worth having in a bug report if a transfer ever stalls right
      * at the end.
      */
-    val endsOnWindowBoundary: Boolean
+    override val endsOnWindowBoundary: Boolean
         get() = payload.size % TRANSFER_WINDOW_BYTES == 0
 
     companion object {
@@ -1123,12 +1247,27 @@ interface WatchFaceRepository {
     suspend fun widgetDonorVariant(handle: String, variant: String): WidgetDonorVariant = throw UnsupportedOperationException()
     suspend fun previewWidgetImport(handle: String, donorVariant: String, index: Int,
         projectId: Long, targetVariant: String): WidgetImportPreview = throw UnsupportedOperationException()
-    suspend fun importWidget(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
+    suspend fun importWidget(ticket: String, group: Long? = null): EditorSnapshot = throw UnsupportedOperationException()
     suspend fun releaseWidgetDonor(handle: String) {}
+    /**
+     * Decodes a picked picture, fitted within the selected variant's panel, to be placed on
+     * the canvas and then added with [addPicture]. Kept until another replaces it.
+     */
+    suspend fun preparePicture(imageUri: String, projectId: Long, targetVariant: String): PreparedPicture =
+        throw UnsupportedOperationException()
+    /**
+     * Adds the prepared picture to [targetVariant] at [percent] of its baseline, with its
+     * top-left at panel coordinates [x], [y], recoloured to [tint] when there is one.
+     */
+    suspend fun addPicture(handle: String, projectId: Long, targetVariant: String, percent: Int, x: Int, y: Int,
+        tint: Int? = null, group: Long? = null): EditorSnapshot = throw UnsupportedOperationException()
+    suspend fun releasePicture(handle: String) {}
     suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
         throw UnsupportedOperationException()
+    /** @param thisStyleOnly write [targetVariant] alone rather than every style. */
     suspend fun previewBackgroundImport(handle: String, donorVariant: String,
-        projectId: Long, targetVariant: String): BackgroundImportPreview = throw UnsupportedOperationException()
+        projectId: Long, targetVariant: String, thisStyleOnly: Boolean = false): BackgroundImportPreview =
+        throw UnsupportedOperationException()
     suspend fun importBackground(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
     fun observeProjects(): Flow<List<ProjectSummary>>
 
@@ -1139,17 +1278,75 @@ interface WatchFaceRepository {
     suspend fun openPackage(download: FacePackage): EditorSnapshot
 
     /**
+     * The open session, when it is [projectId]'s. Opening a project from the library already
+     * opened it; the editor that arrives next takes that session rather than loading the
+     * project a second time. Null when another project or none is open.
+     */
+    suspend fun openedProject(projectId: Long): EditorSnapshot? = null
+
+    /**
      * Starts a custom face from [download], which has to be the template's own face
      * ([CUSTOM_FACE_TEMPLATE_FACE_ID]): stripped to its clock, given previews of what it now
-     * is, and saved as a new project called [name], numbered if that is taken.
+     * is, renumbered to the lowest of [CUSTOM_FACE_NUMBERS] that no project and none of
+     * [catalogueFaceIds] uses, and saved as a new project called [name], numbered if that is
+     * taken. Refused, with nothing saved, when every number is in use.
      *
      * Made here, from the package the store served, rather than shipped: no watch-face
      * content is bundled with this app.
      */
-    suspend fun openTemplate(download: FacePackage, name: String): EditorSnapshot =
-        throw UnsupportedOperationException()
+    suspend fun openTemplate(
+        download: FacePackage,
+        name: String,
+        catalogueFaceIds: Set<String> = emptySet(),
+    ): EditorSnapshot = throw UnsupportedOperationException()
 
     suspend fun openProject(projectId: Long): EditorSnapshot
+
+    /**
+     * The GIF or video at [imageUri], for a moving background's or picture's placing page: a
+     * GIF's every frame composited as a viewer shows it, or a video's [clip] read ten frames a
+     * second at a size that covers the selected variant's panel ([VideoClip.opening] when
+     * null). Refused with a sentence when it is neither, or not one this can read.
+     */
+    suspend fun readAnimation(imageUri: String, clip: VideoClip? = null): AnimationSource =
+        throw UnsupportedOperationException()
+
+    /**
+     * What a picked video is before any frame is read — its length, the size [readAnimation]
+     * reads its frames at and the longest part it reads — or null when [imageUri] is not a
+     * video. Refused, as [readAnimation] refuses it, when it is a video that cannot be read.
+     */
+    suspend fun probeVideo(imageUri: String): VideoProbe? = throw UnsupportedOperationException()
+
+    /**
+     * Deletes the cached frames of every video read but [keep]'s — the read a moving background
+     * or picture being placed still uses — in the background. Null keeps none: nothing is being
+     * placed, or the editor is closing. A read still in progress keeps its file.
+     */
+    fun releaseVideoFrames(keep: AnimationSource?) {}
+
+    /**
+     * [source] as the selected variant's moving background: every [frameStep]th frame, each
+     * placed by [placement] (and coloured by its tint) the way a still background is, played
+     * as [AnimationTiming.plan] times it. It replaces the variant's background in the same edit:
+     * a moving one is deleted, its room counted free, and a still one deleted as Remove background
+     * deletes it ([EditorSnapshot.stillBackgroundBytes] free too), so removing the moving one later
+     * leaves none. Refused when it would not fit under the watch's ceiling.
+     */
+    suspend fun addMovingBackground(source: AnimationSource, placement: ImagePlacement, frameStep: Int): EditorSnapshot =
+        throw UnsupportedOperationException()
+
+    /** Deletes the selected variant's moving background with its frames. Undo brings it back. */
+    suspend fun removeMovingBackground(): EditorSnapshot = throw UnsupportedOperationException()
+
+    /**
+     * [source] as a moving picture on the selected variant, every [frameStep]th frame scaled
+     * to [width] × [height] (a rung of its picture ladder), recoloured to [tint] when there is
+     * one, with its top-left at panel coordinates [x], [y]. Drawn on top of every widget;
+     * Remove deletes it with its frames.
+     */
+    suspend fun addMovingPicture(source: AnimationSource, frameStep: Int, width: Int, height: Int, x: Int, y: Int,
+        tint: Int? = null): EditorSnapshot = throw UnsupportedOperationException()
 
     /**
      * Renames a project. A blank name is ignored rather than refused: a rename dialog is
@@ -1200,9 +1397,16 @@ interface WatchFaceRepository {
 
     suspend fun prepareReplacementImage(imageUri: String): ReplacementImage
 
+    /**
+     * The picture at [imageUri] as the background, placed by [placement], in the styles
+     * that carry one. The selected variant's moving background, if it has one, is deleted in
+     * the same edit: its frames are opaque, so nothing under them would show.
+     */
     suspend fun replaceBackground(
         imageUri: String,
         placement: ImagePlacement,
+        /** Replace the selected style's background alone rather than every style's. */
+        thisStyleOnly: Boolean = false,
     ): EditorSnapshot
 
     /**
@@ -1211,12 +1415,25 @@ interface WatchFaceRepository {
      *
      * Separate from [replaceBackground] because it is a different edit: that one patches
      * pixels in place, this one grows the container. Both end with the same picture on
-     * the watch, and which applies is decided by [EditorSnapshot.canAddBackground].
+     * the watch, and which applies is decided by [EditorSnapshot.canAddBackground]. Like
+     * [replaceBackground], it replaces the selected variant's moving background.
      */
     suspend fun addBackground(
         imageUri: String,
         placement: ImagePlacement,
+        /** Give the selected style one alone, even while its siblings carry theirs. */
+        thisStyleOnly: Boolean = false,
     ): EditorSnapshot
+
+    /**
+     * Takes the background away in the styles [replaceBackground] would write: the selected
+     * variant's moving background is deleted and every still one deleted with its Static, as on
+     * a face that ships without one, so its room is free and a later picture is added rather than
+     * replaced; one that cannot go that way is painted black, which the watch shows where there
+     * is none. One edit: Undo or Reset brings everything back. Refused when there is nothing to take.
+     */
+    suspend fun removeBackground(thisStyleOnly: Boolean = false): EditorSnapshot =
+        throw UnsupportedOperationException()
 
     suspend fun tintBackground(red: Int, green: Int, blue: Int): EditorSnapshot
 
@@ -1242,6 +1459,8 @@ interface WatchFaceRepository {
         y: Int,
         colorArgb: Int,
         applyToAllStyles: Boolean,
+        /** Edits sharing a group in a row are one undo step: a run of quick-colour drags. */
+        group: Long? = null,
     ): EditorSnapshot
 
     /**
@@ -1256,6 +1475,7 @@ interface WatchFaceRepository {
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long? = null,
     ): EditorSnapshot
 
     suspend fun moveWidget(
@@ -1266,6 +1486,8 @@ interface WatchFaceRepository {
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        /** Edits sharing a group in a row are one undo step: a held nudge, a set's moves. */
+        group: Long? = null,
     ): EditorSnapshot
 
     suspend fun reorderWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
@@ -1298,6 +1520,11 @@ interface WatchFaceRepository {
         applyToAllStyles: Boolean,
     ): EditorSnapshot
 
+    /**
+     * Deletes a widget, and every raster nothing draws once it is gone, from the selected
+     * style or from every style that carries it. Undo brings it back; there is no list of
+     * removed widgets to restore from.
+     */
     suspend fun removeWidget(
         styleName: String,
         globalIndex: Int,
@@ -1307,6 +1534,7 @@ interface WatchFaceRepository {
         y: Int,
         requireFinal: Boolean,
         applyToAllStyles: Boolean,
+        group: Long? = null,
     ): EditorSnapshot
 
     suspend fun duplicateWidget(
@@ -1317,15 +1545,21 @@ interface WatchFaceRepository {
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long? = null,
     ): EditorSnapshot
-
-    /** Re-appends a widget that [removeWidget] took out, at the end of the table. */
-    suspend fun restoreWidget(removedId: Long): EditorSnapshot
 
     /** Re-renders the face-picker thumbnail for the selected style. */
     suspend fun refreshThumbnail(): EditorSnapshot
 
     suspend fun resetEdits(): EditorSnapshot
+
+    /**
+     * Steps back one edit, or forward again after an undo. History belongs to the open
+     * session: opening any project, this one included, Reset or delete clears it.
+     */
+    suspend fun undo(): EditorSnapshot = throw UnsupportedOperationException()
+
+    suspend fun redo(): EditorSnapshot = throw UnsupportedOperationException()
 
     suspend fun prepareDirectInstall(): DirectInstallPayload
 

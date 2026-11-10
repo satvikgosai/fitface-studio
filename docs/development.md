@@ -46,9 +46,9 @@ credentials are deliberately not stored in this repository.
   :app:lintDebug
 ```
 
-Last recorded corpus-backed verification (2026-10-07, widget colour and duplicates on `dev`):
-**763 tests collected, 762 passed, 1 skipped,
-0 failures, 0 lint errors, 23 lint warnings.**
+Last recorded corpus-backed verification (2026-11-06, widget deletion with artwork):
+**1047 tests collected, 1046 passed, 1 skipped, 0 failures, 0 lint errors,
+25 lint warnings.**
 Those warnings were dependency/SDK notices. These are recorded results, not an
 assertion that a later checkout has already passed; run the command above.
 
@@ -64,9 +64,12 @@ Even in native mode Robolectric's metrics are not the device's — it measures t
 subtitle that clipped on a real phone as fitting — so it asserts layout geometry rather
 than whether text was ellipsized. See the class comment.
 
-`FitDetailsTest` checks that optional help opens by click, announces its expanded state,
-keeps its body reachable and restores that state after recreation. It complements the
-emulator checks of long explanations, large text and scrolling.
+`FitDetailsTest` checks that a reference drop-down opens by click, announces its expanded
+state, keeps its body reachable and restores that state after recreation. `FitInfoTest`
+checks that an ⓘ or tag is a labelled button, that its bubble exists only once opened and
+carries a pane title, and where the bubble sits beside its trigger.
+Robolectric does not lay popup windows out, so bubble placement near screen edges and
+with large text is an emulator check.
 
 `SemanticColorContrastTest` and `SmallTextContrastTest` need no Android runtime at all:
 `Color` is a value class and the WCAG formula is arithmetic, so the palette is pinned by
@@ -81,11 +84,22 @@ catalogue faces — about three minutes — and checks that each one:
 - keeps every selectable widget overlapping the panel;
 - survives a move of every selectable widget, both on its own style and across
   every variant that carries it;
-- survives a remove/restore of every style's final widget, and an all-variant
-  remove/restore/duplicate of each style's first canvas widget.
+- survives deleting every style's final widget, and an all-variant delete and
+  duplicate of each style's first canvas widget.
 
 There is no `androidTest` source set; the Room migration test runs under
 Robolectric.
+
+`WatchProbesTest` builds containers that each test one unverified watch behaviour: an
+appended Animation, Indexed8 palette alpha, large overhangs, face IDs outside the
+catalogue, a changed font binding, swapped date sources and a soft-edged appended picture.
+Their writers live in test code only. `MovingBackgroundProbesTest` builds moving backgrounds
+and pictures the way the app does (a held frame, one under a catalogue face's widgets, one on
+the always-on display, moving pictures over a face's widgets and off its edge, a
+video-rate background). Every probe must validate and pass the delivery checks, and the test
+fails if one does not. Pass `-Pfit3.probeOut=<dir>` (with `--rerun`)
+to also write each probe as a project archive, which the Library's Import opens like any
+other project. Never commit the output: it holds corpus artwork.
 
 ## The test corpus
 
@@ -152,8 +166,8 @@ download/edit path for face `00112`.
 - Editor ViewModel tests use a test `Dispatchers.Main` and
   `unitTests.isReturnDefaultValues` for Android logging. They deliberately avoid
   Robolectric: the accessory SDK's pre-stackmap receiver bytecode fails JVM verification.
-- Native Robolectric tests pin geometry and `FitDetails` semantics, not device font
-  truncation. Dialog composition can fail to idle; verify scrolling on the emulator.
+- Native Robolectric tests pin geometry and `FitDetails`/`FitInfo` semantics, not device
+  font truncation or popup placement. Dialog composition can fail to idle; verify scrolling on the emulator.
 - Real gestures are not driven by tests. Pure hit testing, clamping and drag-axis
   helpers are covered; stale gesture inputs and accumulation still need UI checks.
 - The updater dialogs/state-to-UI mapping in `:app` have no automated UI coverage.

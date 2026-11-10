@@ -1,0 +1,95 @@
+<resources>
+    <!-- The page that sends the user's photos to the watch's own Photos face. -->
+    <string name="editor_photos_title">Photos face</string>
+    <string name="editor_photos_subtitle_choose">choose photos</string>
+    <string name="editor_photos_subtitle_placing">placing photo %1$d of %2$d</string>
+    <string name="editor_photos_subtitle_install">send to the watch</string>
+    <string name="editor_photos_details_label">Photo details</string>
+    <string name="editor_photos_intro">Your photos go to the watch\'s own Photos face, the way Galaxy Wearable sends them. The face holds up to %1$d. The first photo you pick is the one shown.</string>
+    <string name="editor_photos_loading">Reading the Photos face…</string>
+    <string name="editor_photos_loading_percent">Reading the Photos face… %1$d%%</string>
+    <string name="editor_photos_retry">@string/ui_try_again</string>
+
+    <string name="editor_photos_next">Next: install</string>
+    <string name="editor_photos_install_none">No photos picked. Pick them on Background first.</string>
+    <plurals name="editor_photos_install_ready">
+        <item quantity="one">%1$d photo ready to send. Tap it to place it again.</item>
+        <item quantity="other">%1$d photos ready to send, the first one shown. Tap one to place it again.</item>
+    </plurals>
+
+    <string name="editor_photos_none_picked">No photos picked yet</string>
+    <string name="editor_photos_choose">Choose photos</string>
+    <string name="editor_photos_add_more">Add photos</string>
+    <string name="editor_photos_full">The Photos face has no room for more. Remove photos from it first.</string>
+    <plurals name="editor_photos_room">
+        <item quantity="one">Room for %1$d more photo.</item>
+        <item quantity="other">Room for %1$d more photos.</item>
+    </plurals>
+    <plurals name="editor_photos_dropped">
+        <item quantity="one">%1$d photo was left out: the Photos face has no room for it.</item>
+        <item quantity="other">%1$d photos were left out: the Photos face has no room for them.</item>
+    </plurals>
+    <string name="editor_photos_thumb_a11y">Photo %1$d of %2$d</string>
+    <string name="editor_photos_thumb_selected_a11y">Photo %1$d of %2$d, being placed</string>
+    <string name="editor_photos_shown_label">SHOWN</string>
+    <string name="editor_photos_preview_a11y">Photo %1$d on the watch face. Drag to move, pinch to resize.</string>
+    <string name="editor_photos_remove_one">Take out</string>
+
+    <plurals name="editor_photos_sent_count">
+        <item quantity="one">%1$d photo sent from this phone is on the Photos face.</item>
+        <item quantity="other">%1$d photos sent from this phone are on the Photos face.</item>
+    </plurals>
+    <string name="editor_photos_remove_sent">Remove all from the watch</string>
+    <string name="editor_photos_on_watch">On the watch</string>
+    <string name="editor_photos_no_copy">NO COPY</string>
+    <string name="editor_photos_sent_a11y">Sent photo %1$d of %2$d</string>
+    <string name="editor_photos_sent_shown_a11y">Sent photo %1$d of %2$d, shown on the watch</string>
+    <string name="editor_photos_choose_sent">Tap a photo to show it, change it or remove it.</string>
+    <string name="editor_photos_show_this">Show it</string>
+    <string name="editor_photos_change">Change</string>
+    <string name="editor_photos_remove_this">Remove this photo</string>
+    <string name="editor_photos_resend">Send them all again</string>
+    <string name="editor_photos_no_copy_note">Sent before this app kept copies, so it can be shown or removed but not changed or sent again. Pick it again to change it.</string>
+    <string name="editor_photos_sent_needs_setup">Showing, removing and sending again need the steps below.</string>
+    <string name="editor_photos_remove_one_title">Remove this photo?</string>
+    <string name="editor_photos_remove_one_body">The watch is asked to delete this photo, and this phone\'s copy is deleted with it.</string>
+    <string name="editor_photos_changing_label">CHANGING</string>
+    <string name="editor_photos_subtitle_changing">changing a sent photo</string>
+    <string name="editor_photos_phase_show">Ask the watch to show it</string>
+    <string name="editor_photos_shown_done">Request sent. Look at the Photos face on your watch, then restore the plugin and reconnect in the companion app.</string>
+    <string name="editor_photos_remove_title">Remove the photos?</string>
+    <plurals name="editor_photos_remove_body">
+        <item quantity="one">The watch is asked to delete the %1$d photo this phone sent and show the Photos face\'s own background. Photos sent from Galaxy Wearable stay.</item>
+        <item quantity="other">The watch is asked to delete the %1$d photos this phone sent and show the Photos face\'s own background. Photos sent from Galaxy Wearable stay.</item>
+    </plurals>
+    <string name="editor_photos_remove_confirm">Remove</string>
+    <string name="editor_photos_cancel">Cancel</string>
+
+    <plurals name="editor_photos_send">
+        <item quantity="one">Send %1$d photo to the watch</item>
+        <item quantity="other">Send %1$d photos to the watch</item>
+    </plurals>
+    <string name="editor_photos_preparing">Preparing the photos…</string>
+    <string name="editor_photos_send_heading">Send to the watch</string>
+
+    <!-- Phase timeline, in order. -->
+    <string name="editor_photos_phase_prepare">Prepare connection</string>
+    <string name="editor_photos_phase_find">Find watch</string>
+    <string name="editor_photos_phase_open">Open the Photos settings</string>
+    <string name="editor_photos_phase_send">Send photos</string>
+    <string name="editor_photos_phase_add">Add them to the Photos face</string>
+    <string name="editor_photos_phase_remove">Ask the watch to remove them</string>
+    <string name="editor_photos_phase_done">Request sent</string>
+    <string name="editor_photos_phase_photo">Photo %1$d of %2$d · %3$d%%</string>
+
+    <string name="editor_photos_done">Request sent. Look at the Photos face on your watch. Restore the plugin’s Nearby devices access if you turned it off, then reconnect in the companion app.</string>
+    <string name="editor_photos_done_legacy">Request sent. Look at the Photos face on your watch, re-enable the plugin, then reconnect in the companion app.</string>
+    <string name="editor_photos_removed">Remove request sent. Check the Photos face on your watch, then restore the plugin and reconnect in the companion app.</string>
+
+    <string name="editor_photos_about_label">About the Photos face</string>
+    <string name="editor_photos_about">• Sending makes the Photos face the current one.
+• The watch’s answer goes to the stock plugin, so this app can only say the request was sent.
+• Galaxy Wearable may not list photos sent from here, and saving its Photos screen may replace them.
+• The face’s clock type and colour are left as they are; change them on the watch.
+• The Photos face has to be in the watch’s face list. It comes with the watch, but it can be removed there.</string>
+</resources>

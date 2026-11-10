@@ -78,6 +78,20 @@ data class CompanionEnvironment(
         }
 }
 
+/**
+ * A Photos-face request in flight or just finished: how many of its photos have transferred,
+ * and the bytes they came to, so progress runs across the whole album.
+ */
+data class AlbumProgress(
+    val photos: Int,
+    val photosSent: Int = 0,
+    val bytesSent: Int = 0,
+    /** Only deletes photos. */
+    val removing: Boolean = false,
+    /** Only changes which photo is shown. */
+    val showing: Boolean = false,
+)
+
 /** One line of the install checklist the Install page renders. */
 enum class SetupStep {
     COMPANION_PRESENT,
@@ -109,6 +123,14 @@ data class DirectInstallState(
      */
     val failure: String? = null,
     val message: String = "Checking watch setup…",
+    /**
+     * What the watch sent this app's two agents, as `<agent> <hex>`, newest last and at most
+     * [MAX_WATCH_REPLIES]. Protocol bytes only: the replies carry face and style numbers,
+     * never a device identity.
+     */
+    val watchReplies: List<String> = emptyList(),
+    /** Set while the request is for the Photos face's album rather than a face install. */
+    val album: AlbumProgress? = null,
 ) {
     val peersCached: Boolean
         get() = watchfacePeerCached && otaPeerCached
@@ -149,6 +171,13 @@ data class DirectInstallState(
             phase == DirectInstallPhase.DISCOVERING
         else -> false
     }
+
+    /**
+     * The once-per-phone steps, 1 and 2, both hold right now. Read live, not remembered: an
+     * uninstalled watch app or revoked Nearby access makes this false again by itself.
+     */
+    val phoneReady: Boolean
+        get() = isStepDone(SetupStep.COMPANION_PRESENT) && isStepDone(SetupStep.HELPER_PERMISSION)
 
     /** Discovery is the step the checklist is waiting on. */
     val awaitingDiscovery: Boolean
@@ -194,6 +223,7 @@ data class DirectInstallState(
         totalBytes = 0,
         acknowledgedWindows = 0,
         totalWindows = 0,
+        album = null,
         message = "Reconnect the watch in its companion app, then find it again.",
     )
 
@@ -286,6 +316,18 @@ internal enum class DeliveryEvent {
     INSTALL_REQUESTED,
     INSTALL_DELIVERED,
     FAILURE,
+
+    /** A Photos request's opening command is out, so its first photo may start. */
+    ALBUM_OPENED,
+
+    /** The second or a later photo of a Photos request has been checked by the agent. */
+    NEXT_FILE_VERIFIED,
+
+    /** A Photos request's closing commands are starting: after its photos, or at once for a removal. */
+    ALBUM_COMMANDS_REQUESTED,
+
+    /** One album command is out and the next is waiting its turn. */
+    COMMAND_PROGRESS,
 }
 
 /**
@@ -330,12 +372,35 @@ internal object DeliveryProgress {
         DeliveryEvent.INSTALL_REQUESTED ->
             current == DirectInstallPhase.TRANSFERRING ||
                 current == DirectInstallPhase.INSTALLING
+        // Also how a Photos request's closing commands report that all of them are out.
         DeliveryEvent.INSTALL_DELIVERED -> current == DirectInstallPhase.INSTALLING
+        DeliveryEvent.ALBUM_OPENED -> current == DirectInstallPhase.VERIFYING
+        // Only once a first photo has moved the machine on: the next one starts from there.
+        DeliveryEvent.NEXT_FILE_VERIFIED -> current == DirectInstallPhase.TRANSFERRING
+        // A removal has no photo, so it goes straight from VERIFYING.
+        DeliveryEvent.ALBUM_COMMANDS_REQUESTED ->
+            current == DirectInstallPhase.VERIFYING ||
+                current == DirectInstallPhase.TRANSFERRING
+        DeliveryEvent.COMMAND_PROGRESS ->
+            current == DirectInstallPhase.VERIFYING ||
+                current == DirectInstallPhase.INSTALLING
         // A failure for an attempt nobody is waiting on any more is noise. The reason
         // the reader needs is already on screen — the watchdog's, or the checklist's.
         DeliveryEvent.FAILURE -> current in DirectInstallState.ActivePhases
     }
 }
+
+/** How many received watch replies [DirectInstallState.watchReplies] keeps. */
+internal const val MAX_WATCH_REPLIES = 8
+
+/**
+ * [state] with one more received reply recorded, oldest dropped past [MAX_WATCH_REPLIES].
+ *
+ * Kept apart from the phase machine on purpose: a reply is evidence, not progress, so it is
+ * recorded in any phase and moves nothing.
+ */
+internal fun withWatchReply(state: DirectInstallState, agent: String, data: ByteArray): DirectInstallState =
+    state.copy(watchReplies = (state.watchReplies + "$agent ${data.replyHex()}").takeLast(MAX_WATCH_REPLIES))
 
 /** How long a phase that is merely waiting on the accessory framework may stay silent. */
 internal const val PHASE_WATCHDOG_MS = 20_000L

@@ -220,6 +220,10 @@ class EditPersistenceTest {
         override suspend fun findByFaceId(faceId: String): List<ProjectEntity> =
             delegate.findByFaceId(faceId)
 
+        override suspend fun faceIds(): List<String> = delegate.faceIds()
+
+        override suspend fun findCustomFaces(): List<ProjectEntity> = delegate.findCustomFaces()
+
         override suspend fun rename(id: Long, name: String): Int = delegate.rename(id, name)
 
         override suspend fun insert(project: ProjectEntity): Long {

@@ -6,9 +6,13 @@ import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.fitface.studio.core.data.db.FitFaceDatabase
+import dev.fitface.studio.core.data.db.ProjectEntity
+import dev.fitface.studio.core.format.CustomFaceTemplate
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.Fit3Apk
 import dev.fitface.studio.core.format.Fit3Container
+import dev.fitface.studio.core.format.pack
+import dev.fitface.studio.core.model.CUSTOM_FACE_NUMBERS_FULL
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.WatchFaceException
@@ -80,23 +84,28 @@ class CustomFaceProjectTest {
     @Test
     fun aCustomFaceIsTheClockOnAnEmptyPanelInAProjectOfItsOwn() = runBlocking {
         val snapshot = repository.openTemplate(download(), "Custom face")
-        assertEquals("00006", snapshot.faceId)
+        // A face number of its own, so it installs beside Info_4 rather than over it.
+        assertEquals("00201", snapshot.faceId)
         assertEquals("Custom face", snapshot.projectName)
-        // The template is the project's starting point, not an edit of Info_4: reset lands
-        // here, and nothing is under Removed.
+        // The template is the project's starting point, not an edit of Info_4: reset lands here.
         assertFalse(snapshot.isDirty)
-        assertTrue(snapshot.removedWidgets.isEmpty())
         assertEquals(5, snapshot.widgets.size)
         // One style: the four were copies of each other once their readings were gone.
         assertEquals(listOf("style0.bin"), snapshot.styleNames)
         assertTrue(snapshot.hasAod)
         val row = requireNotNull(database.projectDao().findById(snapshot.projectId))
-        assertTrue(row.sourceUri, row.sourceUri.startsWith("fit3-template://00006/v2/"))
+        assertTrue(row.sourceUri, row.sourceUri.startsWith("fit3-template://00006/v3/"))
         assertNull(row.productId)
         assertNull(row.packageVersionCode)
         assertNull(row.styleId)
-        // What it will replace on the watch, named by the face's own metadata.
+        // The package's metadata is Info_4's, carried over; the Install card names the number.
         assertEquals("Info_4", row.faceName)
+        // The container and its preview are filed under the number, which is where the parser
+        // reads a project's face ID from.
+        val apk = Fit3Apk.parse(File(row.localApkPath!!).readBytes())
+        assertEquals("00201", apk.faceId)
+        assertEquals("assets/SM-R390_00201_256x402.bin", apk.binaryMember)
+        assertEquals(setOf(0), apk.stylePreviews.keys)
         // Never badged "update available", whatever the store does to Info_4.
         val summary = repository.observeProjects().first().single()
         assertFalse(summary.isOutdated(Long.MAX_VALUE))
@@ -132,13 +141,70 @@ class CustomFaceProjectTest {
         }
     }
 
+    /** Each takes the next number, and they are named against each other, not their numbers. */
     @Test
-    fun aSecondCustomFaceIsASecondProject() = runBlocking {
+    fun aSecondCustomFaceIsASecondProjectWithTheNextNumber() = runBlocking {
         val first = repository.openTemplate(download(), "Custom face")
         val second = repository.openTemplate(download(), "Custom face")
         assertNotEquals(first.projectId, second.projectId)
+        assertEquals("00201", first.faceId)
+        assertEquals("00202", second.faceId)
         assertEquals("Custom face 2", second.projectName)
         assertEquals(2, repository.observeProjects().first().size)
+    }
+
+    /** Deleting a custom face frees its number, and the next one takes the lowest free. */
+    @Test
+    fun aDeletedCustomFaceFreesItsNumber() = runBlocking {
+        val first = repository.openTemplate(download(), "Custom face")
+        repository.openTemplate(download(), "Custom face")
+        repository.deleteProject(first.projectId)
+        assertEquals("00201", repository.openTemplate(download(), "Custom face").faceId)
+        assertEquals("00203", repository.openTemplate(download(), "Custom face").faceId)
+    }
+
+    /** A number the catalogue lists is never given out, in case the store grows into the range. */
+    @Test
+    fun aNumberInTheCatalogueIsSkipped() = runBlocking {
+        val snapshot = repository.openTemplate(download(), "Custom face", setOf("00106", "00201", "00202"))
+        assertEquals("00203", snapshot.faceId)
+    }
+
+    /** With all fifty in use the start is refused, and nothing is written. */
+    @Test
+    fun withEveryNumberInUseNothingIsSaved() = runBlocking {
+        val dao = database.projectDao()
+        (201..249).forEach { number ->
+            dao.insert(ProjectEntity(displayName = "x", sourceUri = "fit3-template://00006/v3/$number",
+                faceId = number.toString().padStart(5, '0'), importedAtEpochMillis = 0))
+        }
+        assertEquals("00250", repository.openTemplate(download(), "Custom face").faceId)
+        val error = runCatching { repository.openTemplate(download(), "Custom face") }.exceptionOrNull()
+        assertTrue("got $error", error is WatchFaceException)
+        assertEquals(CUSTOM_FACE_NUMBERS_FULL, (error as WatchFaceException).userMessage)
+        // No row and no files for the refused one: only 250's directory exists.
+        assertEquals(50, dao.faceIds().size)
+        assertEquals(1, File(context.filesDir, "projects").listFiles().orEmpty().size)
+    }
+
+    /**
+     * A custom face made before numbers keeps Info_4's, still installs over it, and is counted
+     * among the custom faces a new one is named against.
+     */
+    @Test
+    fun anOlderCustomFaceKeepsInfo4sNumber() = runBlocking {
+        val store = Files.readAllBytes(storePackage(info4))
+        val stripped = CustomFaceTemplate.strip(Fit3Container.parse(Fit3Apk.parse(store).binary))
+        val apk = File(context.filesDir, "projects/older/source.apk").apply { parentFile!!.mkdirs() }
+        apk.writeBytes(CustomFaceTemplate.pack(store, stripped.toByteArray(), emptyMap()))
+        val older = database.projectDao().insert(ProjectEntity(displayName = "SM-R390_00006.apk",
+            sourceUri = "fit3-template://00006/v2/older", faceId = "00006", importedAtEpochMillis = 0,
+            localApkPath = apk.path, selectedStyle = "style0.bin", projectName = "Custom face"))
+        assertEquals("00006", repository.openProject(older).faceId)
+        assertEquals(6, repository.prepareDirectInstall().faceId)
+        val numbered = repository.openTemplate(download(), "Custom face")
+        assertEquals("00201", numbered.faceId)
+        assertEquals("Custom face 2", numbered.projectName)
     }
 
     /** Once it exists it is an ordinary project: it reopens, copies, and reaches the watch. */
@@ -149,10 +215,28 @@ class CustomFaceProjectTest {
         val reopened = repository.openProject(snapshot.projectId)
         assertEquals(snapshot.containerBytes, reopened.containerBytes)
         val payload = repository.prepareDirectInstall()
-        assertEquals("SM-R390_00006_256x402.bin", payload.fileName)
-        assertEquals(6, payload.faceId)
+        assertEquals("SM-R390_00201_256x402.bin", payload.fileName)
+        assertEquals(201, payload.faceId)
+        // A copy keeps the number, as every copy keeps its face's, and is named among custom faces.
         val copy = repository.duplicateProject(snapshot.projectId)
-        assertEquals(5, repository.openProject(copy.id).widgets.size)
+        val reopenedCopy = repository.openProject(copy.id)
+        assertEquals(5, reopenedCopy.widgets.size)
+        assertEquals("00201", reopenedCopy.faceId)
+        assertEquals("Custom face 2", reopenedCopy.projectName)
+    }
+
+    /** Reset goes back to the renumbered template, not to Info_4. */
+    @Test
+    fun resetKeepsTheNumber() = runBlocking {
+        val template = repository.openTemplate(download(), "Custom face")
+        val widget = template.widgets.last()
+        val edited = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
+            widget.x, widget.y, false, false)
+        assertTrue(edited.isDirty)
+        val reset = repository.resetEdits()
+        assertEquals("00201", reset.faceId)
+        assertEquals(template.containerBytes, reset.containerBytes)
+        assertEquals(201, repository.prepareDirectInstall().faceId)
     }
 
     /** An exported custom face comes back a custom face, provenance and all. */
@@ -164,17 +248,17 @@ class CustomFaceProjectTest {
         val imported = repository.importProject(Uri.fromFile(file).toString())
         val row = requireNotNull(database.projectDao().findById(imported.id))
         assertTrue(row.sourceUri.startsWith("fit3-template://00006/"))
+        assertEquals("00201", row.faceId)
         assertNull(row.packageVersionCode)
         assertEquals(5, repository.openProject(imported.id).widgets.size)
     }
 
     /**
-     * The report: every clock widget removed, and not one of them could be put back —
-     * "style0.bin: style needs widgets and images", because the append refused an empty
-     * widget table.
+     * Every clock widget deleted by hand: the style keeps one raster, the container shrinks,
+     * and Undo brings every widget back to the template's exact bytes, which reopen as such.
      */
     @Test
-    fun aFaceEmptiedByHandRestoresEveryWidget() = runBlocking {
+    fun aFaceEmptiedByHandComesBackWithUndo() = runBlocking {
         val template = repository.openTemplate(download(), "Custom face")
         var s = template
         while (s.widgets.isNotEmpty()) {
@@ -182,13 +266,9 @@ class CustomFaceProjectTest {
             s = repository.removeWidget("style0.bin", widget.globalIndex, widget.type, widget.sequenceId,
                 widget.x, widget.y, false, false)
         }
-        assertEquals(5, s.removedWidgets.size)
-        // Restored in the order they were removed from the bottom of the table.
-        s.removedWidgets.sortedBy { it.globalIndex }.forEach { removed ->
-            s = repository.restoreWidget(removed.id)
-        }
+        assertTrue(s.containerBytes < template.containerBytes)
+        repeat(5) { s = repository.undo() }
         assertEquals(5, s.widgets.size)
-        assertTrue(s.removedWidgets.isEmpty())
         assertEquals(template.containerBytes, s.containerBytes)
         repository = repository()
         assertEquals(5, repository.openProject(template.projectId).widgets.size)

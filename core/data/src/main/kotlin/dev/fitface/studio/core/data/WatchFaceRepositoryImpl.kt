@@ -4,12 +4,15 @@ import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.JsonReader
+import android.util.JsonToken
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.data.db.ProjectDao
 import dev.fitface.studio.core.data.db.ProjectEntity
+import dev.fitface.studio.core.format.BackgroundDeletion
 import dev.fitface.studio.core.format.BackgroundImporter
 import dev.fitface.studio.core.format.BackgroundImportEdit
 import dev.fitface.studio.core.model.drawLeft
@@ -23,9 +26,15 @@ import dev.fitface.studio.core.format.PreviewStream
 import dev.fitface.studio.core.format.Fit3CapacityException
 import dev.fitface.studio.core.format.ContainerEntry
 import dev.fitface.studio.core.format.CustomFaceTemplate
+import dev.fitface.studio.core.format.DeliveryChecks
+import dev.fitface.studio.core.format.FaceIdentity
+import dev.fitface.studio.core.format.GifDecoder
+import dev.fitface.studio.core.format.GifFormatException
+import dev.fitface.studio.core.format.MovingBackgroundEditor
 import dev.fitface.studio.core.format.FaceEditor
 import dev.fitface.studio.core.format.FaceRecordParser
 import dev.fitface.studio.core.format.FaceResources
+import dev.fitface.studio.core.format.FontSlots
 import dev.fitface.studio.core.format.Fit3Apk
 import dev.fitface.studio.core.format.Fit3Container
 import dev.fitface.studio.core.format.Fit3FormatException
@@ -37,7 +46,9 @@ import dev.fitface.studio.core.format.ProjectArchive
 import dev.fitface.studio.core.format.ProjectArchiveException
 import dev.fitface.studio.core.format.ProjectManifest
 import dev.fitface.studio.core.format.SessionLineage
+import dev.fitface.studio.core.format.MovingPicture
 import dev.fitface.studio.core.format.NativeWidgetOrigin
+import dev.fitface.studio.core.format.WIDGET_ANIMATION
 import dev.fitface.studio.core.format.StructuralEdit
 import dev.fitface.studio.core.format.StructuralEditor
 import dev.fitface.studio.core.format.StyleWidgetMatch
@@ -45,26 +56,43 @@ import dev.fitface.studio.core.format.WidgetImportEdit
 import dev.fitface.studio.core.format.WidgetImportOrigin
 import dev.fitface.studio.core.format.WidgetImportOrigins
 import dev.fitface.studio.core.format.WidgetImporter
+import dev.fitface.studio.core.format.PictureWidget
+import dev.fitface.studio.core.format.PanelSize
 import dev.fitface.studio.core.format.WidgetPristine
 import dev.fitface.studio.core.format.WidgetRecord
 import dev.fitface.studio.core.format.pack
 import dev.fitface.studio.core.model.AOD_ENTRY_NAME
+import dev.fitface.studio.core.model.AddedWidgetKind
+import dev.fitface.studio.core.model.AnimationPlan
+import dev.fitface.studio.core.model.AnimationSource
+import dev.fitface.studio.core.model.animationAddedBytes
+import dev.fitface.studio.core.model.movingBackgroundBounds
+import dev.fitface.studio.core.model.PixelBounds
+import dev.fitface.studio.core.model.PreparedPicture
+import dev.fitface.studio.core.model.pictureBaselineSize
+import dev.fitface.studio.core.model.pictureSizes
+import dev.fitface.studio.core.model.tinted
+import dev.fitface.studio.core.model.VideoClip
+import dev.fitface.studio.core.model.VideoProbe
+import dev.fitface.studio.core.model.WidgetPlacement
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.DuplicatedProject
 import dev.fitface.studio.core.model.EditAuditSummary
+import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ExportedProject
 import dev.fitface.studio.core.model.FacePackage
+import dev.fitface.studio.core.model.CUSTOM_FACE_NUMBERS_FULL
+import dev.fitface.studio.core.model.nextCustomFaceId
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.ImportedProject
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.ProjectNaming
 import dev.fitface.studio.core.model.ProjectSummary
-import dev.fitface.studio.core.model.RemovedWidget
 import dev.fitface.studio.core.model.StyleManagement
 import dev.fitface.studio.core.model.survivingStyleNames
 import dev.fitface.studio.core.model.survivingActiveStyle
@@ -87,17 +115,21 @@ import java.io.IOException
 import java.io.OutputStream
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -124,8 +156,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
     private var donor: Donor? = null
     private var pendingImport: PendingImport? = null
     private data class PendingBackground(val ticket: String, val donor: Donor, val session: Session,
-        val before: Fit3Container, val variant: String, val result: BackgroundImportEdit)
+        val before: Fit3Container, val variant: String, val result: BackgroundImportEdit,
+        /** The selected variant's moving background, which the import replaces. */
+        val replacing: AnimationDeletion? = null)
     private var pendingBackground: PendingBackground? = null
+    /** A picked picture at its baseline size, kept while it is placed on the canvas. */
+    private class Picture(val handle: String, val width: Int, val height: Int, val argb: IntArray)
+    private var picture: Picture? = null
+    private val videoSource = AndroidVideoSource(context)
+    private val videoFrameFiles = VideoFrameFiles(File(context.cacheDir, "video-frames"))
 
     override suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = withContext(Dispatchers.Default) {
         // This must not call openPackage: inspecting a donor never replaces the active project.
@@ -153,7 +192,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 val entry = StyleWidgetMatch.requireVariantEntry(source.container.entryByBasename(variant))
                 val guides = FaceRecordParser.widgetGuides(entry)
                 val composition = WidgetPreviewComposer.compose(entry, source.container.entries,
-                    WidgetTextRasterizer::render, java.util.Locale.getDefault().toString())
+                    WidgetTextRasterizer::render, previewDictionaryLocale())
                 // `composed` is the donor face itself, and it was already being built here
                 // to obtain the layers — the picker draws it rather than describing each
                 // record in words, and hit-tests the same guides on it.
@@ -175,13 +214,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val source = donor?.takeIf { it.handle == handle }
                 ?: throw WatchFaceException("Choose the source watch face again.")
             val result = WidgetImporter.importWidget(current.currentContainer, targetVariant,
-                source.container, donorVariant, index)
+                source.container, donorVariant, index, current.fontSlots())
             val origins = current.originsWith(source.faceId, targetVariant, result)
             current.identities().withResources(current.originalContainer, result.edit.container)
                 .validate(current.originalContainer, result.edit.container, origins)
             val entry = result.edit.container.entryByBasename(targetVariant)
             val preview = WidgetPreviewComposer.compose(entry, result.edit.container.entries,
-                WidgetTextRasterizer::render, java.util.Locale.getDefault().toString()).composed
+                WidgetTextRasterizer::render, previewDictionaryLocale()).composed
             val ticket = UUID.randomUUID().toString()
             currentCoroutineContext().ensureActive()
             pendingImport = PendingImport(ticket, source, current, current.currentContainer, targetVariant, result)
@@ -190,7 +229,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun importWidget(ticket: String): EditorSnapshot = withContext(Dispatchers.Default) {
+    override suspend fun importWidget(ticket: String, group: Long?): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val pending = pendingImport?.takeIf { it.ticket == ticket }
                 ?: throw WatchFaceException("Preview this widget again before adding it.")
@@ -201,7 +240,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val origins = current.originsWith(pending.donor.faceId, pending.variant, pending.result)
             val snapshot = commit(current, pending.result.edit.container,
                 pending.result.edit.audit("Widget imported from face ${pending.donor.faceId} into ${pending.variant}"),
-                pending.variant, origins)
+                pending.variant, origins, kind = EditKind.IMPORT, group = group)
             pendingImport = null
             snapshot
         }
@@ -217,7 +256,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
 
     override suspend fun previewBackgroundImport(handle: String, donorVariant: String,
-        projectId: Long, targetVariant: String): BackgroundImportPreview = withContext(Dispatchers.Default) {
+        projectId: Long, targetVariant: String, thisStyleOnly: Boolean): BackgroundImportPreview = withContext(Dispatchers.Default) {
         mutex.withLock {
             pendingBackground = null
             val current = requireSession()
@@ -225,14 +264,17 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 throw WatchFaceException("The target project changed. Open the background picker again.")
             val source = donor?.takeIf { it.handle == handle }
                 ?: throw WatchFaceException("Choose the source watch face again.")
-            val result = BackgroundImporter.prepare(current.currentContainer, targetVariant,
-                source.container.entryByBasename(donorVariant))
+            // Like any new background, it replaces a moving one, so it is prepared without it.
+            val replacing = movingBackgroundDeletion(current)
+            val result = BackgroundImporter.prepare(replacing?.edit?.container ?: current.currentContainer, targetVariant,
+                source.container.entryByBasename(donorVariant), thisStyleOnly)
             val preview = WidgetPreviewComposer.compose(result.edit.container.entryByBasename(targetVariant),
                 result.edit.container.entries, WidgetTextRasterizer::render,
-                java.util.Locale.getDefault().toString()).composed
+                previewDictionaryLocale()).composed
             val ticket = UUID.randomUUID().toString()
             currentCoroutineContext().ensureActive()
-            pendingBackground = PendingBackground(ticket, source, current, current.currentContainer, targetVariant, result)
+            pendingBackground = PendingBackground(ticket, source, current, current.currentContainer, targetVariant, result,
+                replacing)
             BackgroundImportPreview(ticket, preview, result.edit.changedStyles, result.skippedVariants,
                 result.addedBackground, result.edit.sizeDelta, result.edit.container.fileSize)
         }
@@ -246,30 +288,134 @@ class WatchFaceRepositoryImpl @Inject constructor(
             if (current !== pending.session || current.currentContainer !== pending.before ||
                 current.selectedVariantName != pending.variant || donor !== pending.donor)
                 throw WatchFaceException("The project changed after the preview. Review the background again.")
-            val origins = if (pending.result.addedBackground) {
-                pending.result.edit.changedStyles.fold(current.importOrigins) { saved, variant ->
+            val replacing = pending.replacing
+            val added = pending.result.addedBackground
+            val start = replacing?.let { current.importOrigins?.renumber(it.variant, it.mapping) } ?: current.importOrigins
+            val origins = if (added) {
+                pending.result.edit.changedStyles.fold(start) { saved, variant ->
                     saved?.renumber(variant) { it + 1 }
                 }
-            } else current.importOrigins
+            } else start
+            val from = replacing?.let { current.identities().remap(it.variant, it.mapping) } ?: current.identities()
+            val audit = pending.result.edit.audit("Background imported from face ${pending.donor.faceId}")
             val snapshot = commit(current, pending.result.edit.container,
-                pending.result.edit.audit("Background imported from face ${pending.donor.faceId}"),
+                replacing?.before(audit) ?: audit,
                 importOrigins = origins,
-                lineage = if (pending.result.addedBackground) current.withAddedBackgrounds(pending.result.edit.changedStyles) else current.identities())
+                lineage = if (added) current.withAddedBackgrounds(pending.result.edit.changedStyles, from) else from,
+                kind = EditKind.BACKGROUND,
+            )
             pendingBackground = null
             snapshot
         }
     }
 
+    override suspend fun preparePicture(imageUri: String, projectId: Long, targetVariant: String): PreparedPicture =
+        withContext(Dispatchers.IO) {
+            val panel = mutex.withLock { pictureTarget(projectId, targetVariant) }
+            val (sourceWidth, sourceHeight) = try {
+                imageSource.uprightSize(imageUri)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                throw WatchFaceException("This picture could not be read. Choose a PNG or JPEG.",
+                    "picture: bounds unreadable", error)
+            }
+            val (width, height) = pictureBaselineSize(sourceWidth, sourceHeight, panel.width, panel.height)
+            val pixels = try {
+                imageSource.decodeScaled(imageUri, width, height)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                throw WatchFaceException("This picture could not be read. Choose a PNG or JPEG.",
+                    "picture: decode failed ${sourceWidth}x$sourceHeight", error)
+            }
+            mutex.withLock {
+                currentCoroutineContext().ensureActive()
+                val kept = Picture(UUID.randomUUID().toString(), width, height, pixels)
+                picture = kept
+                PreparedPicture(kept.handle, width, height, pixels.all { it ushr 24 == 0xFF },
+                    pictureSizes(width, height, panel.width, panel.height,
+                        kept = width == sourceWidth && height == sourceHeight),
+                    PreviewFrame(width, height, pixels))
+            }
+        }
+
+    /** The selected variant's panel, refusing a project or variant the caller no longer has open. */
+    private fun pictureTarget(projectId: Long, targetVariant: String): PanelSize {
+        val current = requireSession()
+        if (current.projectId != projectId || current.selectedVariantName != targetVariant)
+            throw WatchFaceException("The project changed. Choose the picture again.")
+        return FaceRecordParser.panelSize(current.currentContainer.entryByBasename(targetVariant))
+    }
+
+    override suspend fun addPicture(handle: String, projectId: Long, targetVariant: String, percent: Int,
+        x: Int, y: Int, tint: Int?, group: Long?): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            pictureTarget(projectId, targetVariant)
+            val current = requireSession()
+            val source = picture?.takeIf { it.handle == handle }
+                ?: throw WatchFaceException("Choose the picture again.")
+            // The colour is baked into the baseline, so every later resize and turn keeps it.
+            val pixels = tint?.let { tinted(source.argb, it) } ?: source.argb
+            val result = PictureWidget.insert(current.currentContainer, targetVariant, source.width, source.height,
+                pixels, percent, x, y)
+            val origins = current.originsWith("", targetVariant, result, AddedWidgetKind.PICTURE)
+            current.identities().withResources(current.originalContainer, result.edit.container)
+                .validate(current.originalContainer, result.edit.container, origins)
+            commit(current, result.edit.container, result.edit.audit("Picture added to $targetVariant"),
+                targetVariant, origins, kind = EditKind.PICTURE, group = group)
+        }
+    }
+
+    override suspend fun releasePicture(handle: String) = mutex.withLock {
+        if (picture?.handle == handle) picture = null
+    }
+
     override suspend fun releaseWidgetDonor(handle: String) = mutex.withLock {
         if (donor?.handle == handle) { donor = null; pendingImport = null; pendingBackground = null }
     }
-    private val removedWidgetIds = AtomicLong()
     private val json = Json { ignoreUnknownKeys = true }
 
     override fun observeProjects(): Flow<List<ProjectSummary>> =
         projectDao.observeAll()
+            .onEach(::sweepStaleHistory)
             .map { projects -> projects.map { it.toSummary(projectPreviewImage(it)) } }
             .flowOn(Dispatchers.IO)
+
+    /**
+     * Once a process, the first time the library reads the projects: deletes every
+     * checkpoint a project row does not name. Undo history lives only as long as the session
+     * that wrote it, and a process Android kills mid-session never gets to delete its steps;
+     * without this they would stay on disk, up to [HISTORY_MAX_BYTES] a project, until that
+     * one project happened to be opened again. The open session's project is left alone: its
+     * history is live.
+     *
+     * It runs beside the list, not ahead of it: on a cold start, listing a library of 80 projects
+     * took up to 0.3 s, which the first frame of projects would otherwise wait for. The lock
+     * is taken a project at a time, so an open waits for one directory at most, and the row is
+     * read again under it before anything is deleted: the list is a snapshot, and a session
+     * opened since may have moved the row to a checkpoint the snapshot does not name.
+     */
+    private fun sweepStaleHistory(projects: List<ProjectEntity>) {
+        if (!historySwept.compareAndSet(false, true)) return
+        historySweep = housekeeping.launch {
+            projects.forEach { listed ->
+                runCatching {
+                    mutex.withLock {
+                        if (listed.id == session?.projectId) return@withLock
+                        val keep = listed.editedBinPath?.let(::File)
+                        if (checkpointFiles(listed.id).all { it == keep }) return@withLock
+                        val project = projectDao.findById(listed.id) ?: return@withLock
+                        sweepCheckpoints(project.id, project.editedBinPath?.let(::File))
+                    }
+                }
+            }
+        }
+    }
+
+    private val historySwept = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val housekeeping = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** The sweep [observeProjects] started, for a test to wait on. */
+    internal var historySweep: Job? = null
 
     override fun observeImageFit(): Flow<ImageFit> =
         context.editorPreferences.data.map { preferences ->
@@ -324,8 +470,17 @@ class WatchFaceRepositoryImpl @Inject constructor(
      * provenance**: the row carries a `fit3-template://` key with no product, version or
      * style, because it is not a store download — a store version would badge every custom
      * face as outdated the day Info_4 updates, and offer to replace it with the stock face.
+     *
+     * **It has a face number of its own**, the lowest of 201–250 that no project here and
+     * none of [catalogueFaceIds] uses, so it installs beside Info_4 and every other custom
+     * face rather than over them. The number is picked and the row written under one lock,
+     * so two quick starts cannot take the same one.
      */
-    override suspend fun openTemplate(download: FacePackage, name: String): EditorSnapshot =
+    override suspend fun openTemplate(
+        download: FacePackage,
+        name: String,
+        catalogueFaceIds: Set<String>,
+    ): EditorSnapshot =
         withContext(Dispatchers.IO) {
             if (download.expectedFaceId != CustomFaceTemplate.FACE_ID) {
                 throw WatchFaceException(
@@ -334,15 +489,25 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 )
             }
             val storePackage = download.copyBytes()
-            val template = withContext(Dispatchers.Default) { buildTemplatePackage(storePackage) }
+            val template = withContext(Dispatchers.Default) { buildTemplate(storePackage) }
             mutex.withLock {
+                val faceId = nextCustomFaceId(projectDao.faceIds().toSet() + catalogueFaceIds)
+                    ?: throw WatchFaceException(CUSTOM_FACE_NUMBERS_FULL, "custom face numbers exhausted")
+                val numbered = FaceIdentity.renumber(template.container, faceId)
+                val refusals = DeliveryChecks.check(numbered, faceId).refusals
+                if (refusals.isNotEmpty()) {
+                    throw WatchFaceException(
+                        "The custom face could not be given its own number. Nothing was saved.",
+                        "renumber to $faceId: ${refusals.joinToString { it.code }}",
+                    )
+                }
                 createProject(
-                    apkBytes = template,
+                    apkBytes = CustomFaceTemplate.pack(storePackage, numbered.toByteArray(), template.previews, faceId),
                     fallbackName = download.displayName,
-                    expectedFaceId = CustomFaceTemplate.FACE_ID,
+                    expectedFaceId = faceId,
                     wrongFace = "The custom face could not be built from Info_4. Nothing was saved.",
                     desiredStyle = "style0.bin",
-                    sourceUri = "fit3-template://${CustomFaceTemplate.FACE_ID}/" +
+                    sourceUri = "$TEMPLATE_SOURCE${CustomFaceTemplate.FACE_ID}/" +
                         "v${CustomFaceTemplate.VERSION}/${UUID.randomUUID()}",
                     productId = null,
                     packageVersionCode = null,
@@ -352,12 +517,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
         }
 
+    /** The stripped container, with its face-picker frames redrawn, and the style previews. */
+    private class Template(val container: Fit3Container, val previews: Map<Int, ByteArray>)
+
     /**
-     * The template's package, from the store's: the container stripped, each style's
+     * The template, from the store's package: the container stripped, each style's
      * face-picker frame re-rendered from what it now draws, and each style preview redrawn
-     * from the same composition.
+     * from the same composition. Still under Info_4's number; [openTemplate] gives it its own.
      */
-    private fun buildTemplatePackage(storePackage: ByteArray): ByteArray {
+    private fun buildTemplate(storePackage: ByteArray): Template {
         val apk = Fit3Apk.parse(storePackage, retainMembers = false)
         val stripped = try {
             CustomFaceTemplate.strip(Fit3Container.parse(apk.binary))
@@ -372,7 +540,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 error,
             )
         }
-        val locale = java.util.Locale.getDefault().toString()
+        val locale = previewDictionaryLocale()
         var container = stripped
         val previews = mutableMapOf<Int, ByteArray>()
         FaceResources.selectableStyles(stripped).forEachIndexed { index, entry ->
@@ -384,7 +552,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // Keyed as the package keys its previews: by the style's own number.
             previews[FaceResources.styleNumber(entry.basename)] = composed.toPng()
         }
-        return CustomFaceTemplate.pack(storePackage, container.toByteArray(), previews)
+        return Template(container, previews)
     }
 
     private fun PreviewFrame.toPng(): ByteArray {
@@ -395,6 +563,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
             bitmap.recycle()
         }
     }
+
+    /**
+     * The names a new project of [faceId] is numbered against: its face's other projects, or,
+     * for a custom face ([sourceUri] a template key), every custom face. Those have a number
+     * each, so their face's projects would be none and every one would be plain "Custom face".
+     */
+    private suspend fun takenNames(faceId: String, sourceUri: String?): List<String> =
+        (if (sourceUri?.startsWith(TEMPLATE_SOURCE) == true) projectDao.findCustomFaces()
+        else projectDao.findByFaceId(faceId)).map(ProjectEntity::resolvedName)
 
     /**
      * A new project from [apkBytes]: the session loaded and checked, then the row, then its
@@ -433,7 +610,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         // not a second row reading exactly like the first. The face's own names are
         // identical across every project started on it, which is why the name is stored
         // rather than derived on the way to the screen.
-        val siblings = projectDao.findByFaceId(loaded.apk.faceId)
+        val taken = takenNames(loaded.apk.faceId, sourceUri)
         val project = ProjectEntity(
             id = 0,
             displayName = loaded.sourceName,
@@ -444,10 +621,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             localApkPath = null,
             editedBinPath = null,
             selectedStyle = desiredStyle,
-            projectName = ProjectNaming.defaultName(
-                base = nameBase(loaded),
-                taken = siblings.map(ProjectEntity::resolvedName),
-            ),
+            projectName = ProjectNaming.defaultName(base = nameBase(loaded), taken = taken),
             productId = productId,
             packageVersionCode = packageVersionCode,
             styleId = styleId,
@@ -497,7 +671,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         loaded.projectId = projectId
         loaded.projectName = project.projectName ?: loaded.sourceName
         loaded.stylePreviewFiles = stylePreviews
-        return loaded.also { session = it }.snapshot()
+        return loaded.also(::replaceSession).openedSnapshot()
     }
 
     override suspend fun openProject(projectId: Long): EditorSnapshot =
@@ -530,6 +704,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // this write produces is the one the projects list draws from, and it lists
                 // the previews directory as it stands at that moment.
                 val stylePreviews = writeStylePreviews(project.id, loaded.apk)
+                // Also what a project saved by an older version is missing: its updated
+                // face-picker thumbnail, written now from the face it saved.
+                syncPickerPreviews(loaded)
                 projectDao.insert(
                     project.copy(
                         faceName = loaded.apk.faceName,
@@ -539,9 +716,19 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 )
                 loaded.projectName = project.resolvedName
                 loaded.stylePreviewFiles = stylePreviews
-                loaded.also { session = it }.snapshot()
+                sweepCheckpoints(project.id, loaded.currentFile)
+                loaded.also(::replaceSession).openedSnapshot()
             }
         }
+
+    override suspend fun openedProject(projectId: Long): EditorSnapshot? = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            // The snapshot the open just built, when nothing has touched the session since:
+            // building it again recomposes every preview, which kept the editor on its
+            // loading screen for a second after the library's own spinner had finished.
+            session?.takeIf { it.projectId == projectId }?.let { it.labelled(it.takeOpened() ?: it.snapshot()) }
+        }
+    }
 
     override suspend fun renameProject(projectId: Long, name: String) =
         withContext(Dispatchers.IO) {
@@ -588,8 +775,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     id = 0,
                     projectName = ProjectNaming.defaultName(
                         base = source.resolvedName,
-                        taken = projectDao.findByFaceId(source.faceId)
-                            .map(ProjectEntity::resolvedName),
+                        taken = takenNames(source.faceId, source.sourceUri),
                     ),
                     importedAtEpochMillis = now,
                     updatedAtEpochMillis = now,
@@ -676,7 +862,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
      *
      * Takes [mutex] for the reason every other project operation does: a commit rewrites
      * `edited.bin` and `session.json` in that order, and an export landing between the two
-     * would pair one project's container with another's removals.
+     * would pair one project's container with another's session.
      */
     override suspend fun exportProject(
         projectId: Long,
@@ -824,9 +1010,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 val storedImports = if (contents.manifest.schema >= 2) {
                     val state = contents.sessionState ?: throw WatchFaceException("This project's saved edit metadata is missing.")
                     json.decodeFromString<StoredSessionState>(state.decodeToString()).also {
-                        require(it.schema == contents.manifest.schema && (it.schema != 2 || it.importOrigins != null) &&
-                            (it.schema < 3 || it.lineage != null) &&
-                            (it.schema != 4 || it.lineage?.artworkTurns != null) && it.editedContainer == null) {
+                        require(it.schema == contents.manifest.schema && it.isConsistent() && it.editedContainer == null) {
                             "Invalid saved edit metadata."
                         }
                     }
@@ -846,7 +1030,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     }
                 }
                 val now = System.currentTimeMillis()
-                val siblings = projectDao.findByFaceId(loaded.apk.faceId)
+                val taken = takenNames(loaded.apk.faceId, contents.manifest.sourceUri)
                 val project = ProjectEntity(
                     id = 0,
                     displayName = contents.manifest.displayName,
@@ -868,7 +1052,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         base = contents.manifest.projectName.ifBlank {
                             loaded.apk.faceName ?: contents.manifest.displayName
                         },
-                        taken = siblings.map(ProjectEntity::resolvedName),
+                        taken = taken,
                     ),
                     productId = contents.manifest.productId,
                     packageVersionCode = contents.manifest.packageVersionCode,
@@ -1047,11 +1231,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
     override suspend fun replaceBackground(
         imageUri: String,
         placement: ImagePlacement,
+        thisStyleOnly: Boolean,
     ): EditorSnapshot {
         val prepared = withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                val targets = current.backgroundTargetEntries()
+                val targets = current.backgroundScope(thisStyleOnly)
                 if (targets.isEmpty()) {
                     throw IllegalArgumentException("No editable style entries found")
                 }
@@ -1059,18 +1244,33 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // selected one first. Reading style0 unconditionally made faces whose
                 // first style paints onto black — 00011, and 00108 up to style3 —
                 // refuse an edit their remaining styles could take.
-                val image = current.selectedBackgroundRaster()
+                val image = (if (current.scopedToStyle(thisStyleOnly)) {
+                    FaceRecordParser.backgroundImage(targets.single())
+                } else {
+                    current.selectedBackgroundRaster()
+                })
                     ?: throw WatchFaceException(
                         "No style of this face has a full-face background image to " +
                             "replace — it draws its widgets straight onto black.",
                         "no styleN.bin carries a panel-sized raster",
                     )
+                val replacing = movingBackgroundDeletion(current)
+                val base = replacing?.edit?.container ?: current.currentContainer
                 PreparedBackground(
                     session = current,
                     container = current.currentContainer,
                     width = image.width,
                     height = image.height,
-                    styleNames = targets.map { it.basename },
+                    styleNames = targets.filter { FaceRecordParser.backgroundImage(it) != null }
+                        .map { it.basename },
+                    replacing = replacing,
+                    // A whole-face replacement writes every style, as it always did: one whose own
+                    // was removed, or that shipped painting onto black, is given one where it fits.
+                    bare = if (current.scopedToStyle(thisStyleOnly)) emptyList() else targets.map { it.basename }.filter { name ->
+                        val entry = base.entryByBasename(name)
+                        FaceRecordParser.backgroundImage(entry) == null &&
+                            FaceRecordParser.panelSize(entry).let { it.width == image.width && it.height == image.height }
+                    },
                 )
             }
         }
@@ -1080,7 +1280,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 prepared.width,
                 prepared.height,
                 placement,
-            )
+            ).let { pixels -> placement.tint?.let { tinted(pixels, it) } ?: pixels }
         }
         val snapshot = withContext(Dispatchers.Default) {
             mutex.withLock {
@@ -1090,26 +1290,103 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     "The project changed while the image was being prepared. Try applying it again.",
                 )
             }
+            val replacing = prepared.replacing
             val edit = FaceEditor.replaceBackgrounds(
-                current.currentContainer,
+                replacing?.edit?.container ?: current.currentContainer,
                 prepared.styleNames ?: current.backgroundTargetEntries().map { it.basename },
                 prepared.width,
                 prepared.height,
                 pixels,
             )
+            // The bare styles are given one, as many as fit, the selected first; each one's
+            // Static goes in at index 0, as [addBackground] puts it.
+            val added = StructuralEditor.backgroundStylesThatFit(edit.container, prepared.bare, current.selectedVariantName)
+                .takeIf { it.isNotEmpty() }
+                ?.let { StructuralEditor.addBackgrounds(edit.container, it, prepared.width, prepared.height, pixels) }
+            val addedStyles = added?.changedStyles.orEmpty()
+            val audit = EditAuditSummary(
+                edit.changedPayloadBytes + (added?.changedPayloadBytes ?: 0),
+                (edit.changedStyles + addedStyles).distinct(),
+                operation = "Manual background placement" + if (addedStyles.isEmpty()) "" else ", added to ${addedStyles.joinToString()}",
+                // The moving background's deletion, if any, adds its own in [AnimationDeletion.before].
+                sizeDelta = (added?.container ?: edit.container).fileSize - edit.container.fileSize,
+            )
+            val start = replacing?.let { current.importOrigins?.renumber(it.variant, it.mapping) } ?: current.importOrigins
+            val from = replacing?.let { current.identities().remap(it.variant, it.mapping) } ?: current.identities()
+            // Pixels patched in place move nothing, so the deletion's renumbering is the edit's, and an addition's.
             commit(
                 current,
-                edit.container,
-                EditAuditSummary(
-                    edit.changedPayloadBytes,
-                    edit.changedStyles,
-                    operation = "Manual background placement",
-                ),
+                added?.container ?: edit.container,
+                replacing?.before(audit) ?: audit,
+                importOrigins = addedStyles.fold(start) { saved, variant -> saved?.renumber(variant) { it + 1 } },
+                lineage = current.withAddedBackgrounds(addedStyles, from),
+                kind = EditKind.BACKGROUND,
             )
             }
         }
         runCatching { setImageFit(placement.fit) }
         return snapshot
+    }
+
+    /**
+     * See [WatchFaceRepository.removeBackground]. Each still background goes with its Static,
+     * as on a face that ships without one ([StructuralEditor.deleteBackground]), its room free;
+     * one that cannot go that way — drawn twice, or offset — is painted black through the
+     * same-size replacement instead, as it always was.
+     */
+    override suspend fun removeBackground(thisStyleOnly: Boolean): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val current = requireSession()
+            val replacing = movingBackgroundDeletion(current)
+            val deletions = Deletions()
+            replacing?.let(deletions::add)
+            var container = replacing?.edit?.container ?: current.currentContainer
+            val painted = mutableListOf<String>()
+            current.backgroundScope(thisStyleOnly).map { it.basename }.forEach { variant ->
+                val entry = container.entryByBasename(variant)
+                val image = FaceRecordParser.backgroundImage(entry) ?: return@forEach
+                val deletion = current.stillBackgroundDeletion(container, variant)
+                if (deletion != null) {
+                    deletions.add(variant, deletion)
+                    container = deletion.edit.container
+                } else if (!drawsOnlyBlack(entry, image)) {
+                    painted += variant
+                }
+            }
+            if (deletions.isEmpty() && painted.isEmpty()) throw WatchFaceException("There is no background here to remove.")
+            val paint = painted.firstOrNull()?.let { first ->
+                val image = requireNotNull(FaceRecordParser.backgroundImage(container.entryByBasename(first)))
+                FaceEditor.replaceBackgrounds(container, painted, image.width, image.height,
+                    IntArray(image.width * image.height) { BLACK })
+            }
+            container = paint?.container ?: container
+            val audit = EditAuditSummary(
+                deletions.payloadBytes + (paint?.changedPayloadBytes ?: 0),
+                (deletions.styles + paint?.changedStyles.orEmpty()).distinct(),
+                operation = "Background removed" + (if (painted.isEmpty()) "" else " (painted black in ${painted.joinToString()})"),
+                sizeDelta = container.fileSize - current.currentContainer.fileSize,
+            )
+            commit(
+                current,
+                container,
+                audit,
+                importOrigins = deletions.renumber(current.importOrigins),
+                lineage = deletions.remap(current.identities()),
+                kind = EditKind.BACKGROUND,
+            )
+        }
+    }
+
+    /**
+     * [container] with [variant]'s still background painted black, or as it is when it has none
+     * or is black already: under a moving background added there when the still one cannot be
+     * deleted outright ([Session.stillBackgroundDeletion]), as Remove background leaves it then.
+     */
+    private fun withStillBackgroundBlack(container: Fit3Container, variant: String): Fit3Container {
+        val entry = container.entryByBasename(variant)
+        val image = FaceRecordParser.backgroundImage(entry)?.takeIf { !drawsOnlyBlack(entry, it) } ?: return container
+        return FaceEditor.replaceBackgrounds(container, listOf(variant), image.width, image.height,
+            IntArray(image.width * image.height) { BLACK }).container
     }
 
     /**
@@ -1121,11 +1398,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
     override suspend fun addBackground(
         imageUri: String,
         placement: ImagePlacement,
+        thisStyleOnly: Boolean,
     ): EditorSnapshot {
+        val scoped = thisStyleOnly
         val prepared = withContext(Dispatchers.Default) {
             mutex.withLock {
                 val current = requireSession()
-                val scope = current.backgroundTargetEntries()
+                val scope = current.backgroundScope(thisStyleOnly)
                 val bare = scope.filter { FaceRecordParser.backgroundImage(it) == null }
                 if (bare.size != scope.size) {
                     throw WatchFaceException(
@@ -1146,7 +1425,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 // one on the canvas first, because it is the only one you can see. With AOD
                 // selected that list is `aod.bin` alone; a normal style is never joined to
                 // it, nor it to them.
-                val targets = current.backgroundAddTargets()
+                // Measured with the moving background it replaces already gone: its frames' room is the new one's.
+                val replacing = movingBackgroundDeletion(current)
+                val base = replacing?.edit?.container ?: current.currentContainer
+                val targets = if (current.scopedToStyle(thisStyleOnly)) {
+                    StructuralEditor.backgroundStylesThatFit(
+                        base, scope.map { it.basename }, current.selectedVariantName,
+                    )
+                } else {
+                    current.backgroundAddTargets(base)
+                }
                 if (targets.isEmpty()) {
                     val cost = StructuralEditor.addedBackgroundBytes(panel.width, panel.height)
                     throw Fit3CapacityException(current.currentContainer.fileSize,
@@ -1158,11 +1446,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     width = panel.width,
                     height = panel.height,
                     styleNames = targets,
+                    replacing = replacing,
                 )
             }
         }
         val pixels = withContext(Dispatchers.IO) {
             imageSource.decode(imageUri, prepared.width, prepared.height, placement)
+                .let { pixels -> placement.tint?.let { tinted(pixels, it) } ?: pixels }
         }
         val snapshot = withContext(Dispatchers.Default) {
             mutex.withLock {
@@ -1176,39 +1466,400 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     )
                 }
                 val targets = prepared.styleNames ?: current.styleEntries().map { it.basename }
+                val replacing = prepared.replacing
                 val edit = StructuralEditor.addBackgrounds(
-                    source = current.currentContainer,
+                    source = replacing?.edit?.container ?: current.currentContainer,
                     entryBasenames = targets,
                     width = prepared.width,
                     height = prepared.height,
                     argb = pixels,
                 )
-                val origins = edit.changedStyles.fold(current.importOrigins) { saved, variant ->
+                val start = replacing?.let { current.importOrigins?.renumber(it.variant, it.mapping) } ?: current.importOrigins
+                val origins = edit.changedStyles.fold(start) { saved, variant ->
                     saved?.renumber(variant) { it + 1 }
                 }
-                commit(
-                    current,
-                    edit.container,
-                    EditAuditSummary(
-                        edit.changedPayloadBytes,
-                        edit.changedStyles,
-                        operation = if (targets == listOf(AOD_ENTRY_NAME)) {
-                            "Added a full-face background to the always-on display"
-                        } else if (targets.size == current.styleEntries().size) {
-                            "Added a full-face background"
-                        } else {
-                            "Added a full-face background to ${targets.size} of " +
-                                "${current.styleEntries().size} styles, the rest left on " +
-                                "black to stay under the watch's size ceiling"
-                        },
-                    ),
-                    importOrigins = origins,
-                    lineage = current.withAddedBackgrounds(edit.changedStyles),
+                val audit = EditAuditSummary(
+                    edit.changedPayloadBytes,
+                    edit.changedStyles,
+                    operation = if (targets == listOf(AOD_ENTRY_NAME)) {
+                        "Added a full-face background to the always-on display"
+                    } else if (scoped && targets.size == 1) {
+                        "Added a full-face background to ${targets.single()} alone"
+                    } else if (targets.size == current.styleEntries().size) {
+                        "Added a full-face background"
+                    } else {
+                        "Added a full-face background to ${targets.size} of " +
+                            "${current.styleEntries().size} styles, the rest left on " +
+                            "black to stay under the watch's size ceiling"
+                    },
                 )
+                if (replacing == null) {
+                    commit(current, edit.container, audit, importOrigins = origins,
+                        lineage = current.withAddedBackgrounds(edit.changedStyles), kind = EditKind.BACKGROUND)
+                } else {
+                    commit(
+                        current,
+                        edit.container,
+                        replacing.before(audit),
+                        importOrigins = origins,
+                        lineage = current.withAddedBackgrounds(edit.changedStyles,
+                            current.identities().remap(replacing.variant, replacing.mapping)),
+                        kind = EditKind.BACKGROUND,
+                    )
+                }
             }
         }
         runCatching { setImageFit(placement.fit) }
         return snapshot
+    }
+
+    override suspend fun readAnimation(imageUri: String, clip: VideoClip?): AnimationSource {
+        if (clip != null || contentResolver.getType(Uri.parse(imageUri))?.startsWith("video/") == true) {
+            return readVideo(imageUri, clip)
+        }
+        val bytes = withContext(Dispatchers.IO) { readPicked(imageUri, MAX_GIF_BYTES, "GIF") }
+        val gif = withContext(Dispatchers.Default) {
+            try {
+                GifDecoder.decode(bytes)
+            } catch (error: GifFormatException) {
+                throw WatchFaceException(error.message ?: "This GIF could not be read.", "gif: ${error.message}", error)
+            }
+        }
+        return AnimationSource(imageUri, gif.width, gif.height,
+            gif.frames.map { PreviewFrame(gif.width, gif.height, it.argb) }, gif.frames.map { it.delayMs })
+    }
+
+    override fun releaseVideoFrames(keep: AnimationSource?) {
+        val file = (keep?.frames as? CachedVideoFrames)?.file
+        housekeeping.launch { videoFrameFiles.releaseExcept(file) }
+    }
+
+    override suspend fun probeVideo(imageUri: String): VideoProbe? {
+        if (contentResolver.getType(Uri.parse(imageUri))?.startsWith("video/") != true) return null
+        val panel = selectedPanel()
+        return withContext(Dispatchers.IO) {
+            val video = videoSource.probe(imageUri)
+            val (width, height) = VideoClip.frameSize(video.width, video.height,
+                panel.width.coerceAtLeast(1), panel.height.coerceAtLeast(1))
+            VideoProbe(video.durationMs, width, height, VideoClip.maxLengthMs(width, height))
+        }
+    }
+
+    private suspend fun selectedPanel() = mutex.withLock {
+        val current = requireSession()
+        FaceRecordParser.panelSize(current.currentContainer.entryByBasename(
+            current.selectedVariantName ?: current.styleEntries().first().basename))
+    }
+
+    /**
+     * A video's [requested] clip, or its first seconds, at the size that covers the selected
+     * variant's panel: ten frames a second, each shown 100 ms, from then on a GIF's frames.
+     */
+    private suspend fun readVideo(imageUri: String, requested: VideoClip?): AnimationSource {
+        val panel = selectedPanel()
+        return withContext(Dispatchers.IO) {
+            val video = videoSource.probe(imageUri)
+            val (width, height) = VideoClip.frameSize(video.width, video.height,
+                panel.width.coerceAtLeast(1), panel.height.coerceAtLeast(1))
+            val longest = VideoClip.maxLengthMs(width, height)
+            val clip = requested?.takeIf { it.durationMs == video.durationMs }
+                ?.let { it.copy(lengthMs = minOf(it.lengthMs, longest), maxLengthMs = longest) }
+                ?: VideoClip.opening(video.durationMs, longest)
+            val file = videoFrameFiles.next()
+            var read = false
+            val frames = try {
+                videoSource.frames(imageUri, video, clip, width, height, file).also { read = true }
+            } finally {
+                videoFrameFiles.finished(file, read)
+            }
+            AnimationSource(imageUri, width, height, frames, List(frames.size) { VideoClip.FRAME_MS }, clip)
+        }
+    }
+
+    /** What [addMovingBackground] checked under the lock, for the commit to check again. */
+    private class PreparedMovingBackground(
+        val session: Session,
+        val container: Fit3Container,
+        val variant: String,
+        val width: Int,
+        val height: Int,
+        val plan: AnimationPlan,
+        /** The moving background this one replaces. */
+        val replacing: AnimationDeletion?,
+        /** The panel rectangle the frames cover, and are stored at. */
+        val bounds: PixelBounds,
+    )
+
+    /**
+     * Records deleted one after another in one edit — a variant's moving background, then still
+     * backgrounds — and where each index from before them lands, for the lineage and the import
+     * table.
+     */
+    private class Deletions {
+        /** Per variant, each deleted index in the numbering the deletions before it left. */
+        private val records = linkedMapOf<String, MutableList<Int>>()
+        var payloadBytes = 0
+            private set
+
+        val styles: List<String> get() = records.keys.toList()
+
+        fun isEmpty() = records.isEmpty()
+
+        fun add(deletion: AnimationDeletion) = add(deletion.variant, deletion.deleted, deletion.edit)
+
+        fun add(variant: String, deletion: BackgroundDeletion) = add(variant, deletion.globalIndex, deletion.edit)
+
+        private fun add(variant: String, globalIndex: Int, edit: StructuralEdit) {
+            records.getOrPut(variant) { mutableListOf() } += globalIndex
+            payloadBytes += edit.changedPayloadBytes
+        }
+
+        /** Where [variant]'s record at an index from before these lands; null for one deleted. */
+        fun mapping(variant: String): (Int) -> Int? = { index ->
+            records[variant].orEmpty().fold<Int, Int?>(index) { at, deleted ->
+                at?.let { if (it == deleted) null else if (it > deleted) it - 1 else it }
+            }
+        }
+
+        fun remap(lineage: SessionLineage): SessionLineage =
+            records.keys.fold(lineage) { next, variant -> next.remap(variant, mapping(variant)) }
+
+        fun renumber(origins: WidgetImportOrigins?): WidgetImportOrigins? =
+            records.keys.fold(origins) { next, variant -> next?.renumber(variant, mapping(variant)) }
+    }
+
+    /** An added animation deleted from [variant] but not yet committed; see [animationDeletion]. */
+    private class AnimationDeletion(
+        val variant: String,
+        val edit: StructuralEdit,
+        val deleted: Int,
+    ) {
+        /** Where each of the variant's records lands once it is gone; null for itself. */
+        val mapping: (Int) -> Int? = { index -> if (index == deleted) null else if (index > deleted) index - 1 else index }
+
+        /** [audit] of the edit that follows, saying the deletion too. */
+        fun before(audit: EditAuditSummary) = audit.copy(
+            changedPayloadBytes = audit.changedPayloadBytes + edit.changedPayloadBytes,
+            changedStyles = (edit.changedStyles + audit.changedStyles).distinct(),
+            operation = "${audit.operation}, replacing $variant's moving background",
+            sizeDelta = audit.sizeDelta + edit.sizeDelta,
+        )
+    }
+
+    /**
+     * See [WatchFaceRepository.addMovingBackground]. Shaped like [addBackground]: checked
+     * under the lock, every frame placed off it, committed under it again only if nothing
+     * changed in between. Its record sits above the variant's still background layers, so
+     * every later index moves up one, in the lineage and the import table; the record itself is an added widget with no original, as an added
+     * still background is, so the checkpoint needs nothing new.
+     */
+    override suspend fun addMovingBackground(
+        source: AnimationSource,
+        placement: ImagePlacement,
+        frameStep: Int,
+    ): EditorSnapshot {
+        val prepared = withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                val variant = current.selectedVariantName ?: current.styleEntries().first().basename
+                val entry = current.currentContainer.entryByBasename(variant)
+                val panel = FaceRecordParser.panelSize(entry)
+                if (panel.width <= 0 || panel.height <= 0) {
+                    throw WatchFaceException(
+                        "This face declares no panel geometry, so there is no size to add a background at.",
+                    )
+                }
+                // Frames are stored at the rectangle the picture covers; the rest stays black.
+                val bounds = movingBackgroundBounds(source.width, source.height, panel.width, panel.height, placement)
+                    ?: throw WatchFaceException("The picture is placed entirely off the face. Move it back onto the face.")
+                // One a variant: a second takes the first one's place, and its frames' room.
+                val replacing = movingBackgroundDeletion(current)
+                val plan = source.plan(frameStep)
+                val size = current.currentContainer.fileSize
+                // So is the still background's, which goes with it.
+                val base = replacing?.edit?.container ?: current.currentContainer
+                val proposed = base.fileSize - current.stillBackgroundBytes(base, variant) +
+                    animationAddedBytes(plan.frames.size, plan.table.size, bounds.width, bounds.height)
+                if (proposed > WATCH_CONTAINER_BYTE_CEILING) throw Fit3CapacityException(size, proposed)
+                PreparedMovingBackground(current, current.currentContainer, variant, panel.width, panel.height, plan,
+                    replacing, bounds)
+            }
+        }
+        val frames = withContext(Dispatchers.Default) {
+            prepared.plan.frames.map { index ->
+                currentCoroutineContext().ensureActive()
+                imageSource.decode(source.frames[index], prepared.width, prepared.height, placement)
+                    .let { pixels -> placement.tint?.let { tinted(pixels, it) } ?: pixels }
+                    .let { pixels -> cropped(pixels, prepared.width, prepared.bounds) }
+            }
+        }
+        return withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                if (current !== prepared.session || current.currentContainer !== prepared.container) {
+                    throw WatchFaceException("The project changed while the GIF was being prepared. Try adding it again.")
+                }
+                val variant = prepared.variant
+                val plan = prepared.plan
+                val replacing = prepared.replacing
+                // The moving background it replaces goes, and the still one with its Static, as
+                // Remove background takes it; one that cannot go that way is painted black.
+                val deletions = Deletions()
+                replacing?.let(deletions::add)
+                val base = replacing?.edit?.container ?: current.currentContainer
+                val still = current.stillBackgroundDeletion(base, variant)
+                still?.let { deletions.add(variant, it) }
+                val result = MovingBackgroundEditor.insert(
+                    still?.edit?.container ?: withStillBackgroundBlack(base, variant),
+                    variant, frames, plan.table, plan.periodMs, prepared.bounds)
+                val at = result.globalIndex
+                val shift = { index: Int -> if (index >= at) index + 1 else index }
+                // Each record's old index to its new one: past the deleted backgrounds, if any, then the insert.
+                val moved: (Int) -> Int? = { index -> deletions.mapping(variant)(index)?.let(shift) }
+                val audit = result.edit.audit("Added a moving background to $variant: ${plan.kept} frames, ${plan.frames.size} stored, " +
+                    "of ${prepared.bounds.width}x${prepared.bounds.height} at ${prepared.bounds.x},${prepared.bounds.y}, " +
+                    "${plan.table.size} steps of ${plan.periodMs} ms" +
+                    (if (replacing != null) ", replacing $variant's moving background" else "") +
+                    (if (still != null) ", its still background deleted" else ""))
+                commit(
+                    current,
+                    result.edit.container,
+                    audit.copy(
+                        changedPayloadBytes = audit.changedPayloadBytes + deletions.payloadBytes,
+                        sizeDelta = result.edit.container.fileSize - current.currentContainer.fileSize,
+                    ),
+                    variant,
+                    importOrigins = current.importOrigins?.renumber(variant, moved),
+                    lineage = current.identities().remap(variant, moved).append(variant, at, NativeWidgetOrigin()),
+                    kind = EditKind.MOVING_BACKGROUND,
+                )
+            }
+        }
+    }
+
+    override suspend fun removeMovingBackground(): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val current = requireSession()
+            val variant = current.selectedVariantName ?: current.styleEntries().first().basename
+            val moving = MovingBackgroundEditor.read(current.currentContainer.entryByBasename(variant))
+                ?: throw WatchFaceException("This style has no moving background to remove.")
+            deleteAddedAnimation(current, variant, moving.globalIndex, group = null)
+        }
+    }
+
+    /** What [addMovingPicture] checked under the lock, for the commit to check again. */
+    private class PreparedMovingPicture(
+        val session: Session,
+        val container: Fit3Container,
+        val variant: String,
+        val plan: AnimationPlan,
+    )
+
+    /**
+     * See [WatchFaceRepository.addMovingPicture]. Shaped like [addMovingBackground]: checked
+     * under the lock, every frame scaled off it, committed under it again only if nothing
+     * changed in between. Its record goes on top, after every other, so nothing is renumbered;
+     * it is an added widget with no original, as a moving background is, so the checkpoint
+     * needs nothing new.
+     */
+    override suspend fun addMovingPicture(source: AnimationSource, frameStep: Int, width: Int, height: Int,
+        x: Int, y: Int, tint: Int?): EditorSnapshot {
+        val prepared = withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                val variant = current.selectedVariantName ?: current.styleEntries().first().basename
+                val panel = FaceRecordParser.panelSize(current.currentContainer.entryByBasename(variant))
+                if (width !in 1..panel.width || height !in 1..panel.height || (width >= panel.width && height >= panel.height)) {
+                    throw WatchFaceException("A moving picture must fit on the face without covering all of it.")
+                }
+                val plan = source.plan(frameStep)
+                val size = current.currentContainer.fileSize
+                val proposed = size + animationAddedBytes(plan.frames.size, plan.table.size, width, height)
+                if (proposed > WATCH_CONTAINER_BYTE_CEILING) throw Fit3CapacityException(size, proposed)
+                PreparedMovingPicture(current, current.currentContainer, variant, plan)
+            }
+        }
+        val frames = withContext(Dispatchers.Default) {
+            prepared.plan.frames.map { index ->
+                currentCoroutineContext().ensureActive()
+                imageSource.scaled(source.frames[index], width, height).let { pixels -> tint?.let { tinted(pixels, it) } ?: pixels }
+            }
+        }
+        return withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                if (current !== prepared.session || current.currentContainer !== prepared.container) {
+                    throw WatchFaceException("The project changed while the moving picture was being prepared. Try adding it again.")
+                }
+                val variant = prepared.variant
+                val plan = prepared.plan
+                val result = MovingPicture.insert(current.currentContainer, variant, width, height, frames,
+                    plan.table, plan.periodMs, x, y)
+                commit(
+                    current,
+                    result.edit.container,
+                    result.edit.audit("Added a moving picture to $variant: ${width}x$height, ${plan.kept} frames, ${plan.frames.size} stored, " +
+                        "${plan.table.size} steps of ${plan.periodMs} ms"),
+                    variant,
+                    lineage = current.identities().append(variant, result.globalIndex, NativeWidgetOrigin()),
+                    kind = EditKind.MOVING_PICTURE,
+                )
+            }
+        }
+    }
+
+    /**
+     * Deletes [variant]'s animation at [globalIndex] — a moving background or picture this app
+     * added — with every frame only it drew, as every widget is deleted. Frames a duplicate
+     * still draws stay.
+     */
+    private suspend fun deleteAddedAnimation(current: Session, variant: String, globalIndex: Int, group: Long?): EditorSnapshot {
+        val deletion = animationDeletion(current, variant, globalIndex)
+        val entry = current.currentContainer.entryByBasename(variant)
+        return commit(
+            current,
+            deletion.edit.container,
+            deletion.edit.audit("${if (MovingBackgroundEditor.read(entry)?.globalIndex == globalIndex) "Moving background" else "Moving picture"} " +
+                "deleted with its frames from $variant"),
+            variant,
+            importOrigins = current.importOrigins?.renumber(variant, deletion.mapping),
+            lineage = current.identities().remap(variant, deletion.mapping),
+            kind = EditKind.REMOVE,
+            group = group,
+        )
+    }
+
+    /**
+     * [variant]'s animation at [globalIndex] deleted with its frames, as [deleteAddedAnimation]
+     * deletes it, but not committed: on its own, or as the first half of an edit that puts a new
+     * background in its place.
+     */
+    private fun animationDeletion(current: Session, variant: String, globalIndex: Int): AnimationDeletion =
+        current.animationDeletion(variant, globalIndex)
+
+    /** See [Session.movingBackgroundDeletion]. */
+    private fun movingBackgroundDeletion(current: Session): AnimationDeletion? = current.movingBackgroundDeletion()
+
+    /** A picked file's bytes, refusing to read past [limit] whatever the provider says its length is. */
+    private fun readPicked(uri: String, limit: Int, what: String): ByteArray {
+        val stream = try {
+            contentResolver.openInputStream(Uri.parse(uri))
+        } catch (error: Exception) {
+            throw WatchFaceException("That $what could not be opened.", "picked $what: ${error.message}", error)
+        } ?: throw WatchFaceException("That $what could not be opened.", "picked $what: no input stream")
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        stream.use { input ->
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (output.size() + count > limit) {
+                    throw WatchFaceException("That $what is larger than ${limit / (1024 * 1024)} MB, too large to use.")
+                }
+                output.write(buffer, 0, count)
+            }
+        }
+        return output.toByteArray()
     }
 
     override suspend fun tintBackground(
@@ -1240,6 +1891,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     edit.changedStyles,
                     operation = "Background tint",
                 ),
+                kind = EditKind.BACKGROUND,
             )
         }
     }
@@ -1272,6 +1924,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Pair widget position/color",
                 ),
                 styleName,
+                kind = EditKind.TEXT,
             )
         }
     }
@@ -1285,6 +1938,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         y: Int,
         colorArgb: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1309,6 +1963,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Widget colour changed " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
+                kind = EditKind.COLOUR,
+                group = group,
             )
         }
     }
@@ -1321,6 +1977,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1355,6 +2012,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Widget colour reset " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
+                kind = EditKind.COLOUR,
+                group = group,
             )
         }
     }
@@ -1367,6 +2026,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1391,6 +2051,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     operation = "Widget moved " + editScope(styleName, applyToAllStyles),
                 ),
                 styleName,
+                kind = EditKind.MOVE, group = group,
             )
         }
     }
@@ -1420,6 +2081,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     current,
                     edit.container,
                     edit.audit("Background resize + pointer relocation"),
+                    kind = EditKind.BACKGROUND,
                 )
             }
         }
@@ -1433,7 +2095,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             commit(current, result.edit.container, result.edit.audit("Widget layers rearranged in $styleName"), styleName,
                 importOrigins = current.importOrigins?.renumber(styleName, result.indices::get),
                 lineage = current.identities().remap(styleName, result.indices::get),
-                indexMappings = mapOf(styleName to result.indices))
+                kind = EditKind.ARRANGE)
         }
     }
 
@@ -1455,7 +2117,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     sequenceId, x, y, angleTenths, targetIndices, pristine = current.originalContainer,
                     pristineWidgets = current.pristineWidgets(targets, styleName, globalIndex))
                 commit(current, edit.container, EditAuditSummary(edit.changedPayloadBytes,
-                    edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName)
+                    edit.changedStyles, operation = "Widget rotated " + editScope(styleName, applyToAllStyles)), styleName, kind = EditKind.ROTATE)
             }
         }
 
@@ -1492,7 +2154,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
         return commit(current, edit.container,
             edit.audit("Widget artwork turned " + editScope(styleName, applyToAllStyles)), styleName,
-            lineage = lineage)
+            lineage = lineage, kind = EditKind.ROTATE)
     }
 
     override suspend fun resizeWidget(
@@ -1539,6 +2201,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 edit.container,
                 edit.audit("Widget resized " + editScope(styleName, applyToAllStyles)),
                 styleName,
+                kind = EditKind.RESIZE,
             )
         }
     }
@@ -1552,53 +2215,35 @@ class WatchFaceRepositoryImpl @Inject constructor(
         y: Int,
         requireFinal: Boolean,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
-            val targetIndices = current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
-            val styleNames = targetIndices.keys.toList()
-            val guide = FaceRecordParser.widgetGuides(
-                current.currentContainer.entryByBasename(styleName),
-            ).firstOrNull { it.globalIndex == globalIndex }
-            // A widget imported from another face was never part of this one, and it can be
-            // imported again — so it is deleted, artwork and all, rather than parked under
-            // Removed with every byte it brought in still in the container, drawn by
-            // nothing. Stock widgets are unchanged: they stay restorable.
+            // Every widget is deleted with whatever artwork nothing else draws, the face's
+            // own included: Undo, Reset and importing it again from this face bring one back.
+            // Keeping it for a Restore list held bytes a moving picture needs room for.
             val imported = current.importOrigins?.find(styleName, globalIndex)
-            // A copy of a stock widget is deleted too, not parked under Removed: its original
-            // is still there (or under Removed itself) to duplicate again, and a list of
-            // restorable copies is what a few accidental Duplicate taps used to leave behind.
-            // Its record goes; its artwork stays, because the widget it copied draws it.
-            val duplicate = imported == null &&
-                current.identities().widgets[styleName]?.get(globalIndex)?.duplicate == true
+            val identity = current.identities().widgets[styleName]?.get(globalIndex)
+            // A moving background or picture this app added goes through the same deletion
+            // the Background page uses, which also keeps its frame bookkeeping.
+            if (imported == null && widgetType == WIDGET_ANIMATION && identity?.originalIndex == null) {
+                return@withLock deleteAddedAnimation(current, styleName, globalIndex, group)
+            }
+            // Imports are variant-local: one is never matched into a sibling style.
+            val targetIndices = if (imported != null) mapOf(styleName to globalIndex)
+                else current.widgetTargetIndices(styleName, applyToAllStyles, globalIndex)
             val edit = try {
-                if (imported != null) {
-                    StructuralEditor.deleteWidget(
-                        source = current.currentContainer,
-                        entryBasename = styleName,
-                        globalIndex = globalIndex,
-                        widgetType = widgetType,
-                        sequenceId = sequenceId,
-                        x = x,
-                        y = y,
-                        shippedImageCount = FaceRecordParser.scanImages(
-                            current.originalEntry(styleName),
-                        ).size,
-                        retained = current.removedWidgets.mapNotNull { it.recordsByVariant[styleName] },
-                    )
-                } else {
-                    StructuralEditor.removeWidget(
-                        current.currentContainer,
-                        styleNames,
-                        globalIndex,
-                        widgetType,
-                        sequenceId,
-                        x,
-                        y,
-                        requireFinal,
-                        targetIndices = targetIndices,
-                    )
-                }
+                StructuralEditor.deleteWidget(
+                    source = current.currentContainer,
+                    entryBasenames = targetIndices.keys.toList(),
+                    globalIndex = globalIndex,
+                    widgetType = widgetType,
+                    sequenceId = sequenceId,
+                    x = x,
+                    y = y,
+                    requireFinal = requireFinal,
+                    targetIndices = targetIndices,
+                )
             } catch (error: Fit3WidgetIsAnchorException) {
                 // A refusal the reader can trigger by tapping a button they can see, so
                 // it gets a sentence rather than the format layer's own wording.
@@ -1615,121 +2260,32 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     error,
                 )
             }
-            val identities = current.identities()
             val cuts = edit.removedRecords.mapValues { (_, raw) ->
                 (raw[0x0E].toInt() and 255) or ((raw[0x0F].toInt() and 255) shl 8)
             }
-            val survivingIdentities = cuts.entries.fold(identities) { state, (variant, cut) ->
+            val survivingIdentities = cuts.entries.fold(current.identities()) { state, (variant, cut) ->
                 state.remap(variant) { if (it == cut) null else if (it > cut) it - 1 else it }
             }
-            val renumbered = edit.removedRecords.entries.fold(current.importOrigins) { origins, (variant, raw) ->
-                val cut = (raw[0x0E].toInt() and 255) or ((raw[0x0F].toInt() and 255) shl 8)
+            val renumbered = cuts.entries.fold(current.importOrigins) { origins, (variant, cut) ->
                 origins?.renumber(variant) { if (it == cut) null else if (it > cut) it - 1 else it }
             }
-            if (imported != null) {
-                return@withLock commit(
-                    current,
-                    edit.container,
-                    edit.audit("Imported widget deleted with its artwork from $styleName"),
-                    styleName,
-                    importOrigins = renumbered?.pruned(
-                        current.removedWidgets.mapNotNull { it.importOriginId }.toSet(),
-                    ),
-                    droppedImages = edit.droppedImages,
-                    lineage = survivingIdentities,
-                )
+            val what = when {
+                imported?.kind == AddedWidgetKind.PICTURE -> "Picture"
+                imported != null -> "Imported widget"
+                identity?.duplicate == true -> "Duplicate widget"
+                else -> "Widget"
             }
-            if (duplicate) {
-                return@withLock commit(
-                    current,
-                    edit.container,
-                    edit.audit("Duplicate widget deleted " + editScope(styleName, applyToAllStyles)),
-                    styleName,
-                    importOrigins = renumbered,
-                    lineage = survivingIdentities,
-                )
-            }
-            val removed = RemovedWidget(
-                id = removedWidgetIds.incrementAndGet(),
-                globalIndex = globalIndex,
-                widgetType = widgetType,
-                sequenceId = sequenceId,
-                x = x,
-                y = y,
-                width = guide?.width ?: 0,
-                height = guide?.height ?: 0,
-                // Copied off the guide because it is about to stop existing: the record is
-                // leaving the container, so nothing can look its reading up again.
-                sourceLabel = guide?.sourceLabel,
-                followsReading = guide?.followsReading ?: false,
-                recordsByVariant = edit.removedRecords,
-                nativeIdentityRecorded = true,
-                nativeSourceIndices = cuts.mapNotNull { (variant, cut) ->
-                    identities.widgets[variant]?.get(cut)?.originalIndex?.let { variant to it }
-                }.toMap(),
-                duplicateSourceVariants = cuts.filter { (variant, cut) -> identities.widgets[variant]?.get(cut)?.duplicate == true }.keys,
-                importOriginId = current.importOrigins?.find(styleName, globalIndex)?.id,
+            commit(
+                current,
+                edit.container,
+                edit.audit("$what deleted with its artwork " + editScope(styleName, applyToAllStyles && imported == null)),
+                styleName,
+                importOrigins = renumbered?.pruned(),
+                lineage = survivingIdentities,
+                kind = EditKind.REMOVE, group = group,
             )
-            val previousRemoved = current.removedWidgets.toList()
-            current.removedWidgets += removed
-            try {
-                commit(
-                    current,
-                    edit.container,
-                    edit.audit("Widget removed " + editScope(styleName, applyToAllStyles)),
-                    styleName,
-                    importOrigins = renumbered,
-                    lineage = survivingIdentities,
-                )
-            } catch (error: Throwable) {
-                current.removedWidgets.clear()
-                current.removedWidgets += previousRemoved
-                throw error
-            }
         }
     }
-
-    override suspend fun restoreWidget(removedId: Long): EditorSnapshot =
-        withContext(Dispatchers.Default) {
-            mutex.withLock {
-                val current = requireSession()
-                val removed = current.removedWidgets.firstOrNull { it.id == removedId }
-                    ?: throw WatchFaceException("That removed widget is no longer available.")
-                val edit = StructuralEditor.appendWidget(
-                    current.currentContainer,
-                    removed.recordsByVariant.keys.toList(),
-                    removed.recordsByVariant,
-                )
-                val previousRemoved = current.removedWidgets.toList()
-                current.removedWidgets.remove(removed)
-                try {
-                    commit(
-                        current,
-                        edit.container,
-                        // No index in the sentence: `appendWidget` puts the record at the
-                        // end, so the one it carried when it was cut is not where it lands
-                        // and naming it here would be pointing at another widget.
-                        edit.audit("Widget restored at the end of the table"),
-                        importOrigins = removed.importOriginId?.let { id ->
-                            current.importOrigins?.append(id,
-                                FaceRecordParser.scanWidgets(edit.container.entryByBasename(removed.recordsByVariant.keys.single())).last().globalIndex)
-                        } ?: current.importOrigins,
-                        lineage = removed.recordsByVariant.keys.fold(current.identities()) { state, variant ->
-                            val index = FaceRecordParser.scanWidgets(edit.container.entryByBasename(variant)).last().globalIndex
-                            if (removed.importOriginId != null) state else state.append(variant, index,
-                                if (removed.nativeIdentityRecorded) NativeWidgetOrigin(removed.nativeSourceIndices[variant],
-                                    variant in removed.duplicateSourceVariants)
-                                else SessionLineage.capture(current.originalContainer, edit.container, current.importOrigins)
-                                    .widgets[variant]?.get(index) ?: NativeWidgetOrigin())
-                        },
-                    )
-                } catch (error: Throwable) {
-                    current.removedWidgets.clear()
-                    current.removedWidgets += previousRemoved
-                    throw error
-                }
-            }
-        }
 
     override suspend fun refreshThumbnail(): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
@@ -1764,6 +2320,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 return@withLock current.snapshot()
             }
             val previousThumbnail = current.thumbnailContainer
+            val before = current.currentState()
             current.thumbnailContainer = edit.container
             try {
                 commit(
@@ -1775,6 +2332,8 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         operation = "Face-picker thumbnail re-rendered for " +
                             snapshot.activeStyleName,
                     ),
+                    kind = EditKind.THUMBNAIL,
+                    before = before,
                 )
             } catch (error: Throwable) {
                 current.thumbnailContainer = previousThumbnail
@@ -1791,6 +2350,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
         x: Int,
         y: Int,
         applyToAllStyles: Boolean,
+        group: Long?,
     ): EditorSnapshot = withContext(Dispatchers.Default) {
         mutex.withLock {
             val current = requireSession()
@@ -1843,6 +2403,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         FaceRecordParser.scanWidgets(edit.container.entryByBasename(variant)).last().globalIndex,
                         origin.copy(duplicate = true))
                 },
+                kind = EditKind.DUPLICATE, group = group,
             )
         }
     }
@@ -1852,7 +2413,6 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val current = requireSession()
             val previousContainer = current.currentContainer
             val previousAudit = current.audit
-            val previousRemoved = current.removedWidgets.toList()
             val previousThumbnail = current.thumbnailContainer
             current.currentContainer = current.originalContainer
             val previousOrigins = current.importOrigins
@@ -1864,19 +2424,20 @@ class WatchFaceRepositoryImpl @Inject constructor(
             current.lineage = null
             current.importOrigins = null
             current.audit = null
-            current.removedWidgets.clear()
             current.thumbnailContainer = null
             try {
                 val snapshot = current.snapshot()
+                val previousFile = current.currentFile
                 persistEdited(current, keepEdited = false)
+                current.currentFile = null
+                discardHistory(current)
+                retire(current, previousFile)
                 current.recordHistory("reset to the original container")
                 diagnostics.info(TAG, "Edits reset")
-                snapshot
+                current.labelled(snapshot)
             } catch (error: Throwable) {
                 current.currentContainer = previousContainer
                 current.audit = previousAudit
-                current.removedWidgets.clear()
-                current.removedWidgets += previousRemoved
                 current.thumbnailContainer = previousThumbnail
                 current.importOrigins = previousOrigins
                 current.lineage = previousLineage
@@ -1910,7 +2471,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                         "current=${current.currentContainer.fileSize} " +
                         "ceiling=$WATCH_CONTAINER_BYTE_CEILING",
                 )
-                add("removed=${current.removedWidgets.size} thumbnail=${current.thumbnailRefreshed}")
+                add("thumbnail=${current.thumbnailRefreshed}")
                 add(
                     "validation=" + report.issues
                         .takeIf { it.isNotEmpty() }
@@ -1973,7 +2534,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 mapping[origin.variant]?.let { origin.copy(variant = it) }
             }).takeIf { it.widgets.isNotEmpty() } }
             commit(current, edit.container, edit.audit("Unused styles deleted"), importOrigins = origins,
-                lineage = current.identities().retainVariants(mapping), variantMappings = mapping)
+                lineage = current.identities().retainVariants(mapping), variantMappings = mapping, kind = EditKind.STYLES)
         }
     }
 
@@ -1983,11 +2544,14 @@ class WatchFaceRepositoryImpl @Inject constructor(
         audit: EditAuditSummary,
         styleName: String? = null,
         importOrigins: WidgetImportOrigins? = current.importOrigins,
-        /** Image records the edit deleted, per entry — see [StructuralEdit.droppedImages]. */
-        droppedImages: Map<String, Set<Int>> = emptyMap(),
         lineage: SessionLineage = current.identities(),
-        indexMappings: Map<String, Map<Int, Int>> = emptyMap(),
         variantMappings: Map<String, String>? = null,
+        /** What the undo step is called. */
+        kind: EditKind,
+        /** Commits sharing a group in a row are one undo step. */
+        group: Long? = null,
+        /** The state undo returns to, when the caller changed the session before committing. */
+        before: HistoryState = current.currentState(),
     ): EditorSnapshot {
         val previousContainer = current.currentContainer
         val previousAudit = current.audit
@@ -1995,8 +2559,6 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val previousVariant = current.selectedVariantName
         val previousOrigins = current.importOrigins
         val previousLineage = current.lineage
-        val previousRemoved = current.removedWidgets.toList()
-        val identifiedRemoved = previousRemoved.map(current::identifyLegacyRemoval)
         val candidateLineage = lineage.withResources(current.originalContainer, container)
             .withoutStaleTurns(importOrigins)
         current.currentContainer = container
@@ -2006,28 +2568,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
         return try {
             current.lineage!!.validate(current.originalContainer, container, importOrigins)
             val mapping = variantMappings ?: FaceResources.variantEntries(previousContainer).associate { it.basename to it.basename }
-            val relocated = identifiedRemoved.mapNotNull { removed ->
-                val records = removed.recordsByVariant.mapNotNull record@{ (variant, raw) ->
-                    val next = mapping[variant] ?: return@record null
-                    val relocated = StructuralEditor.relocateSavedWidget(previousContainer.entryByBasename(variant),
-                        container.entryByBasename(next), raw, droppedImages[variant].orEmpty())
-                    next to StructuralEditor.remapSavedAlignmentTargets(container.entryByBasename(next), relocated,
-                        indexMappings[variant].orEmpty())
-                }.toMap()
-                if (records.isEmpty()) null else removed.copy(recordsByVariant = records,
-                    nativeSourceIndices = removed.nativeSourceIndices.mapNotNull { (old, index) -> mapping[old]?.let { it to index } }.toMap(),
-                    duplicateSourceVariants = removed.duplicateSourceVariants.mapNotNull(mapping::get).toSet())
-            }
             if (variantMappings != null) {
                 val styles = FaceResources.selectableStyles(previousContainer).map { it.basename }
                 current.activeStyleName = survivingActiveStyle(styles, mapping,
                     previousActiveStyle ?: styles.first())
                 current.selectedVariantName = mapping[previousVariant] ?: current.activeStyleName
             }
-            current.removedWidgets.clear()
-            current.removedWidgets += relocated
             val snapshot = current.snapshot(styleName)
-            persistEdited(current, keepEdited = true)
+            current.currentFile = persistEdited(current, keepEdited = true)
+            recordStep(current, before, kind, group)
             // Recorded only once the edit has actually stuck. The worst bugs here leave a
             // container that validates, transfers and is accepted while drawing wrong, so
             // nothing throws and this ordered list is the only account of what was done.
@@ -2042,7 +2591,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 "styles=${audit.changedStyles.joinToString("/")} " +
                     "delta=${audit.sizeDelta} size=${container.fileSize}",
             )
-            snapshot
+            current.labelled(snapshot)
         } catch (error: Throwable) {
             current.currentContainer = previousContainer
             current.audit = previousAudit
@@ -2050,16 +2599,18 @@ class WatchFaceRepositoryImpl @Inject constructor(
             current.selectedVariantName = previousVariant
             current.importOrigins = previousOrigins
             current.lineage = previousLineage
-            current.removedWidgets.clear()
-            current.removedWidgets += previousRemoved
             throw error
         }
     }
 
-    /** Immutable BIN + identities + removals, followed by the single Room pointer swap. */
-    private suspend fun persistEdited(current: Session, keepEdited: Boolean) {
-        if (current.projectId <= 0) return
-        val project = projectDao.findById(current.projectId) ?: return
+    /**
+     * Immutable BIN + identities, followed by the single Room pointer swap.
+     * Returns the file the row now names, or null for the pristine package. The file it
+     * replaces is left alone: an undo step may still need it, and [retire] decides.
+     */
+    private suspend fun persistEdited(current: Session, keepEdited: Boolean): File? {
+        if (current.projectId <= 0) return null
+        val project = projectDao.findById(current.projectId) ?: return null
         val directory = projectDirectory(current.projectId)
         if (keepEdited) {
             // A new immutable file plus one Room pointer swap is the commit point. Neither
@@ -2069,51 +2620,256 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 Base64.getEncoder().encodeToString(current.currentContainer.toByteArray()))
             val bytes = json.encodeToString(stored).encodeToByteArray()
             require(bytes.size <= MAX_CHECKPOINT_BYTES) { "This project's saved edit data is too large." }
+            makeRoomForCheckpoint(current, directory, bytes.size)
             withContext(NonCancellable) {
                 try {
                     writeAtomically(checkpoint, bytes)
+                    syncPickerPreviews(current)
                     projectDao.insert(project.copy(editedBinPath = checkpoint.absolutePath,
                         selectedStyle = current.activeStyleName, updatedAtEpochMillis = System.currentTimeMillis()))
                 } catch (error: Throwable) {
                     checkpoint.delete()
                     throw error
                 }
-                project.editedBinPath?.let(::File)?.takeIf {
-                    it.parentFile == directory && isCheckpoint(it) && it != checkpoint
-                }?.let { runCatching { it.delete() } }
             }
-            return
+            return checkpoint
         }
         withContext(NonCancellable) {
+            syncPickerPreviews(current)
             projectDao.insert(project.copy(editedBinPath = null, selectedStyle = current.activeStyleName,
                 updatedAtEpochMillis = System.currentTimeMillis()))
             File(directory, "edited.bin").delete()
             File(directory, "session.json").delete()
-            project.editedBinPath?.let(::File)?.takeIf {
-                it.parentFile == directory && isCheckpoint(it)
-            }?.let { runCatching { it.delete() } }
+        }
+        return null
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Undo and redo
+    // ---------------------------------------------------------------------------------------
+
+    override suspend fun undo(): EditorSnapshot = step(back = true)
+
+    override suspend fun redo(): EditorSnapshot = step(back = false)
+
+    /**
+     * One step through the session's history. The checkpoints every commit already writes
+     * are the history: a step names the file its state lives in, and moving to it is the
+     * same pointer swap a commit makes. The state being left goes onto the other stack.
+     */
+    private suspend fun step(back: Boolean): EditorSnapshot = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val current = requireSession()
+            val from = if (back) current.undoSteps else current.redoSteps
+            val to = if (back) current.redoSteps else current.undoSteps
+            val step = from.removeLastOrNull() ?: return@withLock current.snapshot()
+            // The stacks move first so the snapshot names the next undo and redo; a failed
+            // restore puts them back.
+            val here = current.currentState()
+            val previousGroup = current.historyGroup
+            to.addLast(HistoryStep(here, step.kind, step.group))
+            current.historyGroup = null
+            val snapshot = try {
+                restore(current, step.state)
+            } catch (error: Throwable) {
+                to.removeLast()
+                from.addLast(step)
+                current.historyGroup = previousGroup
+                throw error
+            }
+            // Only the newest step on each side keeps its state in memory.
+            to.dropLast(1).lastOrNull()?.state?.memory = null
+            from.lastOrNull()?.state?.memory = null
+            current.recordHistory("${if (back) "undo" else "redo"} ${step.kind.name.lowercase()}")
+            diagnostics.info(TAG, if (back) "Undo" else "Redo", step.kind.name)
+            snapshot
         }
     }
+
+    /**
+     * Puts [state] back as the session and points the project row at its file. All or
+     * nothing: on any failure the session is what it was and the row is unchanged.
+     */
+    private suspend fun restore(current: Session, state: HistoryState): EditorSnapshot {
+        val previous = current.currentState()
+        try {
+            val memory = state.memory
+            val file = state.file
+            when {
+                memory != null -> current.apply(memory)
+                file == null -> current.apply(HistoryMemory(current.originalContainer, null, null,
+                    thumbnailRefreshed = false, audit = null))
+                isCheckpoint(file) -> {
+                    val stored = readCheckpoint(file)
+                    val bytes = Base64.getDecoder().decode(requireNotNull(stored.editedContainer))
+                    current.currentContainer = Fit3Container.parse(bytes)
+                    validateEdited(bytes, current, stored.importOrigins, stored.lineage)
+                    current.audit = null
+                    applyStoredState(stored, current)
+                }
+                else -> {
+                    // A pre-checkpoint project's `edited.bin`, with its session beside it.
+                    current.apply(HistoryMemory(Fit3Container.parse(file.readBytes()), null, null,
+                        thumbnailRefreshed = false, audit = null))
+                    restoreSessionState(projectDirectory(current.projectId), current)
+                }
+            }
+            current.activeStyleName = state.activeStyleName
+            current.selectedVariantName = state.selectedVariantName
+            // Rendered before the row moves: a state that cannot be shown is not swapped in.
+            val snapshot = current.snapshot()
+            if (current.projectId > 0) {
+                withContext(NonCancellable) {
+                    val project = requireNotNull(projectDao.findById(current.projectId)) {
+                        "This project no longer exists."
+                    }
+                    syncPickerPreviews(current)
+                    projectDao.insert(project.copy(editedBinPath = file?.absolutePath,
+                        selectedStyle = state.activeStyleName, updatedAtEpochMillis = System.currentTimeMillis()))
+                }
+            }
+            current.currentFile = file
+            return snapshot
+        } catch (error: Throwable) {
+            current.apply(requireNotNull(previous.memory))
+            current.activeStyleName = previous.activeStyleName
+            current.selectedVariantName = previous.selectedVariantName
+            throw error
+        }
+    }
+
+    /** Adds the state a commit replaced as a step, or folds it into the step its group began. */
+    private fun recordStep(current: Session, before: HistoryState, kind: EditKind, group: Long?) {
+        if (!current.historyEnabled || current.projectId <= 0) {
+            retire(current, before.file)
+            return
+        }
+        if (group != null && group == current.historyGroup && current.undoSteps.isNotEmpty()) {
+            // The same press or set action: the step already holds where it began, and the
+            // state in between is nobody's.
+            retire(current, before.file)
+        } else {
+            current.undoSteps.lastOrNull()?.state?.memory = null
+            current.undoSteps.addLast(HistoryStep(before, kind, group))
+        }
+        while (current.redoSteps.isNotEmpty()) retire(current, current.redoSteps.removeLast().state.file)
+        evict(current)
+        current.historyGroup = group
+    }
+
+    /** Drops the oldest steps beyond [HISTORY_MAX_STEPS] or [HISTORY_MAX_BYTES] of files. */
+    private fun evict(current: Session) {
+        fun bytes() = (current.undoSteps + current.redoSteps).sumOf { it.state.file?.takeIf(::isCheckpoint)?.length() ?: 0L }
+        while (current.undoSteps.isNotEmpty() &&
+            (current.undoSteps.size > HISTORY_MAX_STEPS || bytes() > HISTORY_MAX_BYTES)) {
+            retire(current, current.undoSteps.removeFirst().state.file)
+        }
+    }
+
+    private fun discardHistory(current: Session) {
+        (current.undoSteps + current.redoSteps).forEach { it.state.memory = null }
+        val files = (current.undoSteps + current.redoSteps).mapNotNull { it.state.file }
+        current.undoSteps.clear()
+        current.redoSteps.clear()
+        current.historyGroup = null
+        files.forEach { retire(current, it) }
+    }
+
+    /** Deletes a checkpoint nothing names any more: not the row, not a step. */
+    private fun retire(current: Session, file: File?) {
+        if (file == null || !isCheckpoint(file) || file == current.currentFile) return
+        if ((current.undoSteps + current.redoSteps).any { it.state.file == file }) return
+        if (current.projectId > 0 && file.parentFile != projectDirectory(current.projectId)) return
+        runCatching { file.delete() }
+    }
+
+    /**
+     * Gives up the session's history when the phone is too full for the next checkpoint
+     * beside it, so a full phone costs undo rather than the edit. Checked before writing:
+     * a write that fails for any other reason must fail the commit, as it always has.
+     */
+    private fun makeRoomForCheckpoint(current: Session, directory: File, bytes: Int) {
+        if (current.undoSteps.isEmpty() && current.redoSteps.isEmpty()) return
+        if (directory.usableSpace >= 2L * bytes + HISTORY_SPACE_MARGIN) return
+        diagnostics.info(TAG, "History turned off", "free=${directory.usableSpace} needed=$bytes")
+        discardHistory(current)
+        current.historyEnabled = false
+    }
+
+    private fun replaceSession(next: Session) {
+        session?.let(::discardHistory)
+        session = next
+    }
+
+    /** Checkpoints the row does not name are a crash's leftovers: history never outlives a session. */
+    private fun sweepCheckpoints(projectId: Long, keep: File?) {
+        checkpointFiles(projectId).filter { it != keep }.forEach { runCatching { it.delete() } }
+    }
+
+    private fun checkpointFiles(projectId: Long) =
+        projectDirectory(projectId).listFiles().orEmpty().filter(::isCheckpoint)
 
     // Schema 4 only when an artwork turn is saved. Readers use `ignoreUnknownKeys`, so an
     // older build would drop the turn without a word and then straighten the artwork on its
     // next resize; at 4 it refuses the project instead. Untouched projects stay at 3.
     private fun storedState(current: Session) = StoredSessionState(
-        schema = if (current.identities().artworkTurns.isNullOrEmpty()) 3 else 4,
+        schema = when {
+            current.importOrigins?.hasPictures == true -> 5
+            current.identities().artworkTurns.isNullOrEmpty() -> 3
+            else -> 4
+        },
         thumbnailRefreshed = current.thumbnailRefreshed,
-        removed = current.removedWidgets.map(::StoredRemovedWidget),
         importOrigins = current.importOrigins,
         lineage = current.identities(),
     )
 
-    private fun isCheckpoint(file: File) = file.name.matches(Regex("edit-[a-f0-9-]{36}\\.checkpoint"))
+    private fun isCheckpoint(file: File) = file.name.matches(CHECKPOINT_NAME)
+
+    /**
+     * The checkpoint's style-name map ([SessionLineage.variants]) and nothing else, read from
+     * the head of the file.
+     *
+     * The projects list needs only this, to pick each row's thumbnail, and [readCheckpoint]
+     * decodes the whole file: a base64 container of up to several MB. Done for every edited
+     * project, that held the first list back by 7–8 s on a cold start (emulator, 27 edited
+     * projects). `JsonReader` skips no faster than that decode reads (searching every file
+     * end to end took 25 s), so this must not skip far: a schema before 3 has no lineage, and
+     * the container is written last, so meeting it means there is no map to find.
+     * [StoredSessionState] writes the lineage early, before import baselines that can run to
+     * megabytes; files written before it did are read past those, slower but still correct.
+     */
+    private fun readCheckpointVariants(file: File): Map<String, String> =
+        JsonReader(file.bufferedReader()).use { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "schema" -> if (reader.nextInt() < 3) return@use emptyMap()
+                    "editedContainer" -> return@use emptyMap()
+                    "lineage" -> {
+                        if (reader.peek() != JsonToken.BEGIN_OBJECT) return@use emptyMap()
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            if (reader.nextName() != "variants") {
+                                reader.skipValue()
+                                continue
+                            }
+                            val variants = linkedMapOf<String, String>()
+                            reader.beginObject()
+                            while (reader.hasNext()) variants[reader.nextName()] = reader.nextString()
+                            return@use variants
+                        }
+                        return@use emptyMap()
+                    }
+                    else -> reader.skipValue()
+                }
+            }
+            emptyMap()
+        }
 
     private fun readCheckpoint(file: File): StoredSessionState {
         require(file.isFile && file.length() in 1..MAX_CHECKPOINT_BYTES.toLong()) { "The project's saved edit data is missing or too large." }
         val stored = json.decodeFromString<StoredSessionState>(file.readText())
-        require(stored.schema in 2..4 && (stored.schema != 2 || stored.importOrigins != null) &&
-            (stored.schema < 3 || stored.lineage != null) &&
-            (stored.schema != 4 || stored.lineage?.artworkTurns != null) && stored.editedContainer != null) {
+        require(stored.schema in 2..StoredSessionState.NEWEST && stored.isConsistent() && stored.editedContainer != null) {
             "The project's saved edit metadata cannot be read."
         }
         require(stored.editedContainer.length <= (WATCH_CONTAINER_BYTE_CEILING + 2) / 3 * 4) { "The saved edit is too large." }
@@ -2121,36 +2877,18 @@ class WatchFaceRepositoryImpl @Inject constructor(
     }
 
     private fun applyStoredState(stored: StoredSessionState, current: Session) {
-        require(stored.schema in 1..4 && (stored.schema != 2 || stored.importOrigins != null) &&
-            (stored.schema < 3 || stored.lineage != null) && (stored.schema >= 3 || stored.lineage == null) &&
-            (stored.schema != 4 || stored.lineage?.artworkTurns != null)) {
+        require(stored.schema in 1..StoredSessionState.NEWEST && stored.isConsistent() &&
+            (stored.schema >= 3 || stored.lineage == null)) {
             "This project's saved edit needs a newer app or is incomplete."
         }
         stored.lineage?.validate(current.originalContainer, current.currentContainer, stored.importOrigins)
             ?: stored.importOrigins?.validate(current.originalContainer, current.currentContainer)
-        val removed = stored.removed.map { it.toModel(removedWidgetIds.incrementAndGet()) }
-        removed.forEach { widget ->
-            stored.lineage?.let { lineage ->
-                require(widget.recordsByVariant.isNotEmpty() &&
-                    widget.nativeSourceIndices.keys.all { it in widget.recordsByVariant } &&
-                    widget.duplicateSourceVariants.all { it in widget.recordsByVariant }) { "Invalid removed widget identities." }
-                widget.recordsByVariant.forEach { (variant, raw) ->
-                    lineage.validateRemoved(current.originalContainer, current.currentContainer, variant, raw,
-                        NativeWidgetOrigin(widget.nativeSourceIndices[variant], variant in widget.duplicateSourceVariants))
-                }
-            }
-            widget.importOriginId?.let { id ->
-                val origin = stored.importOrigins?.widgets?.singleOrNull { it.id == id }
-                require(origin != null && widget.recordsByVariant.keys == setOf(origin.variant)) {
-                    "A removed widget's imported artwork is missing."
-                }
-            }
-        }
+        // Removals saved by builds that offered Restore are read and let go: nothing can
+        // put them back now. Their artwork is left as it is, drawn by nothing, until the next
+        // deletion in that style, which takes every raster nothing draws.
         current.importOrigins = stored.importOrigins
         current.lineage = stored.lineage
         current.thumbnailContainer = current.currentContainer.takeIf { stored.thumbnailRefreshed }
-        current.removedWidgets.clear()
-        current.removedWidgets += removed
     }
 
     private fun restoreSessionState(directory: File, current: Session) {
@@ -2211,6 +2949,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             currentContainer = current,
             sourceName = resolvedName,
             activeStyleName = activeStyleName,
+            currentFile = editedFile?.takeIf { checkpoint != null || current !== original },
         ).also {
             if (checkpoint != null) {
                 validateEdited(current.toByteArray(), it, checkpoint.importOrigins, checkpoint.lineage)
@@ -2248,14 +2987,82 @@ class WatchFaceRepositoryImpl @Inject constructor(
     }
 
     /**
+     * Puts each style's face-picker thumbnail on disk as `picker-style<N>.png` while the saved
+     * face holds one that differs from the package's — which is what Update thumbnail writes —
+     * and removes it once it no longer does, after Undo or Reset. The projects list prefers it
+     * to the package's preview, so it shows what the watch's face picker shows.
+     *
+     * Derived from the face being saved rather than recorded when the thumbnail is updated,
+     * so Undo, Redo, Reset and a project saved by an older version all agree with it without
+     * a state of their own. Called before the row is written, for the reason
+     * [writeStylePreviews]'s callers give. Cosmetic, so best effort: never a reason a save fails.
+     */
+    private fun syncPickerPreviews(current: Session) {
+        if (current.projectId <= 0) return
+        runCatching {
+            val directory = previewsDirectory(current.projectId)
+            val styles = FaceResources.selectableStyles(current.currentContainer)
+            val originalStyles = FaceResources.selectableStyles(current.originalContainer).map { it.basename }
+            val originalVariants = current.lineage?.variants.orEmpty()
+            val kept = mutableSetOf<String>()
+            styles.forEachIndexed { index, entry ->
+                val frame = FaceEditor.previewThumbnail(current.currentContainer, index) ?: return@forEachIndexed
+                val originalIndex = originalStyles.indexOf(originalVariants[entry.basename] ?: entry.basename)
+                val original = originalIndex.takeIf { it >= 0 }
+                    ?.let { FaceEditor.previewThumbnail(current.originalContainer, it) }
+                if (original != null && original.width == frame.width && original.height == frame.height &&
+                    original.argb.contentEquals(frame.argb)
+                ) {
+                    return@forEachIndexed
+                }
+                val file = File(directory, "picker-style${FaceResources.styleNumber(entry.basename)}.png")
+                kept += file.name
+                // The PNG is re-encoded only when the frame is not the one already written.
+                val hash = frame.argb.contentHashCode()
+                if (file.isFile && current.pickerHashes[file.name] == hash) return@forEachIndexed
+                writeAtomically(file, frame.toPng())
+                current.pickerHashes[file.name] = hash
+            }
+            directory.listFiles().orEmpty()
+                .filter { PickerFileNamePattern.matches(it.name) && it.name !in kept }
+                .forEach {
+                    it.delete()
+                    current.pickerHashes.remove(it.name)
+                }
+        }.onFailure { error ->
+            diagnostics.warn(TAG, "Face-picker preview not written", error = error)
+        }
+    }
+
+    /**
      * The preview the projects list shows for [project]: the style it was last left
      * on, falling back to the first one the package shipped.
      */
     private val previewVariantCache = linkedMapOf<String, Map<String, String>>()
 
     private fun projectPreviewImage(project: ProjectEntity): String? {
-        val previews = previewsDirectory(project.id)
-            .listFiles()
+        val directory = previewsDirectory(project.id)
+        // The face-picker thumbnail the user updated, for the style it was left on: what the
+        // watch's picker shows. Named by the style as it is now, so no variant mapping.
+        project.selectedStyle?.let(::styleIndexOf)
+            ?.let { File(directory, "picker-style$it.png") }
+            ?.takeIf { it.isFile && it.length() > 0 }
+            ?.let { return it.absolutePath }
+        val originalVariant = project.editedBinPath?.let { path ->
+            synchronized(previewVariantCache) {
+                previewVariantCache.getOrPut(path) {
+                    runCatching { File(path).takeIf(::isCheckpoint)?.let(::readCheckpointVariants).orEmpty() }
+                        .getOrDefault(emptyMap())
+                }.also { while (previewVariantCache.size > 64) previewVariantCache.remove(previewVariantCache.keys.first()) }
+            }
+        }?.get(project.selectedStyle) ?: project.selectedStyle
+        // The style it was left on, by its name: one file to check rather than a listing of
+        // every style's, which is most of what a long list costs once checkpoints are cheap.
+        originalVariant?.let(::styleIndexOf)
+            ?.let { File(directory, "style$it.png") }
+            ?.takeIf { it.isFile && it.length() > 0 }
+            ?.let { return it.absolutePath }
+        return directory.listFiles()
             ?.filter { it.isFile && it.length() > 0 }
             ?.mapNotNull { file ->
                 PreviewFileNamePattern.matchEntire(file.name)
@@ -2264,20 +3071,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     ?.toIntOrNull()
                     ?.let { it to file }
             }
-            ?.sortedBy { it.first }
-            ?: return null
-        if (previews.isEmpty()) return null
-        val originalVariant = project.editedBinPath?.let { path ->
-            synchronized(previewVariantCache) {
-                previewVariantCache.getOrPut(path) {
-                    runCatching { File(path).takeIf(::isCheckpoint)?.let(::readCheckpoint)?.lineage?.variants.orEmpty() }
-                        .getOrDefault(emptyMap())
-                }.also { while (previewVariantCache.size > 64) previewVariantCache.remove(previewVariantCache.keys.first()) }
-            }
-        }?.get(project.selectedStyle) ?: project.selectedStyle
-        val selected = originalVariant?.let(::styleIndexOf)
-        val chosen = previews.firstOrNull { it.first == selected } ?: previews.first()
-        return chosen.second.absolutePath
+            ?.minByOrNull { it.first }
+            ?.second
+            ?.absolutePath
     }
 
     /**
@@ -2349,6 +3145,37 @@ class WatchFaceRepositoryImpl @Inject constructor(
         }
     }
 
+    /** A state an undo or redo returns to. */
+    private class HistoryState(
+        /** The checkpoint holding it, a legacy `edited.bin`, or null for the pristine package. */
+        val file: File?,
+        val activeStyleName: String?,
+        val selectedVariantName: String?,
+        /** Kept only on each stack's newest step, so one undo or redo reads nothing from disk. */
+        var memory: HistoryMemory?,
+    )
+
+    /** Everything a checkpoint holds, already parsed, plus what a checkpoint does not keep. */
+    private class HistoryMemory(
+        val container: Fit3Container,
+        val lineage: SessionLineage?,
+        val importOrigins: WidgetImportOrigins?,
+        val thumbnailRefreshed: Boolean,
+        val audit: EditAuditSummary?,
+    )
+
+    private class HistoryStep(val state: HistoryState, val kind: EditKind, val group: Long?)
+
+    /** A snapshot and the session state it was built from; see [Session.takeOpened]. */
+    private class OpenedSnapshot(
+        val container: Fit3Container,
+        val variant: String?,
+        val activeStyle: String?,
+        val name: String,
+        val thumbnail: Fit3Container?,
+        val snapshot: EditorSnapshot,
+    )
+
     private data class Session(
         var projectId: Long,
         val apk: Fit3Apk,
@@ -2370,7 +3197,6 @@ class WatchFaceRepositoryImpl @Inject constructor(
         var selectedVariantName: String? = null,
         /** Style index → the package's preview for it, extracted to app storage. */
         var stylePreviewFiles: Map<Int, String> = emptyMap(),
-        val removedWidgets: MutableList<RemovedWidget> = mutableListOf(),
         var importOrigins: WidgetImportOrigins? = null,
         var lineage: SessionLineage? = null,
         /**
@@ -2389,7 +3215,54 @@ class WatchFaceRepositoryImpl @Inject constructor(
          * Validate page re-render it.
          */
         var thumbnailContainer: Fit3Container? = null,
+        /** The file the project row names: a checkpoint, a legacy `edited.bin`, or null when pristine. */
+        var currentFile: File? = null,
+        /** Session history, newest last. See [step]. */
+        val undoSteps: ArrayDeque<HistoryStep> = ArrayDeque(),
+        val redoSteps: ArrayDeque<HistoryStep> = ArrayDeque(),
+        /** The group of the commit that made the current state, while it is the newest step. */
+        var historyGroup: Long? = null,
+        /** False once a full phone has cost the session its history. */
+        var historyEnabled: Boolean = true,
+        /** What the open that made this session built, for the editor to take once. See [takeOpened]. */
+        var opened: OpenedSnapshot? = null,
+        /** The frame last written to each `picker-style<N>.png`; see [syncPickerPreviews]. */
+        val pickerHashes: MutableMap<String, Int> = mutableMapOf(),
     ) {
+        /** [snapshot], kept for the editor that is about to ask for it. */
+        fun openedSnapshot(): EditorSnapshot = snapshot().also { built ->
+            opened = OpenedSnapshot(currentContainer, selectedVariantName, activeStyleName, projectName, thumbnailContainer, built)
+        }
+
+        /**
+         * The snapshot the open built, once, and only while the session is exactly as it left
+         * it: an edit replaces the container, a switch changes the variant and the installing
+         * style, a rename the name and a thumbnail update the thumbnail's container. Everything
+         * else the snapshot reads changes only with the container. Otherwise it builds afresh.
+         */
+        fun takeOpened(): EditorSnapshot? = opened?.also { opened = null }?.takeIf {
+            it.container === currentContainer && it.variant == selectedVariantName &&
+                it.activeStyle == activeStyleName && it.name == projectName && it.thumbnail === thumbnailContainer
+        }?.snapshot
+
+        fun currentState() = HistoryState(currentFile, activeStyleName, selectedVariantName,
+            HistoryMemory(currentContainer, lineage, importOrigins,
+                thumbnailRefreshed = thumbnailContainer === currentContainer, audit = audit))
+
+        /** [snapshot], rendered before history moved, with what Undo and Redo now name. */
+        fun labelled(snapshot: EditorSnapshot) = snapshot.copy(
+            undoKind = undoSteps.lastOrNull()?.kind,
+            redoKind = redoSteps.lastOrNull()?.kind,
+        )
+
+        fun apply(memory: HistoryMemory) {
+            currentContainer = memory.container
+            lineage = memory.lineage
+            importOrigins = memory.importOrigins
+            thumbnailContainer = memory.container.takeIf { memory.thumbnailRefreshed }
+            audit = memory.audit
+        }
+
         fun identities(): SessionLineage = lineage ?: SessionLineage.capture(originalContainer, currentContainer, importOrigins)
 
         fun editRevision(): String = "$projectId:${WidgetImportOrigins.digest(currentContainer.toByteArray())}"
@@ -2397,35 +3270,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
         fun originalEntry(variant: String): ContainerEntry =
             originalContainer.entryByBasename(lineage?.variants?.get(variant) ?: variant)
 
-        fun withAddedBackgrounds(variants: List<String>): SessionLineage = variants.fold(identities()) { state, variant ->
+        fun withAddedBackgrounds(variants: List<String>, from: SessionLineage = identities()): SessionLineage = variants.fold(from) { state, variant ->
             state.remap(variant) { it + 1 }.append(variant, 0, NativeWidgetOrigin())
         }
 
-        /** Freeze legacy restore sources before an operation changes any current indices. */
-        fun identifyLegacyRemoval(removed: RemovedWidget): RemovedWidget {
-            if (removed.nativeIdentityRecorded || removed.importOriginId != null) return removed
-            val sources = removed.recordsByVariant.mapValues { (variant, raw) ->
-                runCatching {
-                    val appended = StructuralEditor.appendWidget(currentContainer, listOf(variant), mapOf(variant to raw))
-                        .container.entryByBasename(variant)
-                    val index = FaceRecordParser.scanWidgets(appended).last().globalIndex
-                    val original = originalEntry(variant)
-                    val excluded = importOrigins?.indices(variant).orEmpty()
-                    val duplicates = FaceRecordParser.duplicateSourceGlobalIndices(appended, original, excluded)
-                    NativeWidgetOrigin(FaceRecordParser.originalWidgetSources(appended, original, excluded)[index]
-                        ?: duplicates[index], index in duplicates)
-                }.getOrDefault(NativeWidgetOrigin())
-            }
-            return removed.copy(nativeIdentityRecorded = true,
-                nativeSourceIndices = sources.mapNotNull { (variant, origin) -> origin.originalIndex?.let { variant to it } }.toMap(),
-                duplicateSourceVariants = sources.filterValues { it.duplicate }.keys)
-        }
-
-        fun originsWith(faceId: String, variant: String, result: WidgetImportEdit): WidgetImportOrigins {
+        fun originsWith(faceId: String, variant: String, result: WidgetImportEdit,
+            kind: AddedWidgetKind = AddedWidgetKind.DONOR): WidgetImportOrigins {
             val previous = importOrigins ?: WidgetImportOrigins(WidgetImportOrigins.digest(originalContainer.toByteArray()), emptyList())
             return previous.copy(widgets = previous.widgets + WidgetImportOrigin(
                 UUID.randomUUID().toString(), faceId, variant,
-                Base64.getEncoder().encodeToString(result.baseline.data), listOf(result.globalIndex)))
+                Base64.getEncoder().encodeToString(result.baseline.data), listOf(result.globalIndex), kind))
         }
 
         /**
@@ -2550,8 +3404,15 @@ class WatchFaceRepositoryImpl @Inject constructor(
          * has a background or no panel geometry and stops at the watch's ceiling, and a
          * second copy of that arithmetic here is a second copy to keep in step.
          */
-        fun backgroundAddTargets(): List<String> = StructuralEditor.backgroundStylesThatFit(
-            source = currentContainer,
+        /**
+         * Which font bindings an import may reuse: never the vendor's, and never one a saved
+         * removal or a kept import baseline still names, since restoring either would then
+         * draw with the wrong font.
+         */
+        fun fontSlots(): FontSlots = FontSlots.of(originalContainer, importOrigins)
+
+        fun backgroundAddTargets(source: Fit3Container = currentContainer): List<String> = StructuralEditor.backgroundStylesThatFit(
+            source = source,
             entryBasenames = backgroundTargetEntries().map { it.basename },
             preferred = selectedVariantName,
         )
@@ -2620,6 +3481,18 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 listOfNotNull(FaceResources.aodOrNull(currentContainer))
             } else {
                 styleEntries()
+            }
+
+        /** Whether a background edit asked for the selected style alone, and that is a style. */
+        fun scopedToStyle(thisStyleOnly: Boolean): Boolean =
+            thisStyleOnly && selectedVariantName != null && selectedVariantName != AOD_ENTRY_NAME
+
+        /** [backgroundTargetEntries], or the selected style alone when [scopedToStyle]. */
+        fun backgroundScope(thisStyleOnly: Boolean): List<ContainerEntry> =
+            if (scopedToStyle(thisStyleOnly)) {
+                listOf(currentContainer.entryByBasename(requireNotNull(selectedVariantName)))
+            } else {
+                backgroundTargetEntries()
             }
 
         fun directInstallPayload(): DirectInstallPayload {
@@ -2733,6 +3606,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     )
                 }
             }
+            // Well formed is not the same as consistent: the watch reads setting.bin's ID and
+            // style count and installs by path, so those have to agree with the face itself.
+            val delivery = DeliveryChecks.check(reparsed, apk.faceId)
+            if (!delivery.canSend) {
+                throw WatchFaceException(
+                    "The edited watch face does not describe itself consistently, so it will " +
+                        "not be installed. Reset project edits to restore the original face.",
+                    delivery.refusals.joinToString { "${it.code}: ${it.detail}" },
+                )
+            }
             return binary
         }
 
@@ -2768,14 +3651,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
         private var cachedAodPreview: AodRender? = null
 
-        fun previewLocale(): String = java.util.Locale.getDefault().let {
-            when (it.language) {
-                "zh" -> if (it.script == "Hant" || it.country in setOf("TW", "HK", "MO")) "cn2" else "cn0"
-                "pt" -> "pt_rPT"
-                "fr", "ko", "ja", "it" -> it.language
-                else -> "en"
-            }
-        }
+        fun previewLocale(): String = previewDictionaryLocale()
 
         /**
          * [WidgetPreviewComposer.compose] for the current `aod.bin`. Null when the container
@@ -2859,6 +3735,68 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 FaceRecordParser.scanWidgets(originalEntry(styleName)).associateBy { it.globalIndex }
             }
 
+        /**
+         * [entry]'s moving pictures: Animations this app added (no original, and not the
+         * full-panel moving background), recognised from their records — they are saved as
+         * nothing more than an added widget.
+         */
+        fun movingPictureIndices(entry: ContainerEntry): Set<Int> {
+            val records = FaceRecordParser.scanWidgets(entry)
+            if (records.none { it.widgetType == WIDGET_ANIMATION }) return emptySet()
+            val origins = identities().widgets[entry.basename].orEmpty()
+            val guides = FaceRecordParser.widgetGuides(entry).associateBy { it.globalIndex }
+            val imported = importOrigins?.indices(entry.basename).orEmpty()
+            return records.filter { record ->
+                record.widgetType == WIDGET_ANIMATION && record.globalIndex !in imported &&
+                    origins[record.globalIndex]?.let { it.originalIndex == null } == true &&
+                    guides[record.globalIndex]?.placement != WidgetPlacement.BACKGROUND
+            }.mapTo(mutableSetOf()) { it.globalIndex }
+        }
+
+        /**
+         * [variant]'s animation at [globalIndex] deleted with its frames, as deleting it does,
+         * but not committed: on its own, or as the first half of an edit that puts a new
+         * background in its place.
+         */
+        fun animationDeletion(variant: String, globalIndex: Int): AnimationDeletion {
+            val entry = currentContainer.entryByBasename(variant)
+            val record = FaceRecordParser.scanWidgets(entry).single { it.globalIndex == globalIndex }
+            val edit = StructuralEditor.deleteWidget(
+                source = currentContainer,
+                entryBasenames = listOf(variant),
+                globalIndex = globalIndex,
+                widgetType = record.widgetType,
+                sequenceId = record.sequenceId,
+                x = record.x,
+                y = record.y,
+                targetIndices = mapOf(variant to globalIndex),
+            )
+            return AnimationDeletion(variant, edit, globalIndex)
+        }
+
+        /**
+         * [variant]'s still background deleted from [container] with its Static and raster,
+         * uncommitted; null when it has none or cannot go that way, and is painted black
+         * instead. See [StructuralEditor.deleteBackground].
+         */
+        fun stillBackgroundDeletion(container: Fit3Container, variant: String): BackgroundDeletion? =
+            StructuralEditor.deleteBackground(container, variant)
+
+        /** What [stillBackgroundDeletion] would free in [variant], counted without building it. */
+        fun stillBackgroundBytes(container: Fit3Container, variant: String): Int =
+            StructuralEditor.deletedBackgroundBytes(container.entryByBasename(variant))
+
+        /**
+         * The selected variant's moving background deleted, uncommitted, or null when it has
+         * none. A new background, still or moving, replaces it in the same commit — one undo
+         * step — since its frames are opaque and nothing under it would show.
+         */
+        fun movingBackgroundDeletion(): AnimationDeletion? {
+            val variant = selectedVariantName ?: styleEntries().first().basename
+            val moving = MovingBackgroundEditor.read(currentContainer.entryByBasename(variant)) ?: return null
+            return animationDeletion(variant, moving.globalIndex)
+        }
+
         fun snapshot(requestedStyle: String? = null): EditorSnapshot {
             val styles = styleEntries()
             if (styles.isEmpty()) throw IllegalArgumentException("No editable style entries found")
@@ -2879,6 +3817,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
             // conditional the whole isolation model rests on.
             if (selected.basename != AOD_ENTRY_NAME) activeStyleName = selected.basename
             val isAod = selected.basename == AOD_ENTRY_NAME
+            // A new background deletes the selected variant's moving one in the same commit, so
+            // the room for one is measured without it, as adding one measures it; built only
+            // when a room question is asked.
+            val replacingMoving by lazy(LazyThreadSafetyMode.NONE) { movingBackgroundDeletion() }
+            val roomBase by lazy(LazyThreadSafetyMode.NONE) { replacingMoving?.edit?.container ?: currentContainer }
             val images = FaceRecordParser.scanImages(selected)
             val originalStyle = originalEntry(selected.basename)
             // The canvas is the panel the watch renders, which is not the same thing
@@ -2903,6 +3846,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 FaceRecordParser.scanWidgets(selected).associateBy { it.globalIndex }
             }
             val savedTurns = identities().takeIf { !it.artworkTurns.isNullOrEmpty() }
+            val movingPictures = movingPictureIndices(selected)
             val artworkKeys by lazy(LazyThreadSafetyMode.NONE) {
                 artworkKeys(selected.basename, FaceRecordParser.widgetGuides(selected)
                     .filter { it.rotationKind == WidgetRotationKind.ARTWORK }.map { it.globalIndex }.toSet())
@@ -2949,7 +3893,9 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     originalRotationTenths = line?.originalDirectionTenths
                         ?: original?.rotationTenths ?: widget.rotationTenths,
                     duplicateSourceGlobalIndex = duplicateSource,
-                    importedFromFaceId = imported?.faceId,
+                    importedFromFaceId = imported?.faceId?.takeIf { imported.kind == AddedWidgetKind.DONOR },
+                    addedKind = imported?.kind
+                        ?: AddedWidgetKind.MOVING_PICTURE.takeIf { widget.globalIndex in movingPictures },
                 )
             }
             // Every variant is reconstructed from its current records, in record order.
@@ -2969,6 +3915,7 @@ class WatchFaceRepositoryImpl @Inject constructor(
             } else {
                 currentContainer.validate()
             }
+            val delivery = DeliveryChecks.check(currentContainer, apk.faceId)
             val backgrounds = styles.filter {
                 FaceRecordParser.backgroundImage(it) != null
             }.map { it.basename }
@@ -3009,7 +3956,6 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 widgetOverlay = composition.widgetOverlay,
                 widgetImageLayers = widgetImageLayers,
                 widgets = widgets,
-                removedWidgets = removedWidgets.toList(),
                 stylePreviewPaths = styles.mapNotNull { entry ->
                     styleIndexOf(lineage?.variants?.get(entry.basename) ?: entry.basename)
                         ?.let(stylePreviewFiles::get)
@@ -3019,16 +3965,39 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 aodHasBackground = aodEntry?.let {
                     FaceRecordParser.backgroundImage(it) != null
                 } ?: false,
+                selectedCanTakeBackground = selectedVariantName.let { selected ->
+                    selected != null && selected != AOD_ENTRY_NAME && selected !in backgrounds &&
+                        StructuralEditor.backgroundStylesThatFit(
+                            source = roomBase,
+                            entryBasenames = listOf(selected),
+                            preferred = selected,
+                        ).isNotEmpty()
+                },
+                movingBackground = MovingBackgroundEditor.read(selected),
+                stillBackgroundBytes = stillBackgroundBytes(roomBase, selected.basename),
+                selectedBackgroundShown = MovingBackgroundEditor.read(selected) != null ||
+                    FaceRecordParser.backgroundImage(selected)?.let { !drawsOnlyBlack(selected, it) } == true,
+                activeMovingBackground = styles.firstOrNull { it.basename == (activeStyleName ?: styles.first().basename) }
+                    ?.let(MovingBackgroundEditor::read),
+                activeMovingPictures = styles.firstOrNull { it.basename == (activeStyleName ?: styles.first().basename) }
+                    ?.let(MovingPicture::countOnTop) ?: 0,
+                widgetAnimations = composition.animations,
                 aodCanTakeBackground = aodEntry != null &&
                     StructuralEditor.backgroundStylesThatFit(
-                        source = currentContainer,
+                        source = roomBase,
                         entryBasenames = listOf(AOD_ENTRY_NAME),
                         preferred = AOD_ENTRY_NAME,
                     ).isNotEmpty(),
                 // Only worth costing where there is nothing to replace: a face that has a
                 // background anywhere takes the same-size replacement, which grows nothing.
                 backgroundAddTargets = if (backgrounds.isEmpty()) {
-                    backgroundAddTargets()
+                    backgroundAddTargets(roomBase)
+                } else {
+                    emptyList()
+                },
+                // A whole-face replacement gives the bare styles one too, as many as fit.
+                replacementAddTargets = if (backgrounds.isNotEmpty() && backgrounds.size < styles.size) {
+                    backgroundAddTargets(roomBase)
                 } else {
                     emptyList()
                 },
@@ -3036,7 +4005,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
                 imageCount = images.size,
                 validationErrors = report.errors.map { it.code },
                 validationWarnings = report.warnings.map { it.code },
+                deliveryRefusals = delivery.refusals.map { it.code },
+                emptyVariants = delivery.emptyVariants,
                 isDirty = currentContainer !== originalContainer,
+                undoKind = undoSteps.lastOrNull()?.kind,
+                redoKind = redoSteps.lastOrNull()?.kind,
                 thumbnailRefreshed = thumbnailRefreshed,
                 pickerThumbnail = pickerThumbnail,
                 pickerThumbnailAfter = pickerThumbnailAfter,
@@ -3052,6 +4025,10 @@ class WatchFaceRepositoryImpl @Inject constructor(
      */
     private companion object {
         const val TAG = "Editor"
+
+        /** The source key a custom face's row carries, whichever number it has. */
+        const val TEMPLATE_SOURCE = "fit3-template://"
+        val CHECKPOINT_NAME = Regex("edit-[a-f0-9-]{36}\\.checkpoint")
 
         /** How many lines of [Session.editHistory] a report carries. */
         const val MaxEditHistory = 60
@@ -3073,98 +4050,69 @@ class WatchFaceRepositoryImpl @Inject constructor(
         val height: Int,
         /** Which style entries the edit will write; null means "whichever carry one". */
         val styleNames: List<String>? = null,
+        /** The selected variant's moving background, which the new still one replaces. */
+        val replacing: AnimationDeletion? = null,
+        /** Styles in a whole-face replacement with no background, to be given one where it fits. */
+        val bare: List<String> = emptyList(),
     )
 }
 
 @Serializable
 private data class StoredSessionState(
+    // Declaration order is file order, and the projects list depends on it: it reads the
+    // lineage's style map from the head of a checkpoint and stops at the container
+    // (`readCheckpointVariants`). Keep the lineage ahead of the import baselines and the
+    // container last. Readers do not care about order; only that list's speed does.
     val schema: Int = 1,
-    val thumbnailRefreshed: Boolean = false,
-    val removed: List<StoredRemovedWidget> = emptyList(),
-    val importOrigins: WidgetImportOrigins? = null,
     val lineage: SessionLineage? = null,
+    val thumbnailRefreshed: Boolean = false,
+    /**
+     * Removals saved by builds that offered Restore, kept as raw JSON only so such a
+     * project still decodes; nothing reads them and nothing new is written here.
+     */
+    val removed: List<kotlinx.serialization.json.JsonElement> = emptyList(),
+    val importOrigins: WidgetImportOrigins? = null,
     /** Present only in the app-private atomic checkpoint, never in exported session.json. */
     val editedContainer: String? = null,
-)
-
-/**
- * One removed record on disk.
- *
- * Every field added after the first release carries a default, because `session.json` is
- * read back from projects written by older builds and a missing key would otherwise throw
- * — and `loadSession` failing is a project that will not open with its removals in it.
- * [legacyLabel] is the one field that is only ever *read*: releases up to 0.1.1 stored the
- * assembled `"Widget #12"` string instead of the number, so it is where an old session's
- * index comes from and nothing new is written into it.
- */
-@Serializable
-private data class StoredRemovedWidget(
-    val widgetType: Int,
-    val sequenceId: Int,
-    val x: Int,
-    val y: Int,
-    val width: Int,
-    val height: Int,
-    /** Base64 so the raw record bytes survive a JSON round trip untouched. */
-    val recordsByVariant: Map<String, String>,
-    val globalIndex: Int = UnknownGlobalIndex,
-    val sourceLabel: String? = null,
-    val followsReading: Boolean = false,
-    val importOriginId: String? = null,
-    val nativeIdentityRecorded: Boolean = false,
-    val nativeSourceIndices: Map<String, Int> = emptyMap(),
-    val duplicateSourceVariants: Set<String> = emptySet(),
-    @SerialName("label") val legacyLabel: String? = null,
 ) {
-    constructor(widget: RemovedWidget) : this(
-        widgetType = widget.widgetType,
-        sequenceId = widget.sequenceId,
-        x = widget.x,
-        y = widget.y,
-        width = widget.width,
-        height = widget.height,
-        recordsByVariant = widget.recordsByVariant.mapValues {
-            Base64.getEncoder().encodeToString(it.value)
-        },
-        globalIndex = widget.globalIndex,
-        sourceLabel = widget.sourceLabel,
-        followsReading = widget.followsReading,
-        importOriginId = widget.importOriginId,
-        nativeIdentityRecorded = widget.nativeIdentityRecorded,
-        nativeSourceIndices = widget.nativeSourceIndices,
-        duplicateSourceVariants = widget.duplicateSourceVariants,
-    )
-
-    fun toModel(id: Long) = RemovedWidget(
-        id = id,
-        globalIndex = globalIndex.takeIf { it >= 0 } ?: legacyGlobalIndex(),
-        widgetType = widgetType,
-        sequenceId = sequenceId,
-        x = x,
-        y = y,
-        width = width,
-        height = height,
-        sourceLabel = sourceLabel,
-        followsReading = followsReading,
-        importOriginId = importOriginId,
-        nativeIdentityRecorded = nativeIdentityRecorded,
-        nativeSourceIndices = nativeSourceIndices,
-        duplicateSourceVariants = duplicateSourceVariants,
-        recordsByVariant = recordsByVariant.mapValues { Base64.getDecoder().decode(it.value) },
-    )
-
     /**
-     * The index out of an older session's stored label, which this app wrote itself and
-     * so can read back exactly. Anything else leaves the index unknown, which the row
-     * renders as "—" rather than as a number it would be inventing.
+     * Whether what each schema adds is there, and only there: 2 an import table, 3 the
+     * lineage, 4 an artwork turn, 5 an added picture. Pictures exist exactly at 5, so a
+     * build that predates them refuses the project instead of saving it back without them.
      */
-    private fun legacyGlobalIndex(): Int =
-        legacyLabel?.removePrefix("Widget #")?.toIntOrNull() ?: UnknownGlobalIndex
+    fun isConsistent(): Boolean =
+        (schema != 2 || importOrigins != null) &&
+            (schema < 3 || lineage != null) &&
+            (schema != 4 || lineage?.artworkTurns != null) &&
+            (schema >= 5) == (importOrigins?.hasPictures == true)
+
+    companion object {
+        /** The newest session schema this build writes and reads. */
+        const val NEWEST = 5
+    }
 }
 
-/** [RemovedWidget.globalIndex] for a session that predates the field. */
-private const val UnknownGlobalIndex = -1
 private const val MAX_CHECKPOINT_BYTES = 13 * 1024 * 1024
+
+/** The [bounds] of a [width]-wide frame of [pixels], row by row; the frame itself when they are all of it. */
+internal fun cropped(pixels: IntArray, width: Int, bounds: PixelBounds): IntArray {
+    if (bounds.x == 0 && bounds.y == 0 && bounds.width == width && bounds.width * bounds.height == pixels.size) return pixels
+    val out = IntArray(bounds.width * bounds.height)
+    for (row in 0 until bounds.height) {
+        System.arraycopy(pixels, (bounds.y + row) * width + bounds.x, out, row * bounds.width, bounds.width)
+    }
+    return out
+}
+
+/** A GIF larger than this is refused before decoding; the decoder bounds what it decodes too. */
+private const val MAX_GIF_BYTES = 32 * 1024 * 1024
+
+/** Session history bounds: steps kept, and bytes of checkpoint files they may hold on disk. */
+private const val HISTORY_MAX_STEPS = 30
+private const val HISTORY_MAX_BYTES = 48L * 1024 * 1024
+
+/** Free space kept beyond a checkpoint before history gives way to it. */
+private const val HISTORY_SPACE_MARGIN = 16L * 1024 * 1024
 
 /**
  * A manifest read back from a file, cut down to what a project row can hold.
@@ -3202,7 +4150,27 @@ private val StyleNamePattern = Regex("""style(\d+)\.bin""")
 
 private val PreviewFileNamePattern = Regex("""style(\d+)\.png""")
 
+/** [WatchFaceRepositoryImpl]'s face-picker thumbnails; never matched by [PreviewFileNamePattern]. */
+private val PickerFileNamePattern = Regex("""picker-style(\d+)\.png""")
+
 /** The index in `styleN.bin`, which is the index the package's previews use too. */
+/**
+ * Which of a face's `font_<key>.bin` dictionaries the preview reads for the phone's language.
+ *
+ * Faces ship eight keyed dictionaries (`cn0`, `cn2`, `en`, `fr`, `it`, `ja`, `ko`, `pt_rPT`),
+ * and a key no face has falls back to English. One mapping for every preview: the editor's,
+ * a donor's, an import review's and the custom template's picker frame. Passing the raw
+ * locale (`fr_FR`) instead named a dictionary that never exists, so those previews were
+ * always English while the canvas beside them was French.
+ */
+internal fun previewDictionaryLocale(locale: java.util.Locale = java.util.Locale.getDefault()): String =
+    when (locale.language) {
+        "zh" -> if (locale.script == "Hant" || locale.country in setOf("TW", "HK", "MO")) "cn2" else "cn0"
+        "pt" -> "pt_rPT"
+        "fr", "ko", "ja", "it" -> locale.language
+        else -> "en"
+    }
+
 private fun styleIndexOf(basename: String): Int? =
     StyleNamePattern.matchEntire(basename)?.groupValues?.get(1)?.toIntOrNull()
 
@@ -3254,3 +4222,10 @@ private fun StructuralEdit.audit(operation: String) = EditAuditSummary(
     operation = operation,
     sizeDelta = sizeDelta,
 )
+
+/** Opaque black: what a removed background is painted, and what the watch shows where there is none. */
+private const val BLACK = 0xFF000000.toInt()
+
+/** Whether [raster] in [entry] draws nothing but black. */
+private fun drawsOnlyBlack(entry: ContainerEntry, raster: ImageRecord): Boolean =
+    FaceRecordParser.decodeImage(entry, raster).argb.all { it and 0xFFFFFF == 0 }

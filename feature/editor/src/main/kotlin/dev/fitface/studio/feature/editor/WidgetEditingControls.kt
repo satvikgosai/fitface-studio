@@ -2,11 +2,12 @@ package dev.fitface.studio.feature.editor
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -15,9 +16,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.WidgetArrangement
@@ -30,8 +37,9 @@ import dev.fitface.studio.core.model.canRotateTo
 import dev.fitface.studio.core.model.normalizedRotation
 import dev.fitface.studio.core.ui.FitButton
 import dev.fitface.studio.core.ui.FitButtonStyle
+import dev.fitface.studio.core.ui.FitHeading
 import dev.fitface.studio.core.ui.FitIconButton
-import dev.fitface.studio.core.ui.MicroLabel
+import dev.fitface.studio.core.ui.InfoText
 import dev.fitface.studio.core.ui.fitText
 
 /** One tap of the rotate buttons, in tenths: a whole number of degrees for every kind. */
@@ -85,8 +93,6 @@ internal fun RotationStepButton(
 @Composable
 internal fun RotationControls(
     widget: WidgetGuide,
-    snapshot: EditorSnapshot,
-    allStyles: Boolean,
     enabled: Boolean,
     onRotate: (Int) -> Unit,
 ) {
@@ -94,31 +100,44 @@ internal fun RotationControls(
     val kind = widget.rotationKind
     var angle by rememberSaveable(widget.globalIndex, current) { mutableStateOf(rotationInput(current ?: 0)) }
     val parsed = parseRotationInput(angle)
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        MicroLabel(stringResource(R.string.editor_rotation))
+    val heading = stringResource(R.string.editor_rotation)
+    ControlCard(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (current == null || kind == null) {
-            Text(
-                stringResource(unsupportedRotationReason(widget)),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-            return@Column
+            // Nothing to turn: the heading and one word, with the reason behind the ⓘ.
+            FitHeading(heading, key = widget.globalIndex, trailing = {
+                Text(
+                    stringResource(R.string.editor_rotation_none),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.fitText.secondary,
+                )
+            }) {
+                InfoText(stringResource(unsupportedRotationReason(widget)))
+            }
+            return@ControlCard
         }
+        FitHeading(heading, key = widget.globalIndex) {
+            InfoText(
+                stringResource(
+                    when (kind) {
+                        WidgetRotationKind.TEXT -> R.string.editor_rotation_text
+                        WidgetRotationKind.LINE -> R.string.editor_rotation_line
+                        WidgetRotationKind.ARC -> R.string.editor_rotation_arc
+                        WidgetRotationKind.ARTWORK -> R.string.editor_rotation_artwork
+                    },
+                ),
+            )
+            // An opaque picture's black box turns with it, which matters on a coloured face.
+            if (kind == WidgetRotationKind.ARTWORK && widget.opaqueArtwork) {
+                InfoText(stringResource(R.string.editor_rotation_artwork_opaque))
+            }
+        }
+        val original = widget.originalRotationTenths ?: current
         Text(
-            stringResource(
-                R.string.editor_rotation_current,
-                rotationInput(current),
-                rotationInput(widget.originalRotationTenths ?: current),
-            ),
-        )
-        Text(
-            if (!snapshot.isAodSelected && allStyles && widget.importedFromFaceId == null) {
-                stringResource(R.string.editor_rotation_scope_all)
+            if (original == current) {
+                stringResource(R.string.editor_rotation_value, rotationInput(current))
             } else {
-                stringResource(R.string.editor_rotation_scope, variantLabel(snapshot.selectedVariant.basename))
+                stringResource(R.string.editor_rotation_changed, rotationInput(current), rotationInput(original))
             },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             RotationStepButton(widget, clockwise = false, enabled, onRotate, Modifier.weight(1f))
@@ -147,32 +166,11 @@ internal fun RotationControls(
                     parsed != normalizedRotation(current),
                 style = FitButtonStyle.Secondary,
             )
-            val original = widget.originalRotationTenths ?: current
             FitButton(
                 stringResource(R.string.editor_rotation_reset),
                 { onRotate(original) },
                 enabled = enabled && original != current && canRotateTo(widget, original),
                 style = FitButtonStyle.Secondary,
-            )
-        }
-        Text(
-            stringResource(
-                when (kind) {
-                    WidgetRotationKind.TEXT -> R.string.editor_rotation_text
-                    WidgetRotationKind.LINE -> R.string.editor_rotation_line
-                    WidgetRotationKind.ARC -> R.string.editor_rotation_arc
-                    WidgetRotationKind.ARTWORK -> R.string.editor_rotation_artwork
-                },
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
-        // An opaque picture's black box turns with it, which matters on a coloured face.
-        if (kind == WidgetRotationKind.ARTWORK && widget.opaqueArtwork) {
-            Text(
-                stringResource(R.string.editor_rotation_artwork_opaque),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
             )
         }
         // Said before the tap, as resize says it: a shared digit pool turns every digit.
@@ -221,11 +219,12 @@ internal fun parseRotationInput(input: String): Int? = runCatching {
 }.getOrNull()
 
 /**
- * Layer order in Edit widget, as four buttons rather than a dialog of four buttons.
+ * Layer order in Edit widget: four tiles, each an arrow over a short word, front-most first.
  *
- * Order only changes which of two overlapping widgets is on top, so it is judged against
- * the preview above it, and a dialog was a tap and a dismissal between the reader and the
- * face. Each button is disabled at its boundary rather than hidden, front-most first.
+ * Order only changes which of two overlapping widgets is on top and is rarely used, so it
+ * takes one row. The words keep it readable where bare arrows read as a quick panel; each
+ * tile still announces its full name. Disabled at a boundary rather than hidden, and two
+ * to a row when the words do not fit four across (large text, a narrow screen).
  */
 @Composable
 internal fun ArrangementControls(
@@ -234,39 +233,102 @@ internal fun ArrangementControls(
     enabled: Boolean,
     onArrange: (WidgetArrangement) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        MicroLabel(stringResource(R.string.editor_arrange))
-        Text(stringResource(R.string.editor_arrange_description), style = MaterialTheme.typography.bodySmall)
-        Text(
-            stringResource(R.string.editor_arrange_scope, variantLabel(snapshot.selectedVariant.basename)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
+    ControlCard(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         FlowRow(
-            maxItemsInEachRow = 2,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            WidgetArrangement.entries.reversed().forEach { action ->
-                val label = when (action) {
-                    WidgetArrangement.FRONT -> R.string.editor_arrange_front
-                    WidgetArrangement.FORWARD -> R.string.editor_arrange_forward
-                    WidgetArrangement.BACKWARD -> R.string.editor_arrange_backward
-                    WidgetArrangement.BACK -> R.string.editor_arrange_back
-                }
-                FitButton(
-                    stringResource(label),
-                    { onArrange(action) },
-                    Modifier.weight(1f).widthIn(min = 140.dp),
-                    enabled = enabled && arrangementTarget(snapshot.widgets, widget.globalIndex, action) != null,
-                    style = FitButtonStyle.Secondary,
+            FitHeading(stringResource(R.string.editor_arrange), Modifier.align(Alignment.CenterVertically)) {
+                InfoText(stringResource(R.string.editor_arrange_boundaries))
+            }
+            // Its own scope, unlike the edits above: layer order is always one style's.
+            Text(
+                stringResource(R.string.editor_arrange_scope, variantLabel(snapshot.selectedVariant.basename)),
+                Modifier.align(Alignment.CenterVertically),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
+        val actions = WidgetArrangement.entries.reversed()
+        val words = actions.map { stringResource(it.shortLabel) }
+        val wordStyle = MaterialTheme.typography.labelMedium
+        val measurer = rememberTextMeasurer()
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val density = LocalDensity.current
+            val perRow = with(density) {
+                arrangeTilesPerRow(
+                    availablePx = constraints.maxWidth,
+                    widestWordPx = words.maxOf { measurer.measure(it, wordStyle).size.width },
+                    tilePaddingPx = (ArrangeTilePadding * 2).roundToPx(),
+                    gapPx = ArrangeTileGap.roundToPx(),
                 )
             }
+            Column(verticalArrangement = Arrangement.spacedBy(ArrangeTileGap)) {
+                actions.indices.chunked(perRow).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(ArrangeTileGap)) {
+                        row.forEach { i ->
+                            val action = actions[i]
+                            val description = stringResource(action.label)
+                            FitButton(
+                                onClick = { onArrange(action) },
+                                modifier = Modifier.weight(1f).semantics { contentDescription = description },
+                                enabled = enabled &&
+                                    arrangementTarget(snapshot.widgets, widget.globalIndex, action) != null,
+                                style = FitButtonStyle.Secondary,
+                                contentPadding = PaddingValues(horizontal = ArrangeTilePadding, vertical = 8.dp),
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                                ) {
+                                    NudgeArrow(
+                                        degrees = if (action.towardFront) 270f else 90f,
+                                        toEdge = action == WidgetArrangement.FRONT || action == WidgetArrangement.BACK,
+                                    )
+                                    // The tile's description already says it in full.
+                                    Text(
+                                        words[i],
+                                        Modifier.clearAndSetSemantics {},
+                                        style = wordStyle,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-        Text(
-            stringResource(R.string.editor_arrange_boundaries),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.fitText.secondary,
-        )
     }
 }
+
+/** Four tiles across when the widest word fits in each, otherwise two. */
+internal fun arrangeTilesPerRow(availablePx: Int, widestWordPx: Int, tilePaddingPx: Int, gapPx: Int): Int {
+    val fourAcross = (availablePx - gapPx * 3) / 4
+    return if (widestWordPx + tilePaddingPx <= fourAcross) 4 else 2
+}
+
+private val WidgetArrangement.towardFront: Boolean
+    get() = this == WidgetArrangement.FRONT || this == WidgetArrangement.FORWARD
+
+@get:StringRes
+private val WidgetArrangement.label: Int
+    get() = when (this) {
+        WidgetArrangement.FRONT -> R.string.editor_arrange_front
+        WidgetArrangement.FORWARD -> R.string.editor_arrange_forward
+        WidgetArrangement.BACKWARD -> R.string.editor_arrange_backward
+        WidgetArrangement.BACK -> R.string.editor_arrange_back
+    }
+
+@get:StringRes
+private val WidgetArrangement.shortLabel: Int
+    get() = when (this) {
+        WidgetArrangement.FRONT -> R.string.editor_arrange_front_short
+        WidgetArrangement.FORWARD -> R.string.editor_arrange_forward_short
+        WidgetArrangement.BACKWARD -> R.string.editor_arrange_backward_short
+        WidgetArrangement.BACK -> R.string.editor_arrange_back_short
+    }
+
+private val ArrangeTilePadding = 4.dp
+private val ArrangeTileGap = 8.dp

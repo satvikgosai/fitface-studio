@@ -45,7 +45,8 @@ claims must name the faces and operations verified; “not verified” is accept
 ## Review
 
 - Preserve [architecture invariants](docs/architecture.md#invariants), especially
-  `Session.validatedBytes()` as the only route to the watch.
+  `Session.validatedBytes()` as the only route to the watch for a face, and
+  `PhotoAlbumRequest` as the only one for photos.
 - For format edits, check [editing contracts](docs/bin-format.md#editing-contracts)
   and extend `CanvasIntegrityTest` when structural validation cannot catch the visual bug.
 - For UI changes, exercise the affected flow on an emulator, including errors,

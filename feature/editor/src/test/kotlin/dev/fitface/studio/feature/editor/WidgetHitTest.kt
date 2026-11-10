@@ -456,6 +456,77 @@ class WidgetHitTest {
         resizeKind = WidgetResizeKind.RASTER,
     )
 
+    /**
+     * A widget may hang past an edge (issue #14), but never so far that it cannot be tapped
+     * again: a tenth of it stays on the face, at least 10 px, and never more than itself.
+     */
+    @Test
+    fun theOffFaceMarginIsATenthButAtLeastTenPixels() {
+        assertEquals(10, offFaceKeepVisible(40))
+        assertEquals(10, offFaceKeepVisible(100))
+        assertEquals(20, offFaceKeepVisible(200))
+        assertEquals(25, offFaceKeepVisible(256))
+        assertEquals(10, offFaceKeepVisible(10))
+        assertEquals(6, offFaceKeepVisible(6))
+        assertEquals(0, offFaceKeepVisible(0))
+    }
+
+    @Test
+    fun aRelaxedClampLetsTheWidgetHangPastEitherEdge() {
+        val clamp = { proposed: Float ->
+            constrainDragCoordinate(proposed, starting = 100f, extent = 40, canvasExtent = 256, keepVisible = 16)
+        }
+        // 24 of 40 px may leave the face on the left, and on the right.
+        assertEquals(-24f, clamp(-500f))
+        assertEquals(240f, clamp(500f))
+        assertEquals(-10f, clamp(-10f))
+        // The default is the old window, whole widget on the face.
+        assertEquals(0f, constrainDragCoordinate(-500f, starting = 100f, extent = 40, canvasExtent = 256))
+    }
+
+    @Test
+    fun aRelaxedClampStillMeasuresTheDrawnRectangle() {
+        // A far-end Badge's rectangle starts a width before its stored point.
+        val clamp = { proposed: Float ->
+            constrainDragCoordinate(proposed, starting = 120f, extent = 40, canvasExtent = 256,
+                drawOffset = -40, keepVisible = 16)
+        }
+        assertEquals(16f, clamp(-500f))
+        assertEquals(280f, clamp(500f))
+    }
+
+    @Test
+    fun aDragPastTheRelaxedLimitStillComesBackUnderTheFinger() {
+        val step = { track: Float, delta: Float ->
+            stepDragAxis(track, delta, starting = 10f, extent = 40, canvasExtent = 402, keepVisible = 16)
+        }
+        var axis = step(10f, -100f)
+        assertEquals(-24f, axis.position)
+        assertEquals(-90f, axis.track)
+        axis = step(axis.track, 80f)
+        assertEquals(-10f, axis.position)
+    }
+
+    @Test
+    fun partlyOffFaceMeansTheDrawnRectangleCrossesAnEdge() {
+        assertTrue(isPartlyOffFace(guide(1, -5, 20, 40, 40), 256, 402))
+        assertTrue(isPartlyOffFace(guide(1, 230, 20, 40, 40), 256, 402))
+        assertTrue(isPartlyOffFace(guide(1, 20, 380, 40, 40), 256, 402))
+        assertEquals(false, isPartlyOffFace(guide(1, 0, 0, 40, 40), 256, 402))
+        assertEquals(false, isPartlyOffFace(guide(1, 216, 362, 40, 40), 256, 402))
+    }
+
+    /** The numbers Edit widget accepts are the drag clamp's, widened to where the widget is. */
+    @Test
+    fun aTypedPositionMayGoAsFarAsADrag() {
+        assertEquals(-30..246, placeableRange(guide(1, 20, 20, 40, 40), 256, horizontal = true))
+        assertEquals(-30..392, placeableRange(guide(1, 20, 20, 40, 40), 402, horizontal = false))
+        // Already further out than a drag may go: it can stay, or come back in.
+        assertEquals(-35..246, placeableRange(guide(1, -35, 20, 40, 40), 256, horizontal = true))
+        // A small widget keeps all of itself on.
+        assertEquals(0..246, placeableRange(guide(1, 20, 20, 10, 10), 256, horizontal = true))
+    }
+
     private fun guide(
         globalIndex: Int,
         x: Int,

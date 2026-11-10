@@ -281,6 +281,9 @@ class EditorSelectionSetTest {
         vm.removeSelection()
         settle()
         assertEquals(listOf(3, 2, 1), repository.removed)
+        // One undo takes the whole set back.
+        assertEquals(1, repository.groups.toSet().size)
+        assertNotNull(repository.groups.first())
         assertTrue(vm.state.value.snapshot!!.widgets.isEmpty())
         assertTrue(vm.state.value.multiSelection.isEmpty())
         assertEquals(3, vm.state.value.widgetRemovals)
@@ -355,13 +358,14 @@ class EditorSelectionSetTest {
     }
 
     /**
-     * As far as the most constrained member can go. A widget flush with the right edge
-     * cannot step right, so neither does the set — clamping each on its own would have let
-     * the other carry on and sheared the arrangement.
+     * As far as the most constrained member can go. A widget already as far past the right
+     * edge as it may go cannot step right, so neither does the set — clamping each on its
+     * own would have let the other carry on and sheared the arrangement.
      */
     @Test fun aMemberAtTheEdgeHoldsTheWholeSet() {
+        val rightLimit = PanelWidth - offFaceKeepVisible(40)
         val (vm, repository) = opened(listOf(
-            widget(1, x = 20, y = 20), widget(2, x = PanelWidth - 40, y = 120),
+            widget(1, x = 20, y = 20), widget(2, x = rightLimit, y = 120),
         ))
         vm.selectWidget(1)
         vm.toggleInSelection(2)
@@ -371,7 +375,7 @@ class EditorSelectionSetTest {
         vm.nudgeSelection(-5, 0)
         settle()
         assertEquals(listOf(15 to 20), repository.moves.getValue(1))
-        assertEquals(listOf(PanelWidth - 45 to 120), repository.moves.getValue(2))
+        assertEquals(listOf(rightLimit - 5 to 120), repository.moves.getValue(2))
     }
 
     /**
@@ -476,6 +480,8 @@ class EditorSelectionSetTest {
      */
     private class FakeRepository(private var current: EditorSnapshot) :
         WatchFaceRepository by mockk(relaxed = true) {
+        // Nothing opened ahead of the editor here: it opens the project itself.
+        override suspend fun openedProject(projectId: Long): EditorSnapshot? = null
         override suspend fun prepareReplacementImage(imageUri: String) =
             dev.fitface.studio.core.model.ReplacementImage(imageUri, current.preview)
         val reorders = mutableListOf<Pair<Int, Int>>()
@@ -504,6 +510,8 @@ class EditorSelectionSetTest {
         val duplicated = mutableListOf<Int>()
         val moves = mutableMapOf<Int, MutableList<Pair<Int, Int>>>()
         val moveScopes = mutableListOf<Boolean>()
+        /** The undo group of every commit, in order. */
+        val groups = mutableListOf<Long?>()
         var failOnCall: Int? = null
         /** When set, every move commit waits for it — the window a held arrow repeats in. */
         var parked: CompletableDeferred<Unit>? = null
@@ -526,10 +534,11 @@ class EditorSelectionSetTest {
 
         override suspend fun removeWidget(
             styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
-            x: Int, y: Int, requireFinal: Boolean, applyToAllStyles: Boolean,
+            x: Int, y: Int, requireFinal: Boolean, applyToAllStyles: Boolean, group: Long?,
         ): EditorSnapshot {
             identify(globalIndex, sequenceId)
             removed += globalIndex
+            groups += group
             current = current.copy(widgets = current.widgets.filter { it.globalIndex != globalIndex }.map {
                 if (it.globalIndex > globalIndex) it.copy(globalIndex = it.globalIndex - 1, ordinal = it.ordinal - 1) else it
             })
@@ -538,11 +547,12 @@ class EditorSelectionSetTest {
 
         override suspend fun duplicateWidget(
             styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
-            x: Int, y: Int, applyToAllStyles: Boolean,
+            x: Int, y: Int, applyToAllStyles: Boolean, group: Long?,
         ): EditorSnapshot {
             val source = identify(globalIndex, sequenceId)
             parkedDuplicate?.await()
             duplicated += globalIndex
+            groups += group
             val next = current.widgets.maxOf { it.globalIndex } + 1
             current = current.copy(widgets = current.widgets + source.copy(globalIndex = next, ordinal = next))
             return current
@@ -550,10 +560,11 @@ class EditorSelectionSetTest {
 
         override suspend fun moveWidget(
             styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
-            x: Int, y: Int, applyToAllStyles: Boolean,
+            x: Int, y: Int, applyToAllStyles: Boolean, group: Long?,
         ): EditorSnapshot {
             moves.getOrPut(globalIndex) { mutableListOf() }.add(x to y)
             moveScopes += applyToAllStyles
+            groups += group
             parked?.await()
             current = current.copy(widgets = current.widgets.map {
                 if (it.globalIndex == globalIndex) it.copy(x = x, y = y) else it

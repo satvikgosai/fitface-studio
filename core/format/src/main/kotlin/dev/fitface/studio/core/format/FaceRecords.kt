@@ -51,6 +51,14 @@ const val WIDGET_FIXED_SIZE = 36
 
 const val WIDGET_STATIC = 1
 const val WIDGET_ANIMATION = 4
+
+/**
+ * An Animation's `+0x1C..+0x1F`, which the firmware's constructor and timer never read, as
+ * "BKGD": this app's mark on a moving background whose frames cover less than the panel. A
+ * full-panel one needs none; its size says it is a background layer.
+ */
+const val ANIMATION_BACKGROUND_TAG_OFFSET = 0x1C
+const val ANIMATION_BACKGROUND_TAG = 0x44474B42L
 const val WIDGET_VECTOR_ARC = 6
 const val WIDGET_SOURCE_GROUP = 9
 const val WIDGET_HAND = 2
@@ -479,13 +487,36 @@ object FaceRecordParser {
      * alpha) and the other 67 compose over black, same as all of face `00022`'s
      * styles and `00108` styles 0–3. Where an entry does carry one it is raster 0 in
      * every observed container, so this keeps the previous behaviour for those faces.
+     *
+     * A moving background's frames are panel-sized too, and none of them is *the*
+     * background: replacing or tinting one frame would leave a flicker in the loop. Rasters
+     * that only an Animation draws are skipped, so a style with nothing but a moving
+     * background reads as having no still one. No catalogue face carries an Animation.
      */
     fun backgroundImage(entry: ContainerEntry): ImageRecord? {
         val panel = panelSize(entry)
         if (panel.width <= 0 || panel.height <= 0) return null
-        return scanImages(entry).firstOrNull {
-            it.width == panel.width && it.height == panel.height
+        val images = scanImages(entry)
+        val frames = animationOnlyImages(entry, images)
+        return images.firstOrNull {
+            it.width == panel.width && it.height == panel.height && it.recordOffset !in frames
         }
+    }
+
+    /** Whether [record] is an Animation carrying [ANIMATION_BACKGROUND_TAG]. */
+    fun isTaggedBackground(entry: ContainerEntry, record: WidgetRecord): Boolean =
+        record.widgetType == WIDGET_ANIMATION && record.recordSize >= ANIMATION_BACKGROUND_TAG_OFFSET + 4 &&
+            entry.data.u32(record.recordOffset + ANIMATION_BACKGROUND_TAG_OFFSET) == ANIMATION_BACKGROUND_TAG
+
+    /** Record offsets of the rasters an Animation draws and nothing else does. */
+    private fun animationOnlyImages(entry: ContainerEntry, images: List<ImageRecord>): Set<Int> {
+        if (images.isEmpty()) return emptySet()
+        val records = runCatching { scanWidgets(entry) }.getOrDefault(emptyList())
+        if (records.none { it.widgetType == WIDGET_ANIMATION }) return emptySet()
+        val byOffset = images.associateBy { (it.recordOffset - images.first().recordOffset).toLong() }
+        val (animations, others) = records.partition { it.widgetType == WIDGET_ANIMATION }
+        fun drawnBy(group: List<WidgetRecord>) = group.flatMap { referencedImages(it, byOffset) }.map { it.recordOffset }.toSet()
+        return drawnBy(animations) - drawnBy(others)
     }
 
     /**
@@ -937,6 +968,9 @@ object FaceRecordParser {
             val drawOffsetY = extent.offsetY
             val placement = when {
                 paintsBackground -> WidgetPlacement.BACKGROUND
+                // A moving background stored at the rectangle it covers: under every widget, so
+                // a background layer, whatever its size.
+                isTaggedBackground(entry, it) && visualWidth > 0 && visualHeight > 0 -> WidgetPlacement.BACKGROUND
                 // The watch rotates a Hand about the pivot in its `+0x20`, so its
                 // artwork bounds are not where it appears. Reporting the size is
                 // useful; outlining a rectangle there would be a lie.
@@ -949,9 +983,14 @@ object FaceRecordParser {
                 // one-way door: the resize ladder tops out at 512 px a side, so growing a
                 // 400x400 vector arc used to relabel it as the background, after which it
                 // could be neither selected nor resized back.
+                //
+                // Exactly the panel, not "at least": all 388 background layers in the
+                // catalogue are exactly 256 × 402. Larger artwork is a widget turned or
+                // added past the edges — a 200 × 400 picture turned to 45° is 424 × 424 —
+                // and calling it the background was the same one-way door again.
                 referencedImages.isNotEmpty() && panel.width > 0 &&
-                    visualWidth >= panel.width &&
-                    visualHeight >= panel.height -> WidgetPlacement.BACKGROUND
+                    visualWidth == panel.width &&
+                    visualHeight == panel.height -> WidgetPlacement.BACKGROUND
                 else -> WidgetPlacement.CANVAS
             }
             // Plain RGB565 frames carry no alpha, so the watch paints the whole

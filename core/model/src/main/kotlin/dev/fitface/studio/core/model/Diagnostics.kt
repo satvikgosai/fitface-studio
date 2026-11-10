@@ -159,6 +159,19 @@ fun Throwable.diagnosticSummary(): String = buildString {
         }
 }
 
+/**
+ * What the crash file holds: the crash, then the log leading up to it.
+ *
+ * Scrubbed like everything else on its way in. The file sits in private storage until the
+ * next launch offers it, and "scrubbing happens on the way into the log" has to hold for this
+ * copy too, or a path or address in an exception message waits on disk to be pasted.
+ */
+fun crashFileText(error: Throwable, entries: List<DiagnosticsEntry>): String = buildString {
+    appendLine("crash=${DiagnosticsRedaction.scrub(error.diagnosticSummary())}")
+    val origin = entries.firstOrNull()?.atEpochMillis ?: 0L
+    entries.forEach { appendLine(it.render(origin)) }
+}
+
 private const val AppPackage = "dev.fitface.studio"
 private const val MaxCauseDepth = 3
 private const val MaxFrames = 6

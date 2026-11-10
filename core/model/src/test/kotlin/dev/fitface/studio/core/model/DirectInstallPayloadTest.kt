@@ -42,4 +42,24 @@ class DirectInstallPayloadTest {
             )
         }
     }
+
+    @Test
+    fun acceptsTheFullRangeTheInstallCommandCarries() {
+        listOf(1 to 0, 6 to 9, 255 to 0).forEach { (face, sampler) ->
+            DirectInstallPayload.create(face, sampler, "SM-R390_%05d_256x402.bin".format(face), byteArrayOf(1))
+        }
+    }
+
+    @Test
+    fun rejectsFaceZeroAndSamplersPastTheTenthStyle() {
+        assertThrows(IllegalArgumentException::class.java) {
+            DirectInstallPayload.create(0, 0, "SM-R390_00000_256x402.bin", byteArrayOf(1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            DirectInstallPayload.create(256, 0, "SM-R390_00256_256x402.bin", byteArrayOf(1))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            DirectInstallPayload.create(46, WATCH_MAX_STYLES, "SM-R390_00046_256x402.bin", byteArrayOf(1))
+        }
+    }
 }
