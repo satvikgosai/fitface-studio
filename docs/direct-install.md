@@ -110,16 +110,37 @@ and a one-second pause:
 | Before the photos | get-edit-info (6) | `06 04 FE` |
 | Each photo | the transfer above | |
 | After them | add-image-list (11) | `0B 04 FE 1B <n> (1C <len> <name>)…` |
-| | set-edit-info (7) | `07 18 02 04 FE 1B <n> (13 <len> <name> 1F <selected>)…` |
+| | set-edit-info (7) | `07 18 <2 or 4> 04 FE 1B <n> (13 <len> <name> 1F <selected>)… [0D <style> 1E <colour>]` |
 | | set-current-face (3) | `03 04 FE 1D 00` |
 | A removal instead | delete-image-list (12), then set-edit-info | `8C 04 FE 1B <n> (1C <len> <name>)…` |
 | After a failure in between | cancel-edit-info (8), best effort | `08 04 FE` |
 
 The set-edit-info list is every background the face shows afterwards: its preloaded ones
-first, then this app's photos, with the first new photo selected. The plugin also sends
-`0D <clock type>` and `1E <clock colour>`, because its own bundled copy of the face's settings
-lists them; the store package lists the background alone, so this app sends only that and
-leaves the clock as the watch has it. Whether the watch accepts that shorter message is T9b.
+first, then this app's photos, with the one being placed on Background selected. The clock follows in every
+set-edit-info, as `0D <clock type>` and `1E <clock colour>`, the order the plugin's
+`SetEditInfoRequestBuilder` writes them for the face's settings, and `18` counts 4 (face ID and
+three settings). A set-edit-info with the background alone (`18` = 2) left the watch drawing
+no clock, so the clock is left out only when **No clock**, the last choice on **Styles**, is
+chosen. Otherwise the clock sent is the one chosen on the Photos page (style on **Styles**,
+colour on **Canvas**), else the one last sent, else the plugin's default, else the face's own,
+type 1 and colour 1. A send with no clock is recorded as that, so later requests leave it out
+too until a style is chosen. Whether the watch takes these requests is T9b and T9h.
+
+The clock's options are not in the store package, which lists the background alone. They are
+read at run time from the stock plugin installed on the phone (`PluginPhotoClockSource`),
+found by its package name whatever its version: its APK carries its own copy of the face's
+settings, `info.json` in a folder named after the face (in 2.2.14,
+`assets/watchface/SM_R390/SM-R390_00254_256x402/`), with `clock_type` (IDs 1 and 2, each with a
+picture) and `clock_color` (IDs 1–57, each `#AARRGGBB`), and the pictures under the folder
+`info.json` names (`clocktype/`, in 2.2.14 under `assets/watchface/customize/`). Nothing is
+read by a fixed path: the asset folders are walked a few levels deep, and the face's folder is
+whichever holds an `info.json` that declares the face. Each picture has a copy per language
+(`_EN`, `_KR`, `_PR`, `_CN_Simplified`, `_CN_Traditional`), chosen as the plugin's
+`BandFaceUtils.getCountryImageFilepath` chooses, then English, then any. Nothing read is
+bundled or stored; only the IDs last sent are recorded. Without the plugin, or with options it
+no longer lists, no clock can be chosen, and the one last sent, else the face's own, still goes. The plugin's get-edit-info reply would
+carry the watch's current clock, but it goes to the plugin, so the app knows only the clock it
+last sent.
 
 Replies go to the plugin's component, as install replies do. If one reaches this app it is
 recorded and read: add-image-list `4B 04 FE 1A <status> …` (1 success, 2 too many photos,
@@ -133,14 +154,19 @@ Galaxy Wearable cannot be seen here, so the watch may still refuse with status 2
 written once the closing commands are handed over, which, as for faces, is the most the app can
 know.
 
-Other requests use the same commands:
+There is one send. It is worked out from the album as arranged on Background against what this
+phone last sent, so the request takes whichever of these shapes the changes need:
 
-| Request | Transfer | Closing commands |
+| Changes | Transfer | Closing commands |
 | --- | --- | --- |
-| Show another sent photo | none | set-edit-info, set-current-face |
-| Change a sent photo (placed again from its kept original) | the new PNG | add-image-list (new), delete-image-list (old), set-edit-info, set-current-face |
-| Remove one, or all | none | delete-image-list, set-edit-info |
-| Send them all again | every kept PNG, unchanged | add-image-list, set-edit-info, set-current-face |
+| Another sent photo shown, or only the clock | none | set-edit-info, set-current-face |
+| New photos, or a sent one placed again (from its kept original, in its own place) | the new PNGs | add-image-list (new), delete-image-list (replaced or taken off, if any), set-edit-info, set-current-face |
+| Photos taken off and nothing added | none | delete-image-list, set-edit-info |
+
+A sent photo brought back to Background but not moved is not sent again.
+
+Every request carries the clock, or leaves it out for **No clock**; one chosen and not sent yet
+goes with whichever is sent next.
 
 ## Channel handover
 

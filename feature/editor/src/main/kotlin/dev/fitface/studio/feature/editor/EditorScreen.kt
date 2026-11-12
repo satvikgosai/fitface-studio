@@ -4830,27 +4830,16 @@ internal fun DirectWatchCanvas(
  * is, and it is fail-closed — but it is the one that makes having seen the render a
  * precondition for sending it, which is the whole reason the flag exists.
  */
+
+/**
+ * A note, not a wall. This used to replace the whole checklist whenever a package probe came
+ * up short, which is how a phone with the watch paired, connected and holding a live accessory
+ * session was told direct install was unavailable — with no way forward on the screen. What is
+ * installed cannot answer that question, so it is said once, in passing, and the checklist
+ * below stays usable. Shared by every page that sends to the watch.
+ */
 @Composable
-private fun ColumnScope.WatchSection(
-    state: EditorUiState,
-    snapshot: EditorSnapshot,
-    canSend: Boolean,
-    onGrantNearby: () -> Unit,
-    onOpenCompanion: () -> Unit,
-    onInitializeAndDiscover: () -> Unit,
-    onOpenPluginSettings: () -> Unit,
-    onConfirmPluginReleased: () -> Unit,
-    onRediscover: () -> Unit,
-    onSendBin: () -> Unit,
-    onReset: () -> Unit,
-    onCanvas: () -> Unit,
-) {
-    val delivery = state.directInstall
-    // A note, not a wall. This used to replace the whole checklist whenever a package
-    // probe came up short, which is how a phone with the watch paired, connected and
-    // holding a live accessory session was told direct install was unavailable — with
-    // no way forward on the screen. What is installed cannot answer that question, so
-    // it is said once, in passing, and the checklist below stays usable.
+internal fun EnvironmentAdvisoryBanner(delivery: DirectInstallState) {
     delivery.environment.advisory?.let { advisory ->
         val (short, full) = when (advisory) {
             EnvironmentAdvisory.FRAMEWORK_MISSING ->
@@ -4867,6 +4856,25 @@ private fun ColumnScope.WatchSection(
             info = { InfoText(stringResource(full)) },
         )
     }
+}
+
+@Composable
+private fun ColumnScope.WatchSection(
+    state: EditorUiState,
+    snapshot: EditorSnapshot,
+    canSend: Boolean,
+    onGrantNearby: () -> Unit,
+    onOpenCompanion: () -> Unit,
+    onInitializeAndDiscover: () -> Unit,
+    onOpenPluginSettings: () -> Unit,
+    onConfirmPluginReleased: () -> Unit,
+    onRediscover: () -> Unit,
+    onSendBin: () -> Unit,
+    onReset: () -> Unit,
+    onCanvas: () -> Unit,
+) {
+    val delivery = state.directInstall
+    EnvironmentAdvisoryBanner(delivery)
 
     run {
         // A rewound setup shows the checklist, which says what to do next but not

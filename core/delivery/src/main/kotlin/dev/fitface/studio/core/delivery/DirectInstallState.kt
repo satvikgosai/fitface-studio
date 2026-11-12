@@ -88,7 +88,7 @@ data class AlbumProgress(
     val bytesSent: Int = 0,
     /** Only deletes photos. */
     val removing: Boolean = false,
-    /** Only changes which photo is shown. */
+    /** Only changes which photo is shown, or the clock. */
     val showing: Boolean = false,
 )
 

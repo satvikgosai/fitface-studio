@@ -89,7 +89,11 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         entry<PhotosDestination> {
-                            PhotoAlbumRoute(onBack = { popSafely(1) })
+                            PhotoAlbumRoute(
+                                onBack = { popSafely(1) },
+                                onAbout = { menuRequest = AppMenuRequest.About },
+                                onCheckForUpdate = { menuRequest = AppMenuRequest.Update },
+                            )
                         }
                     },
                 )

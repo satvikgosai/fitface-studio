@@ -19,14 +19,15 @@ import org.junit.Test
 class LibraryDerivedStateTest {
     // -- Photos face ----------------------------------------------------------
 
-    /** Not offered yet: the Photos face is an ordinary face in the catalogue, with no card or badge. */
+    /** Face 00254 is the Photos face: it gets the badge and Send photos to it, no other face does. */
     @Test
-    fun thePhotosFaceIsNotOfferedYet() {
+    fun thePhotosFaceIsOfferedWhenTheCatalogueHasIt() {
         val photos = face("Photos", "00254", "Your photos")
         val state = LibraryUiState(faces = faces + photos)
-        assertFalse(PHOTOS_FACE_OFFERED)
-        assertEquals(null, state.photosFace)
-        assertFalse(state.takesPhotos(photos))
+        assertEquals(photos, state.photosFace)
+        assertTrue(state.takesPhotos(photos))
+        assertFalse(faces.any(state::takesPhotos))
+        assertEquals(null, LibraryUiState(faces = faces).photosFace)
     }
 
     // -- Catalogue search ---------------------------------------------------

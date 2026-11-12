@@ -16,6 +16,86 @@ const val ALBUM_PHOTO_HEIGHT = 402
 const val MAX_ALBUM_PHOTO_BYTES = 512 * 1024
 
 /**
+ * The stock watch plugin's package. Found by this name alone, whatever its version: what the
+ * app reads from it is looked for, never assumed to be where one version kept it.
+ */
+const val FIT3_PLUGIN_PACKAGE = "com.samsung.wearable.fit3plugin"
+
+/**
+ * The Photos face's clock as the watch takes it: the option IDs of its clock type and colour,
+ * from the stock plugin's own copy of the face's settings.
+ */
+data class PhotoClock(val type: Int, val colour: Int) {
+    init {
+        require(type in 1..255 && colour in 1..255) { "Clock options are 1 to 255" }
+    }
+
+    companion object {
+        /**
+         * The face's own clock, as its `info.json` selects it: type 1, colour 1 (white). Sent when
+         * nothing else is known, because a send without a clock leaves the watch drawing none.
+         */
+        val FACE_DEFAULT = PhotoClock(1, 1)
+    }
+}
+
+/**
+ * What a send leaves the Photos face's clock as: [Drawn] in a type and colour, or [None]. A
+ * request for no clock leaves the clock's settings out, and the watch then draws none.
+ */
+sealed interface PhotoClockSetting {
+    /** The clock to put in a request: the one drawn, or null for none. */
+    val clock: PhotoClock?
+
+    data object None : PhotoClockSetting {
+        override val clock: PhotoClock? get() = null
+    }
+
+    data class Drawn(override val clock: PhotoClock) : PhotoClockSetting
+}
+
+/**
+ * One clock type, with the picture the stock plugin shows for it in the phone's language:
+ * the clock drawn white on clear at the face's proportions, or null when none could be read.
+ */
+class PhotoClockType(val id: Int, val picture: PreviewFrame?)
+
+/** One clock colour the watch offers, as `0xAARRGGBB`. */
+data class PhotoClockColour(val id: Int, val argb: Int)
+
+/**
+ * The clock options the Photos face offers, as the stock plugin installed on this phone lists
+ * them, and the ones it starts from. Null wherever they could not be read: the clock is then
+ * left as the watch has it.
+ */
+class PhotoClockOptions(
+    val types: List<PhotoClockType>,
+    val colours: List<PhotoClockColour>,
+    val default: PhotoClock,
+) {
+    init {
+        require(types.isNotEmpty() && colours.isNotEmpty()) { "No clock options" }
+        require(types.map { it.id }.distinct().size == types.size && colours.map { it.id }.distinct().size == colours.size) {
+            "A clock option is listed twice"
+        }
+        require(accepts(default)) { "The default clock is not among the options" }
+    }
+
+    fun accepts(clock: PhotoClock): Boolean =
+        types.any { it.id == clock.type } && colours.any { it.id == clock.colour }
+
+    fun type(id: Int): PhotoClockType? = types.firstOrNull { it.id == id }
+
+    fun colour(id: Int): PhotoClockColour? = colours.firstOrNull { it.id == id }
+}
+
+/** Reads the Photos face's clock options from the stock plugin installed on this phone. */
+interface PhotoClockSource {
+    /** The options for [faceId], or null when the plugin is missing or does not list them. */
+    suspend fun options(faceId: Int): PhotoClockOptions?
+}
+
+/**
  * The Photos face as its package declares it: its ID, and its own backgrounds, which every
  * background list sent to it starts with.
  */
@@ -39,8 +119,19 @@ data class SentPhoto(val name: String, val preview: PreviewFrame?, val placement
  * and not removed, in the order the face lists them, and which one it was last asked to show.
  * Photos sent from Galaxy Wearable cannot be listed here; the watch's reply that would name
  * them goes to the stock plugin.
+ *
+ * @param clock the clock this app last sent, [PhotoClockSetting.None] if it sent the face with
+ *   no clock, or null if it never sent one: the watch's own is then unknown here, as Galaxy
+ *   Wearable may have changed it.
+ * @param clockOptions what the clock can be, or null when the stock plugin could not be read.
  */
-data class PhotoAlbum(val face: PhotoAlbumFace, val sent: List<SentPhoto>, val shown: String? = null) {
+data class PhotoAlbum(
+    val face: PhotoAlbumFace,
+    val sent: List<SentPhoto>,
+    val shown: String? = null,
+    val clock: PhotoClockSetting? = null,
+    val clockOptions: PhotoClockOptions? = null,
+) {
     val names: List<String> get() = sent.map { it.name }
     val room: Int get() = (PHOTO_ALBUM_LIMIT - sent.size).coerceAtLeast(0)
 }
@@ -55,6 +146,18 @@ data class PhotoAlbum(val face: PhotoAlbumFace, val sent: List<SentPhoto>, val s
  * @param replaces the sent photo it takes the place of, or null for a new one.
  */
 class DraftPhoto(val key: String, val source: PreviewFrame, val placement: ImagePlacement, val replaces: String?)
+
+/**
+ * The album as the user has arranged it and not sent: [photos] picked or placed again, the sent
+ * photos [takenOut] of it, and the one to be [shown], a sent photo's name or a draft photo's key.
+ */
+class PhotoDraft(
+    val photos: List<DraftPhoto> = emptyList(),
+    val takenOut: List<String> = emptyList(),
+    val shown: String? = null,
+) {
+    val isEmpty: Boolean get() = photos.isEmpty() && takenOut.isEmpty() && shown == null
+}
 
 /**
  * A photo to keep once the request that adds it has been handed over: the PNG as sent, the
@@ -87,23 +190,30 @@ interface PhotoAlbumRepository {
     /** A sent photo exactly as it was sent, to send again, or null if no copy is kept. */
     suspend fun keptPhoto(faceId: Int, name: String): AlbumPhoto?
 
-    /** The photos picked and placed but not sent, as last saved; empty when there are none. */
-    suspend fun draft(faceId: Int): List<DraftPhoto>
+    /** The album as arranged and not sent, as last saved; empty when there is none. */
+    suspend fun draft(faceId: Int): PhotoDraft
 
     /**
      * Saves the draft as it now stands, replacing the last one; empty clears it. Returns at once
      * and writes in the background, latest last, so a page that is closing still gets its last
      * change saved.
      */
-    fun saveDraft(faceId: Int, photos: List<DraftPhoto>)
+    fun saveDraft(faceId: Int, draft: PhotoDraft)
 
     /**
      * Records the album a request has been handed over for: its photos in order, the one shown,
-     * and copies of the photos it added. Copies of photos no longer listed are deleted.
+     * the clock it left the face with, and copies of the photos it added. Copies of photos no
+     * longer listed are deleted; a null [clock] keeps the one recorded.
      *
      * @return the album's photos as now kept.
      */
-    suspend fun recordAlbum(faceId: Int, sent: List<String>, shown: String?, keep: List<KeptPhoto> = emptyList()): List<SentPhoto>
+    suspend fun recordAlbum(
+        faceId: Int,
+        sent: List<String>,
+        shown: String?,
+        keep: List<KeptPhoto> = emptyList(),
+        clock: PhotoClockSetting? = null,
+    ): List<SentPhoto>
 }
 
 /**
@@ -156,8 +266,8 @@ class AlbumPhoto(bytes: ByteArray) : WatchFile {
  *
  * [photos] are added and [removed] names deleted; a photo placed again is both, its new PNG
  * added and its old one deleted. With neither, the request only changes which photo the face
- * shows. Afterwards the face lists [preloaded] then [album] as its backgrounds and shows
- * [selected].
+ * shows, or its [clock]. Afterwards the face lists [preloaded] then [album] as its backgrounds
+ * and shows [selected], with [clock] if one is given and no clock otherwise.
  */
 class PhotoAlbumRequest(
     val faceId: Int,
@@ -170,6 +280,8 @@ class PhotoAlbumRequest(
     /** Photos to delete, none of which is in [album]. */
     val removed: List<String> = emptyList(),
     val selected: String,
+    /** The clock to set, or null for none: without its settings the watch draws no clock. */
+    val clock: PhotoClock? = null,
 ) {
     init {
         require(faceId in 1..255) { "Face ID must be 1 to 255" }

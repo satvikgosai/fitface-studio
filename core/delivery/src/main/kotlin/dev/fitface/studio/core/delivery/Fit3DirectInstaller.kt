@@ -13,6 +13,7 @@ import com.samsung.android.sdk.accessory.SAPeerAgent
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.model.AlbumPhoto
 import dev.fitface.studio.core.model.DirectInstallPayload
+import dev.fitface.studio.core.model.FIT3_PLUGIN_PACKAGE
 import dev.fitface.studio.core.model.PhotoAlbumRequest
 import dev.fitface.studio.core.model.WatchFile
 import javax.inject.Inject
@@ -1141,7 +1142,7 @@ class Fit3DirectInstaller @Inject constructor(
     }
 
     private companion object {
-        const val PLUGIN_PACKAGE = "com.samsung.wearable.fit3plugin"
+        const val PLUGIN_PACKAGE = FIT3_PLUGIN_PACKAGE
         const val ACCESSORY_FRAMEWORK_PACKAGE = "com.samsung.accessory"
         const val ACCESSORY_REGISTER_AGENT_ACTION = "com.samsung.accessory.action.REGISTER_AGENT"
         const val VENDOR_PACKAGE_PREFIX = "com.samsung."

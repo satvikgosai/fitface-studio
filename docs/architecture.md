@@ -126,9 +126,9 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state and original widget identities; the row names the committed file, and the open session's undo and redo steps name the others |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
-| `filesDir/photo-album/<face>/album.json` | The photos this app has sent the Photos face and not removed, in order, where each was placed and in what colour, and the one shown |
+| `filesDir/photo-album/<face>/album.json` | The photos this app has sent the Photos face and not removed, in order, where each was placed and in what colour, the one shown, and the clock style and colour IDs last sent (absent until one is), and whether the last send left the clock out |
 | `filesDir/photo-album/<face>/<md5>.png`, `<md5>.source.jpg` | Each sent photo exactly as sent, and the reduced original (at most 1,024 px a side) it was drawn from; deleted when the photo is removed or replaced |
-| `filesDir/photo-album/<face>/draft/` | Photos picked or being changed and not sent yet: `draft.json` (order, placement, colour, the sent photo each replaces) and each one's reduced original, `<key>.jpg`; saved once changes settle and when the page closes, written on the repository's own scope so a closing page still gets its last change, cleared when they are sent or taken out |
+| `filesDir/photo-album/<face>/draft/` | The album as arranged and not sent yet: `draft.json` (photos picked or brought back, in order, with placement, colour and the sent photo each replaces; sent photos taken off; the one chosen to show) and each photo's reduced original, `<key>.jpg`; saved once changes settle and when the page closes, written on the repository's own scope so a closing page still gets its last change, cleared once sent |
 | `filesDir/datastore/photo_album.preferences_pb` | The same photos' names alone: the only record before copies were kept, still written so an older build sees the same album |
 
 The Photos face is not a project. `PhotoAlbumRepository` reads it from its catalogue

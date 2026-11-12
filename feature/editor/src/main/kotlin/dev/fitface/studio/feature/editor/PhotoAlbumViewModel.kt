@@ -3,10 +3,12 @@ package dev.fitface.studio.feature.editor
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.fitface.studio.core.data.DiagnosticsReporter
 import dev.fitface.studio.core.delivery.DirectInstallPhase
 import dev.fitface.studio.core.delivery.DirectInstallState
 import dev.fitface.studio.core.delivery.Fit3DirectInstaller
 import dev.fitface.studio.core.model.DiagnosticsLog
+import dev.fitface.studio.core.model.DiagnosticsSection
 import dev.fitface.studio.core.model.FaceCatalogRepository
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.DraftPhoto
@@ -17,6 +19,10 @@ import dev.fitface.studio.core.model.PHOTO_ALBUM_FACE_ID
 import dev.fitface.studio.core.model.PhotoAlbum
 import dev.fitface.studio.core.model.PhotoAlbumRepository
 import dev.fitface.studio.core.model.PhotoAlbumRequest
+import dev.fitface.studio.core.model.PhotoClock
+import dev.fitface.studio.core.model.PhotoClockSetting
+import dev.fitface.studio.core.model.PhotoDraft
+import dev.fitface.studio.core.model.PHOTO_ALBUM_LIMIT
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.UserMessage
 import dev.fitface.studio.core.model.WatchFaceException
@@ -48,6 +54,46 @@ data class PendingPhoto(
     val key: String = UUID.randomUUID().toString(),
 )
 
+/**
+ * One photo of the album as it will be once sent: one already on the watch, or a new one.
+ * [key] is the sent photo's name, or a new photo's [PendingPhoto.key].
+ */
+data class AlbumEntry(
+    /** The photo on the watch this is, or null for a new one. */
+    val sent: SentPhoto?,
+    /** Its placing here: a new photo, or a sent one brought back from its kept original. */
+    val pending: PendingPhoto?,
+) {
+    val key: String get() = sent?.name ?: pending!!.key
+
+    val isNew: Boolean get() = sent == null
+
+    /** A sent photo placed differently from how it went: it goes again, in its own place. */
+    val isChanged: Boolean
+        get() = sent != null && pending != null && pending.placement != sent.placement
+
+    /**
+     * What the face draws for it: its placing, else the sent photo as it went (made at the face's
+     * size, so stretching it is drawing it as it is), else nothing for one with no copy kept.
+     */
+    fun drawn(id: Long): PendingPhoto? = pending
+        ?: sent?.preview?.let { PendingPhoto(id, null, it, ImagePlacement(fit = ImageFit.STRETCH)) }
+}
+
+/**
+ * A photo just taken out of the album, kept so it can be put back: a new one with its placing, or
+ * a sent one with the placing it had been given; [id] tells one taking-out from the next.
+ */
+data class TakenOut(
+    val id: Long,
+    val key: String,
+    val pending: PendingPhoto?,
+    val sent: String?,
+    val wasShown: Boolean,
+    /** Where it stood among the new photos, so a new one goes back in its place. */
+    val index: Int,
+)
+
 data class PhotoAlbumUiState(
     /** Reading the Photos face's package, which may mean downloading it first. */
     val loading: Boolean = true,
@@ -55,34 +101,99 @@ data class PhotoAlbumUiState(
     val album: PhotoAlbum? = null,
     /** Why the face could not be read; the page offers a retry. */
     val loadFailure: String? = null,
+    /** New photos, and sent ones brought back to be placed; see [entries]. */
     val photos: List<PendingPhoto> = emptyList(),
-    /** The [PendingPhoto.id] being placed. */
-    val selectedId: Long? = null,
+    /** Sent photos taken out, which the next send asks the watch to delete. */
+    val takenOut: Set<String> = emptySet(),
+    /** The [AlbumEntry.key] being placed, which is the one the face will show; see [shownEntry]. */
+    val shown: String? = null,
     /** Encoding the photos before the send starts. */
     val preparing: Boolean = false,
     val directInstall: DirectInstallState = DirectInstallState(),
     val error: UserMessage? = null,
     /** Shown once after picking more photos than the face has room for. */
     val dropped: Int = 0,
-    /** The sent photo chosen on Install, which its actions act on. */
-    val chosenSent: String? = null,
+    /**
+     * The clock chosen here and not sent yet, or null for the one [clockSetting] falls back to.
+     * Sending clears it.
+     */
+    val clockChoice: PhotoClockSetting? = null,
+    /** The request in flight, or the last one, sends only the clock. */
+    val clockOnly: Boolean = false,
+    /** The app menu's problem report, while it is open. */
+    val diagnosticsReport: String? = null,
+    /** The photo last taken out, offered back once; see [PhotoAlbumViewModel.putBack]. */
+    val takenOutLast: TakenOut? = null,
 ) {
-    val selected: PendingPhoto?
-        get() = photos.firstOrNull { it.id == selectedId } ?: photos.firstOrNull()
+    /**
+     * The album as it will be once sent, in the face's order: the sent photos not taken out, each
+     * with its placing if it was brought back, then the new ones.
+     */
+    val entries: List<AlbumEntry>
+        get() {
+            val album = album ?: return emptyList()
+            val placing = photos.filter { it.replaces != null }.associateBy { it.replaces }
+            return album.sent.filter { it.name !in takenOut }.map { AlbumEntry(it, placing[it.name]) } +
+                photos.filter { it.replaces == null }.map { AlbumEntry(null, it) }
+        }
 
     /**
-     * How many more photos may be picked: the face's room less the new ones already picked. A
-     * sent photo placed again takes its own place.
+     * The photo being placed, which is the one the face will show: the one chosen, else the one
+     * it shows now, else the first; null with no photos, when the face shows its own background.
      */
-    val room: Int
-        get() = ((album?.room ?: 0) - photos.count { it.replaces == null }).coerceAtLeast(0)
+    val shownEntry: AlbumEntry?
+        get() {
+            val entries = entries
+            return entries.firstOrNull { it.key == shown }
+                ?: entries.firstOrNull { it.key == album?.shown }
+                ?: entries.firstOrNull()
+        }
 
-    /** The picked photo the face will show once sent: the first new one. */
-    val shownPick: Long?
-        get() = photos.firstOrNull { it.replaces == null }?.id
+    /** The photo being placed, when it can be: a new one, or a sent one brought back. */
+    val selected: PendingPhoto?
+        get() = shownEntry?.pending
+
+    /** How many more photos may be picked. */
+    val room: Int
+        get() = (PHOTO_ALBUM_LIMIT - entries.size).coerceAtLeast(0)
+
+    val added: Int get() = entries.count { it.isNew }
+
+    val changed: Int get() = entries.count { it.isChanged }
+
+    val removed: Int get() = album?.let { album -> takenOut.count { it in album.names } } ?: 0
+
+    /** The face will show something other than it shows now. */
+    val showsOther: Boolean
+        get() {
+            val album = album ?: return false
+            val entry = shownEntry ?: return album.shown != null
+            return entry.isNew || entry.isChanged || entry.key != album.shown
+        }
 
     val busy: Boolean
         get() = loading || preparing || directInstall.isActive
+
+    /**
+     * The clock every request leaves the face with: the one chosen, else the one last sent, else
+     * the plugin's default, else the face's. A send without a clock leaves the watch drawing
+     * none, so that is only ever [PhotoClockSetting.None] chosen. Null only before the album is read.
+     */
+    val clockSetting: PhotoClockSetting?
+        get() {
+            val album = album ?: return null
+            return clockChoice
+                ?: album.clock?.takeIf { it.clock?.let { clock -> album.clockOptions?.accepts(clock) } != false }
+                ?: PhotoClockSetting.Drawn(album.clockOptions?.default ?: PhotoClock.FACE_DEFAULT)
+        }
+
+    /** The clock drawn, as requests carry it; null for none, or before the album is read. */
+    val clock: PhotoClock?
+        get() = clockSetting?.clock
+
+    /** The album or its clock differs from what was sent, so there is something to send. */
+    val canSend: Boolean
+        get() = added > 0 || changed > 0 || removed > 0 || showsOther || clockChoice != null
 }
 
 /**
@@ -98,6 +209,7 @@ class PhotoAlbumViewModel @Inject constructor(
     private val catalog: FaceCatalogRepository,
     private val directInstaller: Fit3DirectInstaller,
     private val diagnostics: DiagnosticsLog,
+    private val reporter: DiagnosticsReporter,
 ) : ViewModel() {
     private val mutable = MutableStateFlow(PhotoAlbumUiState())
     val state: StateFlow<PhotoAlbumUiState> = mutable.asStateFlow()
@@ -110,8 +222,14 @@ class PhotoAlbumViewModel @Inject constructor(
         val sent: List<String>,
         val shown: String?,
         val keep: List<KeptPhoto>,
-        /** The picks went with it, so they are no longer waiting to go. */
-        val sendsPicks: Boolean,
+        /** The clock it leaves the face with. */
+        val clock: PhotoClockSetting? = null,
+        /** Sends only the clock. */
+        val clockOnly: Boolean = false,
+        /** The arrangement it sent: its photos' keys, the ones taken out and the one chosen to show. */
+        val photoKeys: Set<String> = emptySet(),
+        val takenOut: Set<String> = emptySet(),
+        val shownKey: String? = null,
     )
 
     @Volatile
@@ -154,19 +272,23 @@ class PhotoAlbumViewModel @Inject constructor(
                 val album = repository.album(face) { progress ->
                     mutable.update { it.copy(downloadFraction = progress.fraction) }
                 }
-                // What was picked and placed last time and not sent, back where it was. A change
-                // of a photo no longer on the watch has nothing left to replace.
-                val restored = if (mutable.value.photos.isEmpty()) {
+                // The album as arranged last time and not sent, back as it was. A photo no longer
+                // on the watch has nothing left to place again or take out.
+                val draft = if (mutable.value.photos.isEmpty() && mutable.value.takenOut.isEmpty()) {
                     repository.draft(album.face.faceId)
-                        .filter { it.replaces == null || it.replaces in album.names }
-                        .map { PendingPhoto(ids.incrementAndGet(), null, it.source, it.placement, it.replaces, it.key) }
                 } else {
-                    emptyList()
+                    null
                 }
+                val takenOut = draft?.takenOut.orEmpty().filter { it in album.names }.toSet()
+                val restored = draft?.photos.orEmpty()
+                    .filter { it.replaces == null || it.replaces in album.names && it.replaces !in takenOut }
+                    .map { PendingPhoto(ids.incrementAndGet(), null, it.source, it.placement, it.replaces, it.key) }
                 mutable.update {
                     it.copy(loading = false, album = album, photos = it.photos + restored,
-                        selectedId = it.selectedId ?: restored.firstOrNull()?.id)
+                        takenOut = it.takenOut + takenOut, shown = it.shown ?: draft?.shown)
                 }
+                // The photo shown, ready to be placed again if it can be.
+                mutable.value.shownEntry?.let { bringBack(it.key) }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 diagnostics.warn(TAG, "Photos face unreadable", (error as? WatchFaceException)?.technicalDetail, error)
@@ -185,7 +307,7 @@ class PhotoAlbumViewModel @Inject constructor(
                 try {
                     val preview = repository.preview(uri)
                     val photo = PendingPhoto(ids.incrementAndGet(), uri, preview)
-                    mutable.update { it.copy(photos = it.photos + photo, selectedId = photo.id) }
+                    mutable.update { it.copy(photos = it.photos + photo, shown = photo.key) }
                     saveDraft()
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
@@ -197,16 +319,83 @@ class PhotoAlbumViewModel @Inject constructor(
 
     fun clearDropped() = mutable.update { it.copy(dropped = 0) }
 
-    fun select(id: Long) = mutable.update { it.copy(selectedId = id) }
+    /**
+     * Chooses the photo to place, which is the one the face will show. A sent photo is brought
+     * back on its kept original, placed as it went, so moving it is changing it.
+     */
+    fun select(key: String) {
+        if (mutable.value.busy) return
+        mutable.update { it.copy(shown = key) }
+        saveDraft()
+        bringBack(key)
+    }
 
-    fun remove(id: Long) {
+    private fun bringBack(key: String) {
+        val state = mutable.value
+        val album = state.album ?: return
+        val entry = state.entries.firstOrNull { it.key == key } ?: return
+        val sent = entry.sent ?: return
+        val placement = sent.placement ?: return
+        if (entry.pending != null) return
+        viewModelScope.launch {
+            val source = repository.keptSource(album.face.faceId, sent.name) ?: return@launch
+            mutable.update { now ->
+                // Taken out, or brought back already, while the original was read.
+                if (now.photos.any { it.replaces == sent.name } || sent.name in now.takenOut) return@update now
+                now.copy(photos = now.photos + PendingPhoto(ids.incrementAndGet(), null, source, placement, replaces = sent.name))
+            }
+        }
+    }
+
+    /**
+     * Takes a photo out of the album: a new one is dropped, a sent one is deleted from the watch
+     * by the next send. The photo beside it is shown instead.
+     */
+    fun remove(key: String) {
         if (mutable.value.busy) return
         mutable.update { state ->
-            val left = state.photos.filterNot { it.id == id }
-            state.copy(photos = left, selectedId = state.selectedId.takeIf { it != id } ?: left.firstOrNull()?.id)
+            val entries = state.entries
+            val index = entries.indexOfFirst { it.key == key }
+            if (index < 0) return@update state
+            val entry = entries[index]
+            val left = entries - entry
+            val wasShown = state.shownEntry?.key == key
+            val next = if (wasShown) left.getOrNull(index) ?: left.lastOrNull() else state.shownEntry
+            val pending = entry.pending
+            state.copy(
+                photos = state.photos.filterNot { it.key == key || entry.sent != null && it.replaces == entry.sent.name },
+                takenOut = entry.sent?.let { state.takenOut + it.name } ?: state.takenOut,
+                shown = next?.key,
+                takenOutLast = TakenOut(ids.incrementAndGet(), key, pending, entry.sent?.name, wasShown,
+                    pending?.let { state.photos.indexOf(it) } ?: -1),
+            )
+        }
+        saveDraft()
+        mutable.value.shownEntry?.let { bringBack(it.key) }
+    }
+
+    /** Puts back the photo last taken out, as it was, and shows it again if it was shown. */
+    fun putBack(id: Long) {
+        if (mutable.value.busy) return
+        mutable.update { state ->
+            val last = state.takenOutLast?.takeIf { it.id == id } ?: return@update state
+            val photos = last.pending?.let { photo ->
+                state.photos.toMutableList().apply { add(last.index.coerceIn(0, size), photo) }
+            } ?: state.photos
+            // Room may have been taken since: a new photo comes back only if it fits.
+            if (last.sent == null && state.room == 0) return@update state.copy(takenOutLast = null)
+            state.copy(
+                photos = photos,
+                takenOut = last.sent?.let { state.takenOut - it } ?: state.takenOut,
+                shown = if (last.wasShown) last.key else state.shown,
+                takenOutLast = null,
+            )
         }
         saveDraft()
     }
+
+    /** The offer to put back has gone without being taken. */
+    fun clearTakenOut(id: Long) = mutable.update { if (it.takenOutLast?.id == id) it.copy(takenOutLast = null) else it }
 
     fun transform(zoomChange: Float, panX: Float, panY: Float) = place { placement ->
         placement.copy(
@@ -227,161 +416,131 @@ class PhotoAlbumViewModel @Inject constructor(
     /** The Background page's colour rule (`tintedColor`), for the photo being placed. */
     fun setTint(tint: Int?) = place { it.copy(tint = tint) }
 
+    /**
+     * The app menu's problem report, as the editor's: the shared report with this page's
+     * transfer state, in counts and flags only, never a peer, address or photo name.
+     */
+    fun showDiagnostics() {
+        viewModelScope.launch {
+            val state = mutable.value
+            val install = state.directInstall
+            val section = DiagnosticsSection(
+                title = "photos",
+                lines = listOfNotNull(
+                    "new=${state.added} changed=${state.changed} takenOut=${state.removed} sent=${state.album?.sent?.size ?: 0} " +
+                        "clockOptions=${state.album?.clockOptions != null} clockChanged=${state.clockChoice != null} " +
+                        "clockOff=${state.clockSetting == PhotoClockSetting.None}",
+                    "phase=${install.phase} " +
+                        "companion=${install.environment.companionAppInstalled} " +
+                        "plugin=${install.environment.pluginInstalled}" +
+                        (install.environment.pluginVersionName?.let { "@$it" } ?: ""),
+                    install.failure?.let { "failure=$it" },
+                ),
+            )
+            val report = reporter.render(listOf(section))
+            mutable.update { it.copy(diagnosticsReport = report) }
+        }
+    }
+
+    fun dismissDiagnostics() = mutable.update { it.copy(diagnosticsReport = null) }
+
+    /**
+     * Chooses the clock type, keeping the colour the face has or will have; from no clock, the
+     * colour of the clock it falls back to, else the plugin's default.
+     */
+    fun chooseClockType(id: Int) {
+        val state = mutable.value
+        val options = state.album?.clockOptions ?: return
+        val base = state.clock ?: state.copy(clockChoice = null).clock ?: options.default
+        chooseClock(base.copy(type = id))
+    }
+
+    /** Chooses the clock colour, keeping the type the face has or will have. A clock that is off has none. */
+    fun chooseClockColour(id: Int) {
+        val clock = mutable.value.clock ?: return
+        chooseClock(clock.copy(colour = id))
+    }
+
+    /** Chooses no clock: sends then leave its settings out, and the watch draws none. */
+    fun chooseNoClock() {
+        if (mutable.value.album?.clockOptions == null) return
+        chooseSetting(PhotoClockSetting.None)
+    }
+
+    private fun chooseClock(next: PhotoClock) {
+        val options = mutable.value.album?.clockOptions ?: return
+        if (!options.accepts(next)) return
+        chooseSetting(PhotoClockSetting.Drawn(next))
+    }
+
+    private fun chooseSetting(next: PhotoClockSetting) {
+        if (mutable.value.busy) return
+        // Choosing what the face falls back to, the clock last sent or else the default, is
+        // choosing nothing new.
+        mutable.update { it.copy(clockChoice = next.takeIf { setting -> setting != it.copy(clockChoice = null).clockSetting }) }
+    }
+
     private fun place(change: (ImagePlacement) -> ImagePlacement) {
         if (mutable.value.preparing || mutable.value.directInstall.isActive) return
         mutable.update { state ->
             val target = state.selected ?: return@update state
-            state.copy(photos = state.photos.map { if (it.id == target.id) it.copy(placement = change(it.placement)) else it })
+            state.copy(photos = state.photos.map { if (it.key == target.key) it.copy(placement = change(it.placement)) else it })
         }
         saveDraft()
     }
 
     /**
-     * Encodes every picked photo as placed, then sends them. A new photo joins the end of the
-     * album and the first new one is shown; a sent photo placed again takes its old place, its
-     * old version is deleted, and what was shown stays shown.
+     * Sends the album as arranged, worked out against what the watch has: new photos and ones
+     * placed differently are encoded and added, a changed one in its own place with its old
+     * version deleted; photos taken out are deleted; the one being placed is shown; and the
+     * clock goes as it always does. With nothing to add or delete it only sets what is shown and
+     * the clock.
      */
     fun send() {
         val current = mutable.value
         val album = current.album ?: return
-        if (current.photos.isEmpty() || current.busy) return
+        if (current.busy || !current.canSend) return
+        val entries = current.entries
+        val shownKey = current.shownEntry?.key
         mutable.update { it.copy(preparing = true) }
         viewModelScope.launch {
             try {
-                val encoded = current.photos.map { pick ->
-                    pick to (pick.uri?.let { repository.encode(it, pick.placement) }
-                        ?: repository.encode(pick.preview, pick.placement))
-                }.distinctBy { it.second.fileName }
-                val after = album.names.toMutableList()
-                val renamed = mutableMapOf<String, String>()
-                encoded.forEach { (pick, photo) ->
-                    val old = pick.replaces?.takeIf { it in after }
-                    when {
-                        old != null -> {
-                            after[after.indexOf(old)] = photo.fileName
-                            renamed[old] = photo.fileName
-                        }
-                        photo.fileName !in after -> after += photo.fileName
-                    }
+                val encoded = mutableMapOf<String, KeptPhoto>()
+                for (entry in entries) {
+                    if (!entry.isNew && !entry.isChanged) continue
+                    val pick = entry.pending ?: continue
+                    val photo = pick.uri?.let { repository.encode(it, pick.placement) }
+                        ?: repository.encode(pick.preview, pick.placement)
+                    encoded[entry.key] = KeptPhoto(photo, pick.preview, pick.placement)
                 }
-                val sent = after.distinct()
-                val firstNew = encoded.firstOrNull { it.first.replaces == null }?.second?.fileName
-                val shown = firstNew
-                    ?: album.shown?.let { renamed[it] ?: it }?.takeIf { it in sent }
-                    ?: sent.first()
+                val name = { entry: AlbumEntry -> encoded[entry.key]?.photo?.fileName ?: entry.sent!!.name }
+                val sent = entries.map(name).distinct()
+                val removed = (current.takenOut + entries.filter { it.isChanged }.map { it.sent!!.name })
+                    .filter { it in album.names && it !in sent }
+                val shown = entries.firstOrNull { it.key == shownKey }?.let(name)
+                val photos = encoded.values.map { it.photo }.distinctBy { it.fileName }
                 val request = PhotoAlbumRequest(album.face.faceId, album.face.preloaded, sent,
-                    photos = encoded.map { it.second },
-                    removed = renamed.keys.filter { it !in sent },
-                    selected = shown)
-                start(request, Awaiting(sent, shown,
-                    encoded.map { (pick, photo) -> KeptPhoto(photo, pick.preview, pick.placement) },
-                    sendsPicks = true))
+                    photos = photos,
+                    removed = removed,
+                    selected = shown ?: album.face.preloaded.first(),
+                    clock = current.clock)
+                val clockOnly = photos.isEmpty() && removed.isEmpty() && shown == album.shown
+                start(request, Awaiting(sent, shown, encoded.values.distinctBy { it.photo.fileName },
+                    clock = current.clockSetting, clockOnly = clockOnly,
+                    photoKeys = current.photos.map { it.key }.toSet(), takenOut = current.takenOut,
+                    shownKey = current.shown))
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 showFailure(error)
             } finally {
                 mutable.update { it.copy(preparing = false) }
             }
-        }
-    }
-
-    /** Asks the watch to delete every photo this app sent it, and show the face's own background. */
-    fun removeSent() {
-        val album = mutable.value.album ?: return
-        if (album.sent.isEmpty() || mutable.value.busy) return
-        request(Awaiting(emptyList(), null, emptyList(), sendsPicks = false)) {
-            PhotoAlbumRequest(album.face.faceId, album.face.preloaded, emptyList(),
-                removed = album.names, selected = album.face.preloaded.first())
-        }
-    }
-
-    fun chooseSent(name: String) = mutable.update { it.copy(chosenSent = name) }
-
-    /** Asks the face to show a photo it already has: no transfer, just its settings. */
-    fun showSent(name: String) {
-        val album = mutable.value.album ?: return
-        if (name !in album.names || mutable.value.busy) return
-        request(Awaiting(album.names, name, emptyList(), sendsPicks = false)) {
-            PhotoAlbumRequest(album.face.faceId, album.face.preloaded, album.names, selected = name)
-        }
-    }
-
-    /** Asks the watch to delete one sent photo; what was shown stays shown if it is still there. */
-    fun removeSentPhoto(name: String) {
-        val album = mutable.value.album ?: return
-        if (name !in album.names || mutable.value.busy) return
-        val left = album.names - name
-        val shown = album.shown?.takeIf { it in left } ?: left.firstOrNull()
-        request(Awaiting(left, shown, emptyList(), sendsPicks = false)) {
-            PhotoAlbumRequest(album.face.faceId, album.face.preloaded, left, removed = listOf(name),
-                selected = shown ?: album.face.preloaded.first())
-        }
-    }
-
-    /**
-     * Sends every kept photo again, as it was sent, in its place and with the same one shown:
-     * for a watch that lost them. Photos sent before copies were kept cannot go again.
-     */
-    fun resendAll() {
-        val album = mutable.value.album ?: return
-        if (album.sent.isEmpty() || mutable.value.busy) return
-        mutable.update { it.copy(preparing = true) }
-        viewModelScope.launch {
-            try {
-                val kept = album.names.mapNotNull { repository.keptPhoto(album.face.faceId, it) }
-                if (kept.isEmpty()) {
-                    throw WatchFaceException("No copies of these photos are kept, so they cannot be sent again.")
-                }
-                val shown = album.shown ?: album.names.first()
-                request(Awaiting(album.names, shown, emptyList(), sendsPicks = false)) {
-                    PhotoAlbumRequest(album.face.faceId, album.face.preloaded, album.names, photos = kept,
-                        selected = shown)
-                }
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                showFailure(error)
-            } finally {
-                mutable.update { it.copy(preparing = false) }
-            }
-        }
-    }
-
-    /**
-     * Brings a sent photo back to Background, on its kept original where it was placed, to be
-     * placed again; sending it then replaces the old one.
-     */
-    fun changeSent(name: String) {
-        val current = mutable.value
-        val album = current.album ?: return
-        val sent = album.sent.firstOrNull { it.name == name } ?: return
-        if (current.busy) return
-        current.photos.firstOrNull { it.replaces == name }?.let { already ->
-            mutable.update { it.copy(selectedId = already.id) }
-            return
-        }
-        viewModelScope.launch {
-            val source = repository.keptSource(album.face.faceId, name)
-            val placement = sent.placement
-            if (source == null || placement == null) {
-                showFailure(WatchFaceException("This photo was sent before copies were kept. Pick it again to change it."))
-                return@launch
-            }
-            val photo = PendingPhoto(ids.incrementAndGet(), null, source, placement, replaces = name)
-            mutable.update { it.copy(photos = it.photos + photo, selectedId = photo.id) }
-            saveDraft()
-        }
-    }
-
-    private inline fun request(after: Awaiting, build: () -> PhotoAlbumRequest) {
-        try {
-            start(build(), after)
-        } catch (error: Exception) {
-            showFailure(error)
         }
     }
 
     private fun start(request: PhotoAlbumRequest, after: Awaiting) {
         awaiting = after
+        mutable.update { it.copy(clockOnly = after.clockOnly) }
         directInstaller.sendAlbum(request)
         // Refused before it began (setup came undone), so nothing will finish it.
         if (directInstaller.state.value.album == null) awaiting = null
@@ -400,7 +559,7 @@ class PhotoAlbumViewModel @Inject constructor(
                 awaiting = null
                 viewModelScope.launch {
                     val sent = try {
-                        repository.recordAlbum(album.face.faceId, after.sent, after.shown, after.keep)
+                        repository.recordAlbum(album.face.faceId, after.sent, after.shown, after.keep, after.clock)
                     } catch (error: Exception) {
                         if (error is CancellationException) throw error
                         showFailure(error)
@@ -409,13 +568,19 @@ class PhotoAlbumViewModel @Inject constructor(
                     }
                     mutable.update { state ->
                         state.copy(
-                            album = state.album?.copy(sent = sent, shown = after.shown),
-                            photos = if (after.sendsPicks) emptyList() else state.photos,
-                            selectedId = if (after.sendsPicks) null else state.selectedId,
-                            chosenSent = state.chosenSent?.takeIf { it in after.sent },
+                            album = state.album?.copy(sent = sent, shown = after.shown,
+                                clock = after.clock ?: state.album.clock),
+                            // Sent, so no longer waiting to go; a newer choice made meanwhile stays.
+                            clockChoice = state.clockChoice.takeUnless { it == after.clock },
+                            // Sent as arranged, so the album is now what the watch has. Anything
+                            // arranged since the request was handed over stays to go next.
+                            photos = state.photos.filter { it.key !in after.photoKeys && it.replaces in after.sent.plus(null) },
+                            takenOut = state.takenOut - after.takenOut,
+                            shown = if (state.shown == after.shownKey) after.shown else state.shown,
                         )
                     }
-                    if (after.sendsPicks) saveDraft()
+                    saveDraft()
+                    mutable.value.shownEntry?.let { bringBack(it.key) }
                 }
             }
             delivery.phase == DirectInstallPhase.FAILED || delivery.album == null && !delivery.isActive ->
@@ -440,8 +605,13 @@ class PhotoAlbumViewModel @Inject constructor(
     private fun writeDraft() {
         val album = mutable.value.album ?: return
         runCatching {
-            repository.saveDraft(album.face.faceId,
-                mutable.value.photos.map { DraftPhoto(it.key, it.preview, it.placement, it.replaces) })
+            val state = mutable.value
+            repository.saveDraft(album.face.faceId, PhotoDraft(
+                photos = state.photos.map { DraftPhoto(it.key, it.preview, it.placement, it.replaces) },
+                takenOut = state.takenOut.toList(),
+                // Only a choice that differs from what the watch shows is unsent.
+                shown = state.shown?.takeIf { it != album.shown },
+            ))
         }.onFailure { diagnostics.warn(TAG, "Photos draft not saved", null, it) }
         draftChanged = false
     }

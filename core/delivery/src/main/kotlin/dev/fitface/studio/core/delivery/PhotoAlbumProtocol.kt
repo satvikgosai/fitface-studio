@@ -1,6 +1,7 @@
 package dev.fitface.studio.core.delivery
 
 import dev.fitface.studio.core.model.PhotoAlbumRequest
+import dev.fitface.studio.core.model.PhotoClock
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 
@@ -26,12 +27,14 @@ internal object PhotoAlbumProtocol {
 
     // Parameter IDs, from the plugin's MessageParameterValue.
     private const val WF_ID = 0x04
+    private const val CLOCK_TYPE = 0x0D
     private const val BACKGROUND = 0x13
     private const val NUM_OF_PARAMS = 0x18
     private const val RESULT_STATUS = 0x1A
     private const val IMAGE_COUNT = 0x1B
     private const val IMAGE_NAME = 0x1C
     private const val WF_SAMPLER_ID = 0x1D
+    private const val CLOCK_COLOR = 0x1E
     private const val IS_SELECTED = 0x1F
 
     /** The Photos face's one style, as its package's thumbnail `SM-R390_00254_2_0.png` names it. */
@@ -51,7 +54,7 @@ internal object PhotoAlbumProtocol {
     fun closing(request: PhotoAlbumRequest): List<ByteArray> = buildList {
         if (request.photos.isNotEmpty()) add(addImageList(request.faceId, request.photos.map { it.fileName }))
         if (request.removed.isNotEmpty()) add(deleteImageList(request.faceId, request.removed))
-        add(setEditInfo(request.faceId, request.backgrounds, request.selected))
+        add(setEditInfo(request.faceId, request.backgrounds, request.selected, request.clock))
         if (!request.isRemoval) add(setCurrentFace(request.faceId))
     }
 
@@ -69,19 +72,20 @@ internal object PhotoAlbumProtocol {
         imageList(VARIABLE_FORMAT or DELETE_IMAGE_LIST, faceId, names)
 
     /**
-     * `07 18 02 04 <face> 1B <n> (13 <length> <name> 1F <selected>)…`
+     * `07 18 <count> 04 <face> 1B <n> (13 <length> <name> 1F <selected>)… [0D <type> 1E <colour>]`
      *
-     * Only the background setting. The plugin also sends `0D <clock type>` and `1E <clock
-     * colour>` after it, because its own copy of the face's settings lists them; the face's
-     * store package lists the background alone, so this app has no clock values to send and
-     * leaves the watch's as they are. `18` counts the face ID plus each setting.
+     * The background setting, then the clock's when one is given: the order the plugin writes
+     * them in, its list following the face's settings (background, clock type, clock colour).
+     * The plugin's own reply parser reads each parameter by its ID, not its place. `18` counts
+     * the face ID plus each setting: 2 with the background alone, which leaves the watch's
+     * clock as it is, and 4 with the clock.
      */
-    fun setEditInfo(faceId: Int, backgrounds: List<String>, selected: String): ByteArray {
+    fun setEditInfo(faceId: Int, backgrounds: List<String>, selected: String, clock: PhotoClock? = null): ByteArray {
         require(backgrounds.size in 1..255 && selected in backgrounds) { "No background to show" }
         return ByteArrayOutputStream().apply {
             write(SET_EDIT_INFO)
             write(NUM_OF_PARAMS)
-            write(2)
+            write(if (clock == null) 2 else 4)
             write(WF_ID)
             write(faceId)
             write(IMAGE_COUNT)
@@ -93,6 +97,12 @@ internal object PhotoAlbumProtocol {
                 write(bytes)
                 write(IS_SELECTED)
                 write(if (name == selected) 1 else 0)
+            }
+            if (clock != null) {
+                write(CLOCK_TYPE)
+                write(clock.type)
+                write(CLOCK_COLOR)
+                write(clock.colour)
             }
         }.toByteArray()
     }

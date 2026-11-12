@@ -20,6 +20,9 @@ import dev.fitface.studio.core.model.KeptPhoto
 import dev.fitface.studio.core.model.PhotoAlbum
 import dev.fitface.studio.core.model.PhotoAlbumRepository
 import dev.fitface.studio.core.model.PhotoAlbumRequest
+import dev.fitface.studio.core.model.PhotoClock
+import dev.fitface.studio.core.model.PhotoClockSetting
+import dev.fitface.studio.core.model.PhotoClockSource
 import dev.fitface.studio.core.model.PreviewFrame
 import dev.fitface.studio.core.model.SentPhoto
 import dev.fitface.studio.core.model.WatchFaceException
@@ -30,6 +33,7 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import dev.fitface.studio.core.model.DraftPhoto
+import dev.fitface.studio.core.model.PhotoDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +64,7 @@ class PhotoAlbumRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val catalog: FaceCatalogRepository,
     private val imageSource: AndroidImageSource,
+    private val clocks: PhotoClockSource,
 ) : PhotoAlbumRepository {
     private val files = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
@@ -81,7 +86,15 @@ class PhotoAlbumRepositoryImpl @Inject constructor(
         )
         val stored = files.withLock { stored(declared.faceId) }
         val sent = withContext(Dispatchers.IO) { sentPhotos(declared.faceId, stored) }
-        return PhotoAlbum(declared, sent, stored.shown?.takeIf { shown -> sent.any { it.name == shown } })
+        // From the stock plugin on this phone, not the store package, which lists no clock.
+        val options = clocks.options(declared.faceId)
+        return PhotoAlbum(
+            face = declared,
+            sent = sent,
+            shown = stored.shown?.takeIf { shown -> sent.any { it.name == shown } },
+            clock = stored.clock(),
+            clockOptions = options,
+        )
     }
 
     /** The photos [stored] lists, with each kept copy read back. */
@@ -123,13 +136,20 @@ class PhotoAlbumRepositoryImpl @Inject constructor(
         runCatching { AlbumPhoto(photoFile(faceId, name).readBytes()) }.getOrNull()?.takeIf { it.fileName == name }
     }
 
-    override suspend fun recordAlbum(faceId: Int, sent: List<String>, shown: String?, keep: List<KeptPhoto>): List<SentPhoto> {
+    override suspend fun recordAlbum(
+        faceId: Int,
+        sent: List<String>,
+        shown: String?,
+        keep: List<KeptPhoto>,
+        clock: PhotoClockSetting?,
+    ): List<SentPhoto> {
         require(sent.all(PhotoAlbumRequest::isPhotoName) && sent.distinct().size == sent.size)
         require(keep.all { it.photo.fileName in sent })
         return withContext(Dispatchers.IO) {
             val album = files.withLock {
                 val folder = folder(faceId).apply { mkdirs() }
-                val before = stored(faceId).sent.associateBy { it.name }
+                val previous = stored(faceId)
+                val before = previous.sent.associateBy { it.name }
                 // Copies first, then the list that names them, so the list never names a file
                 // that is not there yet.
                 keep.forEach { kept ->
@@ -142,6 +162,11 @@ class PhotoAlbumRepositoryImpl @Inject constructor(
                         placed[name]?.let { StoredPhoto.of(name, it) } ?: before[name] ?: StoredPhoto(name)
                     },
                     shown = shown?.takeIf { it in sent },
+                    // The clock last sent stays recorded until another is; with none, the last
+                    // drawn one stays too, only marked off.
+                    clockType = clock?.clock?.type ?: previous.clockType,
+                    clockColour = clock?.clock?.colour ?: previous.clockColour,
+                    clockOff = if (clock == null) previous.clockOff else clock == PhotoClockSetting.None,
                 )
                 atomically(File(folder, ALBUM_FILE)) { it.writeText(json.encodeToString(StoredAlbum.serializer(), album)) }
                 // Whatever the list no longer names goes: removed photos, replaced versions and
@@ -155,27 +180,34 @@ class PhotoAlbumRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun draft(faceId: Int): List<DraftPhoto> = withContext(Dispatchers.IO) {
+    override suspend fun draft(faceId: Int): PhotoDraft = withContext(Dispatchers.IO) {
         files.withLock {
             val folder = draftFolder(faceId)
             val stored = File(folder, DRAFT_FILE).takeIf { it.isFile }
                 ?.let { runCatching { json.decodeFromString(StoredDraft.serializer(), it.readText()) }.getOrNull() }
-                ?: return@withLock emptyList()
-            stored.photos.filter { it.key.matches(DraftKey) }.mapNotNull { photo ->
+                ?: return@withLock PhotoDraft()
+            val photos = stored.photos.filter { it.key.matches(DraftKey) }.mapNotNull { photo ->
                 val source = runCatching { frame(File(folder, photo.key + ".jpg")) }.getOrNull() ?: return@mapNotNull null
                 val placement = photo.placement.placement() ?: return@mapNotNull null
                 DraftPhoto(photo.key, source, placement, photo.replaces?.takeIf(PhotoAlbumRequest::isPhotoName))
             }
+            PhotoDraft(
+                photos = photos,
+                takenOut = stored.takenOut.filter(PhotoAlbumRequest::isPhotoName).distinct(),
+                shown = stored.shown?.takeIf { it.matches(DraftKey) || PhotoAlbumRequest.isPhotoName(it) },
+            )
         }
     }
 
-    override fun saveDraft(faceId: Int, photos: List<DraftPhoto>) {
+    override fun saveDraft(faceId: Int, draft: PhotoDraft) {
+        val photos = draft.photos
         require(photos.all { it.key.matches(DraftKey) }) { "A draft key is not a UUID" }
+        require(draft.takenOut.all(PhotoAlbumRequest::isPhotoName)) { "A photo taken out is not <md5>.png" }
         draftWrite = writes.launch {
             runCatching {
                 files.withLock {
                     val folder = draftFolder(faceId)
-                    if (photos.isEmpty()) {
+                    if (draft.isEmpty) {
                         folder.deleteRecursively()
                         return@withLock
                     }
@@ -186,8 +218,12 @@ class PhotoAlbumRepositoryImpl @Inject constructor(
                         val file = File(folder, photo.key + ".jpg")
                         if (!file.isFile) atomically(file) { it.writeBytes(jpeg(photo.source)) }
                     }
-                    val draft = StoredDraft(photos.map { StoredDraftPhoto(it.key, StoredPhoto.of("", it.placement), it.replaces) })
-                    atomically(File(folder, DRAFT_FILE)) { it.writeText(json.encodeToString(StoredDraft.serializer(), draft)) }
+                    val stored = StoredDraft(
+                        photos.map { StoredDraftPhoto(it.key, StoredPhoto.of("", it.placement), it.replaces) },
+                        takenOut = draft.takenOut,
+                        shown = draft.shown,
+                    )
+                    atomically(File(folder, DRAFT_FILE)) { it.writeText(json.encodeToString(StoredDraft.serializer(), stored)) }
                     val wanted = photos.map { it.key + ".jpg" }.toSet() + DRAFT_FILE
                     folder.listFiles()?.filter { it.name !in wanted }?.forEach { it.delete() }
                 }
@@ -283,14 +319,35 @@ class PhotoAlbumRepositoryImpl @Inject constructor(
 }
 
 @Serializable
-private data class StoredDraft(val photos: List<StoredDraftPhoto>)
+private data class StoredDraft(
+    val photos: List<StoredDraftPhoto>,
+    val takenOut: List<String> = emptyList(),
+    val shown: String? = null,
+)
 
 /** One draft photo: its key names `<key>.jpg`, its placement as an album entry's. */
 @Serializable
 private data class StoredDraftPhoto(val key: String, val placement: StoredPhoto, val replaces: String? = null)
 
+/**
+ * The album as recorded; the clock is the one this app last sent, absent if it never sent one,
+ * and [clockOff] when the last send left the face with none.
+ */
 @Serializable
-private data class StoredAlbum(val sent: List<StoredPhoto>, val shown: String? = null)
+private data class StoredAlbum(
+    val sent: List<StoredPhoto>,
+    val shown: String? = null,
+    val clockType: Int? = null,
+    val clockColour: Int? = null,
+    val clockOff: Boolean = false,
+) {
+    fun clock(): PhotoClockSetting? {
+        if (clockOff) return PhotoClockSetting.None
+        val type = clockType ?: return null
+        val colour = clockColour ?: return null
+        return runCatching { PhotoClock(type, colour) }.getOrNull()?.let(PhotoClockSetting::Drawn)
+    }
+}
 
 /** One photo in `album.json`; no fit means no placement was kept for it. */
 @Serializable

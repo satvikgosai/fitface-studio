@@ -121,7 +121,8 @@ the catalogue-to-watch flow. Follow the current app checklist if the video diffe
 
 ## Scope and limits
 
-Faces without an editable container, such as “Photos”, show **Not editable**.
+The Photos face has nothing to edit. Open it in **Watch faces** to send it up to 7 of your
+own photos and choose its clock style and colour.
 Several editing operations are watch-tested, but not every widget type or firmware is.
 The app enforces the watch's 4 MiB container limit; detailed editing limits and
 hardware coverage are in the [format reference](docs/bin-format.md#editing-contracts).

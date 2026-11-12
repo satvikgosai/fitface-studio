@@ -239,7 +239,6 @@ fun LibraryRoute(
         onDeleteProject = viewModel::startDelete,
         onImportProject = { importPicker.launch(ProjectArchiveNaming.ImportMimeTypes) },
         onStartCustomFace = viewModel::startCustomFace,
-        onOpenPhotos = onOpenPhotos,
         onSendPhotos = {
             viewModel.dismissFace()
             onOpenPhotos()
@@ -283,7 +282,6 @@ private fun LibraryScreen(
     onDeleteProject: (ProjectSummary) -> Unit,
     onImportProject: () -> Unit,
     onStartCustomFace: (String) -> Unit,
-    onOpenPhotos: () -> Unit,
     onSendPhotos: () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf(LibraryPage.WatchFaces) }
@@ -333,7 +331,6 @@ private fun LibraryScreen(
                     onExport = onExportProject,
                     onRemove = onDeleteProject,
                     onStartCustomFace = onStartCustomFace,
-                    onOpenPhotos = onOpenPhotos,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -1075,7 +1072,6 @@ private fun ProjectsList(
     onExport: (ProjectSummary) -> Unit,
     onRemove: (ProjectSummary) -> Unit,
     onStartCustomFace: (String) -> Unit,
-    onOpenPhotos: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val projects = state.visibleProjects
@@ -1109,7 +1105,6 @@ private fun ProjectsList(
         if (state.projects.isEmpty()) {
             item { ProjectsEmptyState(onBrowse) }
             item { CustomFaceCard(state, startCustomFace) }
-            item { PhotosCard(state, onOpenPhotos) }
             return@LazyColumn
         }
         // The same controls the catalogue has, in the same place, scrolling with the list.
@@ -1141,7 +1136,6 @@ private fun ProjectsList(
         // same place so the search field does not move when the tab changes, and a card
         // above them on this page alone would move it by its own height.
         item { CustomFaceCard(state, startCustomFace) }
-        item { PhotosCard(state, onOpenPhotos) }
         if (projects.isEmpty()) {
             item {
                 Column(
@@ -1285,48 +1279,6 @@ private fun CustomFaceCard(state: LibraryUiState, onStart: () -> Unit) {
             }
         }
         ProjectRowTrailing(opening = false)
-    }
-}
-
-/**
- * Opens the Photos face's page. Shown only while the catalogue has that face, because its
- * package is what says the face takes photos and which backgrounds it already has.
- */
-@Composable
-private fun PhotosCard(state: LibraryUiState, onOpen: () -> Unit) {
-    if (state.photosFace == null) return
-    val title = stringResource(R.string.library_photos_title)
-    val detail = stringResource(R.string.library_photos_detail)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
-            .clickable(enabled = !state.isOpeningProject && !state.editorHandoff, role = Role.Button, onClick = onOpen)
-            .semantics(mergeDescendants = true) { contentDescription = "$title. $detail" }
-            .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(13.dp),
-    ) {
-        Box(
-            Modifier
-                .size(44.dp)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f), MaterialTheme.shapes.medium)
-                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .3f), MaterialTheme.shapes.medium),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("▣", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                detail,
-                modifier = Modifier.padding(top = 3.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.fitText.secondary,
-            )
-        }
     }
 }
 

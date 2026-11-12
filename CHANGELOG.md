@@ -23,6 +23,14 @@ How to write this changelog
 - The initial release is one line.
 -->
 
+## Unreleased
+
+Added:
+
+- **Send your photos** to the watch's Photos face from its card in **Watch faces**, up to 7,
+  placed and coloured like a background, and choose its clock's style on **Styles**, or
+  **No clock**, and colour on **Canvas**.
+
 ## 0.3.0 (code `30`) — 2026-11-10
 
 Fixed:
