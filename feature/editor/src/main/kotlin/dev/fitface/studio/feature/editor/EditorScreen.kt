@@ -3482,6 +3482,7 @@ private fun BackgroundWorkspace(
     val thisStyleOnly = state.backgroundThisStyleOnly && snapshot.offersBackgroundScope
     val adding = snapshot.backgroundAdds(thisStyleOnly)
     val placeable = snapshot.canPlaceBackground(thisStyleOnly)
+    val compare = rememberFaceCompare(state.pendingImage?.uri)
     PinnedFacePage(
         snapshot,
         faceCap = 186.dp,
@@ -3501,6 +3502,7 @@ private fun BackgroundWorkspace(
                 onMoveWidget = onMoveWidget,
                 onTransformImage = onTransformImage,
                 modifier = faceModifier,
+                compare = compare,
             )
         },
     ) {
@@ -3552,6 +3554,7 @@ private fun BackgroundWorkspace(
             )
             if (state.readingFrames) ReadingFramesLine(Modifier.fillMaxWidth())
         } else {
+            CompareHint(stringResource(R.string.editor_compare_still))
             FitControls(
                 state.placement.fit, !state.isWorking, onFit,
                 info = stringResource(R.string.editor_bg_no_image_detail, snapshot.preview.width, snapshot.preview.height),
@@ -4536,7 +4539,13 @@ internal fun DirectWatchCanvas(
      * being dragged, nudged as a set or placed: those draw the face as it rests.
      */
     playAnimations: Boolean = false,
+    /**
+     * Placing only: a finger held still on the face shows it as it is, without what is being
+     * placed, until it lets go; see [FaceCompare.stillModifier].
+     */
+    compare: FaceCompare? = null,
 ) {
+    val comparing = compare?.comparing == true
     val composedBitmap = snapshot.composedPreview.rememberBitmap()
     val overlayBitmap = snapshot.widgetOverlay.rememberBitmap()
     // The colour is drawn here as it will be applied: the same rule, before anything commits.
@@ -4638,6 +4647,8 @@ internal fun DirectWatchCanvas(
                     }
                 }
             }
+            // After the pinch-and-drag, so it sees a held finger first and can keep it.
+            .then(if (compare != null && (pendingImage != null || pendingPicture != null)) compare.stillModifier else Modifier)
             .pointerInput(snapshot.selectedVariant.basename, pendingImage?.uri, editing) {
                 if (pendingImage == null && editing) {
                     fun hit(position: Offset): Int? {
@@ -4784,7 +4795,14 @@ internal fun DirectWatchCanvas(
             },
     ) {
         drawRect(Color.Black)
-        if (pendingImage != null && pendingBitmap != null) {
+        if (comparing) {
+            // The face as it is: no placed picture or background, and a label being replaced still there.
+            drawImage(
+                image = composedBitmap,
+                dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                filterQuality = FilterQuality.Low,
+            )
+        } else if (pendingImage != null && pendingBitmap != null) {
             val fitted = fittedRect(
                 sourceWidth = pendingImage.preview.width,
                 sourceHeight = pendingImage.preview.height,
@@ -4891,7 +4909,7 @@ internal fun DirectWatchCanvas(
             }
         }
 
-        if (pendingPicture != null && pictureBitmap != null) {
+        if (!comparing && pendingPicture != null && pictureBitmap != null) {
             val scaleX = size.width / snapshot.preview.width
             val scaleY = size.height / snapshot.preview.height
             val placed = pendingPicture.size

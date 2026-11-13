@@ -4,6 +4,7 @@
     <!-- Header subtitle on the Widgets page while the clock's font is chosen. -->
     <string name="editor_subtitle_clock_font">Choosing the clock’s font</string>
     <!-- The face, read by a screen reader. -->
+    <string name="editor_clock_font_compare">Hold the face to see the clock as it is</string>
     <string name="editor_clock_font_face">The face with its clock redrawn</string>
     <string name="editor_clock_font_drawing">Drawing…</string>
     <string name="editor_clock_font_heading">Font</string>

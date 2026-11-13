@@ -38,6 +38,9 @@ Added:
   with **Draw in another font** in **Edit widget**.
 - **Clock font** redraws a clock made of pictures of digits in another font and colour, in
   this style or all of them. **Reset font** brings its own digits back.
+- Hold the face to see it as it is, without the change, on the **Clock font** page and when
+  reviewing a background from another face, which no longer has **Before** and **After**.
+  While placing a background, a picture or text, hold the face still to do the same.
 - **Send your photos** to the watch's Photos face from its card in **Watch faces**, up to 7,
   placed and coloured like a background, and choose its clock's style on **Styles**, or
   **No clock**, and colour on **Canvas**.

@@ -510,6 +510,9 @@
     <string name="editor_bg_import_saving">Applying background…</string>
     <string name="editor_bg_import_asset">Source background image</string>
     <string name="editor_bg_import_result">Background replacement preview</string>
+    <string name="editor_bg_import_compare">Hold the face to see its background now</string>
+    <string name="editor_compare_still">Hold the face still to see it as it is</string>
+    <string name="editor_compare_action">Switch between the change and the face as it is</string>
     <string name="editor_bg_import_missing">This style has no background image. Choose another style or face.</string>
     <string name="editor_bg_import_heading">Background image</string>
     <string name="editor_bg_import_primary">Copies this background image. Your widgets stay in place.</string>

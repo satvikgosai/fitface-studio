@@ -85,6 +85,7 @@ internal fun PictureWorkspace(
     val frame = rememberPlayingFrame(animation, playing)
     // The face draws the frame showing now, through the same pending-picture path a still uses.
     val shown = frame?.let { pending.copy(prepared = pending.prepared.copy(preview = it)) } ?: pending
+    val compare = rememberFaceCompare(pending.prepared.handle)
     PinnedFacePage(
         snapshot,
         faceCap = 186.dp,
@@ -104,6 +105,7 @@ internal fun PictureWorkspace(
                 onTransformImage = pictures.onTransform,
                 modifier = faceModifier,
                 pendingPicture = shown,
+                compare = compare,
             )
             if (animation != null) {
                 TextButton(onClick = { playing = !playing }) {
@@ -115,6 +117,7 @@ internal fun PictureWorkspace(
             }
         },
     ) {
+        CompareHint(stringResource(R.string.editor_compare_still))
         // Text is sized and placed like any widget edit: by its font size alone. What it adds
         // and the face's room are a picture's facts; a text is a few KB, so only a refusal shows.
         if (text == null) ImportFactCard {

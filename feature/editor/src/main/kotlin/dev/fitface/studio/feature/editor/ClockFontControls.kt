@@ -48,8 +48,8 @@ internal class ClockFontActions(
  *
  * It opens with no font chosen and the face as it is; nothing is drawn until a font is picked.
  * From then the face is the repository's drawing of the last request that finished, so it is
- * exactly what Apply commits; like every other edit page, there is no Before and After. A
- * request that cannot be drawn says why on the Font card and leaves the face on the last one
+ * exactly what Apply commits, and holding it shows the face as it is, as an import's review
+ * does; there are no Before and After chips. A request that cannot be drawn says why on the Font card and leaves the face on the last one
  * that could. The page states what is chosen and what changes; how it works is behind the ⓘs.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -63,20 +63,24 @@ internal fun ClockFontWorkspace(
 ) {
     val enabled = !state.isWorking
     val chosen = pending.font != null
+    val drawn = pending.preview?.preview.takeIf { chosen }
+    val compare = rememberFaceCompare(drawn)
     PinnedFacePage(
         snapshot,
         faceCap = 186.dp,
         modifier = modifier,
         face = { faceModifier ->
-            val frame = if (!chosen) snapshot.composedPreview else pending.preview?.preview ?: snapshot.composedPreview
+            val frame = drawn?.takeIf { !compare.comparing } ?: snapshot.composedPreview
             FacePreview(
                 frame = frame,
                 imagePath = null,
                 contentDescription = stringResource(R.string.editor_clock_font_face),
-                modifier = faceModifier.fillMaxWidth().aspectRatio(frame.width.toFloat() / frame.height.coerceAtLeast(1)),
+                modifier = faceModifier.fillMaxWidth().aspectRatio(frame.width.toFloat() / frame.height.coerceAtLeast(1))
+                    .then(if (drawn != null) compare.modifier else Modifier),
             )
         },
     ) {
+        if (drawn != null) CompareHint(stringResource(R.string.editor_clock_font_compare))
         if (chosen && !pending.ready && pending.problem == null) {
             Text(
                 stringResource(R.string.editor_clock_font_drawing),
