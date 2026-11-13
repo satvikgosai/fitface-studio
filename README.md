@@ -59,6 +59,9 @@ the app. The watch photo shows a real Bluetooth install.
   always-on display separately.
 - Delete unused styles with an exact space-saving review, including when an edit
   needs more room under the watch's 4 MiB limit.
+- Add your own pictures, and text in any of your phone's fonts or a font file, as
+  widgets. A face's fixed labels, such as "steps", can be redrawn in another font.
+- Redraw a clock drawn as pictures of digits in another font. It still tells the time.
 - Add a moving background, or a moving picture on top of the face, from a GIF or a short
   clip of a video: placed like a still one, with as many frames as fit. The face plays on
   Canvas as it will on the watch.

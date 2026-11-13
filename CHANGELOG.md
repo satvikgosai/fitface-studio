@@ -25,8 +25,19 @@ How to write this changelog
 
 ## Unreleased
 
+Fixed:
+
+- On a slow phone, a quick tap on an arrow could move a set of widgets more than one step,
+  and **Undo** took a held move back a step at a time. Each tap now moves it one step, and
+  one **Undo** takes back the whole move.
+
 Added:
 
+- **Add text** on **Widgets**, in any of your phone's fonts or a font file, placed and
+  coloured like a picture. A face's own label, such as "steps", can be redrawn the same way
+  with **Draw in another font** in **Edit widget**.
+- **Clock font** redraws a clock made of pictures of digits in another font and colour, in
+  this style or all of them. **Reset font** brings its own digits back.
 - **Send your photos** to the watch's Photos face from its card in **Watch faces**, up to 7,
   placed and coloured like a background, and choose its clock's style on **Styles**, or
   **No clock**, and colour on **Canvas**.

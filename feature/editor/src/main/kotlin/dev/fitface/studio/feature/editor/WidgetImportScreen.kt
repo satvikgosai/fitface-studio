@@ -384,13 +384,8 @@ private fun BackgroundDonorPage(state: WidgetImportUiState, viewModel: WidgetImp
 private fun BackgroundReviewPage(state: WidgetImportUiState, snapshot: EditorSnapshot,
     viewModel: WidgetImportViewModel, modifier: Modifier) {
     val preview = state.backgroundPreview ?: return
-    var before by remember(preview.ticket) { mutableStateOf(false) }
-    BackgroundPageBody(if (before) snapshot.composedPreview else preview.preview, modifier,
-        stringResource(R.string.editor_bg_import_result)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FitChip(stringResource(R.string.editor_bg_import_before), before, { before = true }, Modifier.weight(1f))
-            FitChip(stringResource(R.string.editor_bg_import_after), !before, { before = false }, Modifier.weight(1f))
-        }
+    // The face as the edit will leave it, and nothing else: no page compares with Before/After.
+    BackgroundPageBody(preview.preview, modifier, stringResource(R.string.editor_bg_import_result)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val scope = stringResource(R.string.editor_bg_import_scope,
                 preview.changedVariants.map { backgroundVariantLabel(it) }.joinToString())

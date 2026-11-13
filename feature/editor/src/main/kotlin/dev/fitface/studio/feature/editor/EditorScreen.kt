@@ -131,6 +131,7 @@ import dev.fitface.studio.core.model.AddedWidgetKind
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.TextPicture
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
@@ -216,6 +217,12 @@ fun EditorRoute(
     ) { uri ->
         if (uri != null) viewModel.choosePicture(uri.toString(), context.contentResolver.getType(uri))
     }
+    val fontPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) viewModel.chooseFontFile(uri.toString())
+    }
+    val defaultText = stringResource(R.string.editor_text_default)
     val nearbyPermissionRequester = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
@@ -367,6 +374,22 @@ fun EditorRoute(
             onAdd = viewModel::addPicture,
             onAddedShown = viewModel::clearPictureAdded,
             onClip = viewModel::setAnimationPart,
+            onAddText = { viewModel.startText(defaultText) },
+            onTextWords = viewModel::setTextWords,
+            onTextFont = viewModel::setTextFont,
+            onChooseFontFile = { fontPicker.launch(FontFileTypes) },
+            onDrawLabel = viewModel::startTextFromLabel,
+            clock = ClockFontActions(
+                onOpen = viewModel::startClockFont,
+                onFont = viewModel::setClockFont,
+                onChooseFontFile = { fontPicker.launch(FontFileTypes) },
+                onPart = viewModel::setClockPart,
+                onTint = viewModel::setClockFontTint,
+                onAllStyles = viewModel::setClockFontAllStyles,
+                onDiscard = viewModel::discardClockFont,
+                onApply = viewModel::applyClockFont,
+                onReset = viewModel::resetClockFont,
+            ),
         ),
         moving = MovingBackgroundActions(
             onStep = viewModel::setMovingBackgroundStep,
@@ -398,6 +421,15 @@ fun EditorRoute(
 
 /** What a background or picture is picked from: a still image, or a GIF or video to play. */
 private val PickableMediaTypes = arrayOf("image/*", "video/*")
+
+/**
+ * What a font is picked from. Phones label a TTF or OTF inconsistently, often as plain
+ * binary, so that is offered too; loading it is the real check.
+ */
+private val FontFileTypes = arrayOf(
+    "font/*", "application/x-font-ttf", "application/x-font-otf", "application/font-sfnt",
+    "application/vnd.ms-opentype", "application/octet-stream",
+)
 
 private enum class EditorPage {
     Canvas,
@@ -601,6 +633,8 @@ private fun EditorScreen(
                     snapshot = snapshot,
                     pendingImage = state.pendingImage != null,
                     placingPicture = state.pendingPicture != null,
+                    placingText = state.pendingPicture?.text != null,
+                    choosingClockFont = state.pendingClockFont != null,
                     selected = selected,
                     onBack = goBack,
                     onProject = { navigate(EditorPage.Project) },
@@ -839,6 +873,8 @@ private fun EditorHeader(
     snapshot: EditorSnapshot,
     pendingImage: Boolean,
     placingPicture: Boolean,
+    placingText: Boolean,
+    choosingClockFont: Boolean,
     selected: WidgetGuide?,
     onBack: () -> Unit,
     onProject: () -> Unit,
@@ -869,7 +905,11 @@ private fun EditorHeader(
             snapshot.faceId,
             snapshot.selectedVariantLabel(),
         )
-        EditorPage.Widgets -> if (placingPicture) {
+        EditorPage.Widgets -> if (choosingClockFont) {
+            stringResource(R.string.editor_subtitle_clock_font)
+        } else if (placingText) {
+            stringResource(R.string.editor_subtitle_text_positioning)
+        } else if (placingPicture) {
             stringResource(R.string.editor_subtitle_picture_positioning)
         } else {
             stringResource(
@@ -1265,7 +1305,20 @@ private fun EditorPageContent(
         )
         EditorPage.Inspector -> InspectorWorkspace(
             state, snapshot, selected, onNudgeWidget, onPlaceWidget, selection.onBeginNudge, onApplyAll, onRemoveWidget,
-            onDuplicateWidget, onResizeWidget, { onWidgetColor(it, null) }, onRotateWidget, onArrangeWidget, modifier,
+            onDuplicateWidget, onResizeWidget, { onWidgetColor(it, null) }, onRotateWidget, onArrangeWidget,
+            onDrawLabel = { pictures.onDrawLabel(); onNavigate(EditorPage.Widgets) },
+            clock = ClockFontActions(
+                onOpen = { pictures.clock.onOpen(); onNavigate(EditorPage.Widgets) },
+                onFont = pictures.clock.onFont,
+                onChooseFontFile = pictures.clock.onChooseFontFile,
+                onPart = pictures.clock.onPart,
+                onTint = pictures.clock.onTint,
+                onAllStyles = pictures.clock.onAllStyles,
+                onDiscard = pictures.clock.onDiscard,
+                onApply = pictures.clock.onApply,
+                onReset = pictures.clock.onReset,
+            ),
+            modifier = modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
@@ -1538,6 +1591,8 @@ internal fun editKindLabel(kind: EditKind): String = stringResource(
         EditKind.PICTURE -> R.string.editor_edit_kind_picture
         EditKind.MOVING_BACKGROUND -> R.string.editor_edit_kind_moving_background
         EditKind.MOVING_PICTURE -> R.string.editor_edit_kind_moving_picture
+        EditKind.TEXT_PICTURE -> R.string.editor_edit_kind_text_picture
+        EditKind.CLOCK_FONT -> R.string.editor_edit_kind_clock_font
     },
 )
 
@@ -2457,6 +2512,10 @@ private fun WidgetsWorkspace(
         PictureWorkspace(state, snapshot, pending, pictures, modifier)
         return
     }
+    state.pendingClockFont?.let { pending ->
+        ClockFontWorkspace(state, snapshot, pending, pictures.clock, modifier)
+        return
+    }
     val onCanvas = snapshot.canvasWidgets
     val offCanvas = snapshot.offCanvasWidgets
     val picks = multiSelection.mapNotNull { index -> snapshot.widgets.firstOrNull { it.globalIndex == index } }
@@ -2475,6 +2534,12 @@ private fun WidgetsWorkspace(
                         enabled = enabled, style = FitButtonStyle.Secondary)
                     FitButton(stringResource(R.string.editor_media_choose), pictures.onChoose,
                         Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
+                    FitButton(stringResource(R.string.editor_text_open), pictures.onAddText,
+                        Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
+                    if (snapshot.widgets.any { it.clockPart != null }) {
+                        FitButton(stringResource(R.string.editor_clock_font_open), pictures.clock.onOpen,
+                            Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
+                    }
                     if (state.readingFrames) ReadingFramesLine()
                 }
             }
@@ -2765,7 +2830,8 @@ private fun WidgetThumbnail(
  */
 @Composable
 private fun WidgetGuide.readingLabel(): String = when (val reading = sourceLabel) {
-    is String -> reading
+    // A label's reading is the constant zero; what it shows is its word.
+    is String -> label?.let { stringResource(R.string.editor_widget_label, it.text) } ?: reading
     else -> if (followsReading) {
         stringResource(R.string.editor_widget_reading_unnamed, sequenceId)
     } else {
@@ -2790,6 +2856,10 @@ private fun InspectorWorkspace(
     onColor: (Int?) -> Unit,
     onRotate: (Int) -> Unit,
     onArrange: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
+    /** Draw the selected label in another font, on the Widgets page; see [EditorViewModel.startTextFromLabel]. */
+    onDrawLabel: () -> Unit,
+    /** The Font section of a clock digit; its [ClockFontActions.onOpen] goes to the Widgets page. */
+    clock: ClockFontActions,
     modifier: Modifier = Modifier,
 ) {
     if (widget == null) {
@@ -2887,6 +2957,11 @@ private fun InspectorWorkspace(
         WidgetSizeControls(widget, enabled = true, onResize)
         RotationControls(widget, !state.isWorking, onRotate)
         ColorControls(widget, !state.isWorking, onColor)
+        widget.label?.let { label -> LabelFontControls(label, !state.isWorking && state.pendingPicture == null, onDrawLabel) }
+        widget.clockPart?.let { part ->
+            ClockFontInspectorControls(part, widget.clockFont,
+                !state.isWorking && state.pendingPicture == null && state.pendingClockFont == null, clock)
+        }
         ArrangementControls(widget, snapshot, !state.isWorking, onArrange)
         WidgetScope(widget, snapshot, state.applyWidgetEditsToAllStyles, onApplyAll)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2926,7 +3001,7 @@ private fun WidgetFactTags(widget: WidgetGuide) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         FitTag(widget.category.label.uppercase(), MaterialTheme.colorScheme.tertiary, key = widget.globalIndex) {
-            InfoText(widget.category.detail)
+            InfoText(if (widget.label != null) stringResource(R.string.editor_label_detail) else widget.category.detail)
             // A no-outline widget's support message is its own tag's bubble, not repeated here.
             if (widget.placement == WidgetPlacement.CANVAS) InfoText(widget.supportMessage)
             InfoFacts(
@@ -3576,6 +3651,14 @@ private fun BackgroundScopeChoice(
     thisStyleOnly: Boolean,
     enabled: Boolean,
     onScope: (Boolean) -> Unit,
+) = ScopeChoice(thisStyleOnly, enabled, onScope)
+
+/** Applies to: All styles or This style only, as Background offers it, for any page that has the choice. */
+@Composable
+internal fun ScopeChoice(
+    thisStyleOnly: Boolean,
+    enabled: Boolean,
+    onScope: (Boolean) -> Unit,
 ) {
     ControlCard {
         MicroLabel(stringResource(R.string.editor_bg_scope_heading))
@@ -3692,6 +3775,8 @@ internal fun PlacementControls(
     canGrow: Boolean = true,
     /** False greys out Reset: it would make a moving background larger than there is room for. */
     canReset: Boolean = true,
+    /** Text's size is its font's, in pixels: −/+ step one and the readout says it. */
+    textSizePx: Int? = null,
 ) {
     val width = panelWidth.coerceAtLeast(1).toFloat()
     val height = panelHeight.coerceAtLeast(1).toFloat()
@@ -3708,13 +3793,15 @@ internal fun PlacementControls(
             entryKey = entryKey,
         )
         val pinchHint = rememberLearnedHint(LearnedGesture.PinchResize)
-        val placementHint = stringResource(R.string.editor_placement_hint, stepPercent)
+        val placementHint = if (textSizePx != null) stringResource(R.string.editor_placement_hint_text)
+            else stringResource(R.string.editor_placement_hint, stepPercent)
         SizeControls(
-            readout = stringResource(R.string.editor_size_zoom, percent),
+            readout = textSizePx?.let { stringResource(R.string.editor_size_text, it) }
+                ?: stringResource(R.string.editor_size_zoom, percent),
             detail = sizeDetail,
             enabled = enabled,
-            canShrink = percent > minZoomPercent,
-            canGrow = percent < maxZoomPercent && canGrow,
+            canShrink = textSizePx?.let { it > TextPicture.MIN_SIZE_PX } ?: (percent > minZoomPercent),
+            canGrow = textSizePx?.let { it < TextPicture.MAX_SIZE_PX } ?: (percent < maxZoomPercent && canGrow),
             onStep = onStepZoom,
             info = { InfoText(placementHint) },
             infoKey = entryKey,
@@ -4496,8 +4583,11 @@ internal fun DirectWatchCanvas(
         snapshot.selectedVariantLabel(),
         snapshot.canvasWidgets.size,
     )
+    // The label a text is replacing is left out while the text is placed, as Add will leave it.
+    val replacedIndex = pendingPicture?.text?.replacing?.globalIndex
     val visualMoveIndex = draggingIndex.takeIf { it >= 0 }
         ?: pendingWidgetMove?.globalIndex
+        ?: replacedIndex
         ?: -1
     val visualMovePosition = if (draggingIndex >= 0) {
         draggingPosition
@@ -4781,7 +4871,7 @@ internal fun DirectWatchCanvas(
             if (dragLayer != null) {
                 val scaleX = size.width / snapshot.preview.width
                 val scaleY = size.height / snapshot.preview.height
-                drawImage(
+                if (visualMoveIndex != replacedIndex) drawImage(
                     image = dragLayer.widget,
                     dstOffset = IntOffset(
                         ((visualMovePosition.x + dragLayer.offsetX) * scaleX).roundToInt(),

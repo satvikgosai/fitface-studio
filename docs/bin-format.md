@@ -1409,6 +1409,47 @@ checkpoint schema 3 or 4. The checkpoint and archive schema rules are in
 [Architecture](architecture.md#the-project-archive). An added picture on a watch is
 covered by T7's mechanics, not yet by a session adding one through the app.
 
+Text is added as a picture, so nothing above changes for it. `AndroidTextSource` draws it
+on the phone, in a phone font by family name or a picked TTF/OTF (copied to private cache,
+loaded and deleted). It is drawn white on clear, each line centred, and cropped to its ink;
+the colour control tints it like any white picture. The watch is sent pixels, never a font,
+so any font works and the words no longer follow the watch's language.
+
+A **label** is a Value on reading 0 that names a dictionary word
+(`WidgetTextResources.label`). A 2026-10 census found 105 on 13 of the 99 catalogue faces,
+one on an always-on display, none an alignment target. Edit widget can replace one with
+its word drawn as text: the picture is added, then the label is removed to Removed, under
+one undo group.
+
+### Drawing the clock in another font
+
+A clock drawn as pictures — a Sprite whose frame *n* shows the digit *n*, or the *n*th
+weekday counted from Monday — can be drawn again in any font and still tell the time
+(`ClockDigits`). A 2026-10 census of the 99 catalogue faces, every style and always-on
+display, found hours and minutes drawn this way (sources 2/3/10/11) on 66 faces, seconds
+(14/15), a second time zone (106/107/109/110) and the weekday (17, seven frames) on one face
+each, and no date, month or AM/PM: those are watch-written text everywhere, so they are not
+offered. 1,375 of the 1,518 Sprites share frames, usually all four time digits one 0–9 set.
+None is Indexed8; 47% are opaque RGB565, and every opaque frame's four corners agree on one
+box colour (black on 393 sets) except one always-on display's.
+
+| Rule | Contract |
+| --- | --- |
+| Which sets | Every widget reaching the raster pool is a Sprite on one of those sources; digits have at most 10 frames, a weekday exactly 7; each frame's position agrees across the widgets that name it; one size and format, RGB565 or RGB565+A, proven trailer; never the background |
+| The colon | A Static is no reading, so the colon is recognised by place and shape: centred between the hour's units and the minute's tens and level with them, its one picture drawn only by Statics, inked as exactly two blobs one above the other. It goes with hours and minutes, drawn at their text size and centred where the old one was. All 26 colons in the catalogue's first styles pass, including a tilted one and one on a box stored with alpha; nothing else between the digits does |
+| The originals are replaced | The font draws each *original* frame again at its own size and format: one colour at the glyph's coverage, clear around it, or, when the frame paints a box (its commonest corner colour is opaque, as every RGB565 frame's is), blended over that box. Same size and format, so it is a pure sample replacement, and no byte is added |
+| The face | Drawn from those originals at the pool's present size and turn by the frame writer a turn uses (`StructuralEditor.redrawArtwork`). Lengths, image count, pointers and positions are asserted unchanged |
+| Kept | `SessionLineage.artworkFonts`, keyed like a turn: the font's name, the colour and each original frame's 8-bit coverage, deflated and base64. `ClockDigits.overlay` lays it over the pristine entry wherever originals are read, so every later resize and turn draws the new digits. The font file is never kept |
+| Reset | Dropping the drawing and redrawing from the vendor frames: at full size and no turn, the shipped bytes |
+| Fit | The glyphs fill the box the face's own glyphs inked (every frame's coverage of at least a quarter, per style, part and frame size): as tall, centred on it, each glyph centred across it, smaller when the widest would not fit the frame |
+| Colour | Each set keeps its own: its saved drawing's, or the mean of its own glyphs' most solid ink. Or one colour for all |
+
+`ClockDigitsTest` redraws every set in each catalogue face's first style and always-on
+display (227, 52 of them colons) and draws it back to the shipped bytes. It checks that a resize, a turn and a
+reset after a drawing draw from the right originals. On a watch (one SM-R390, 2026-10-26) a
+clock redrawn in another font installed and worked; which kinds of set that covered (boxed or
+clear digits, a colon, a weekday) was not recorded.
+
 ### Adding a moving background
 
 `MovingBackgroundEditor.insert` adds a GIF's frames as one type-4 Animation that plays under
@@ -1622,6 +1663,8 @@ bindings (§5) and a swapped date order (Comp, §7). A session on 2026-10-22 cov
 moving backgrounds and moving pictures, from GIFs and video, made by probes and through
 the app, on a custom face started in the app
 ([moving background](#adding-a-moving-background), [moving picture](#adding-a-moving-picture)).
+On 2026-10-26 a clock redrawn in another font through the app worked
+([clock font](#drawing-the-clock-in-another-font)).
 
 These do not establish a type-by-type matrix: Hand pivots, vector Arc and Rule resize
 need particular attention; imported type/source combinations remain incompletely

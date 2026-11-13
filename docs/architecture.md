@@ -329,6 +329,18 @@ or cancelled read deletes its own file, a new read keeps only the latest finishe
 more than two are ever cached, and a file being written is never deleted;
 `:core:model`'s `VideoClip` plans which.
 
+Text is drawn by `AndroidTextSource` in `:core:data` and then is an added picture
+([format](bin-format.md#adding-a-picture)), schema 5 like any other: nothing records that
+it was text, and a picked font file is never stored.
+
+Schema 6 is any earlier schema plus `SessionLineage.artworkFonts`: a clock drawn in
+another font ([format](bin-format.md#drawing-the-clock-in-another-font)), keyed by artwork
+like a turn, holding each original frame's glyph coverage and colour. It is the artwork's
+original from then on, and `Session.pristineWidgets` lays it over the pristine entry, so an
+older build that dropped it would draw the vendor's digits back on the next resize. It is
+written exactly while a drawing is saved; Reset font and Reset drop it. Glyphs are drawn by
+`AndroidTextSource` in `:core:data`; the font file is never kept.
+
 Schema 5 is schema 3 or 4 plus an added picture: a `WidgetImportOrigin` whose `kind` is
 `PICTURE`, with an empty donor face and a baseline that is one Static placed on the panel.
 It is written exactly while one exists, for the same reason: a build that reads 4 would
@@ -367,7 +379,7 @@ those names earlier, but neither behaviour is the containment mechanism.
 | Unopenable pristine container | Same validation/error funnel as package download |
 | Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
 | Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions; schema 3: declared ordered style survivors and validated shared-resource closure |
-| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities and the original digest; schema 4 also requires saved artwork turns naming existing original artwork or imports; schema 5 requires a picture origin, and any other schema refuses one |
+| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities and the original digest; schema 4 also requires saved artwork turns naming existing original artwork or imports; schema 5 requires a picture origin, a schema before 5 refuses one; schema 6 requires a clock font naming existing artwork with coverage the size of each frame, and any other schema refuses one |
 
 Clamp manifest strings; an invalid selected-style name becomes no saved selection.
 After validation, creation uses the row/files cleanup contract above. Failed import

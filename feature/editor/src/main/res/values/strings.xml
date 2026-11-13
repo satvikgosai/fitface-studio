@@ -301,6 +301,8 @@
 
     <!-- Placement controls -->
     <string name="editor_placement_hint">Tap: 1 px or %1$d%% · hold to repeat · pinch for larger changes</string>
+    <string name="editor_size_text">%1$d px font</string>
+    <string name="editor_placement_hint_text">Tap: 1 px · hold to repeat · pinch for larger changes</string>
     <string name="editor_placement_reset">RESET PLACEMENT</string>
 
     <!-- Background page -->
@@ -512,8 +514,6 @@
     <string name="editor_bg_import_heading">Background image</string>
     <string name="editor_bg_import_primary">Copies this background image. Your widgets stay in place.</string>
     <string name="editor_bg_import_multiple">This style has additional full-face artwork. Only its primary background is copied.</string>
-    <string name="editor_bg_import_before">Before</string>
-    <string name="editor_bg_import_after">After</string>
     <string name="editor_bg_import_scope">Applies to: %1$s</string>
     <string name="editor_bg_import_skipped">Unchanged: %1$s</string>
     <string name="editor_bg_import_result_detail">Colours and transparency follow your face’s background. This sample preview may differ from the watch.</string>

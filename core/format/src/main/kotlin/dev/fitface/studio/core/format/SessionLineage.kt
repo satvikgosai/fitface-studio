@@ -24,8 +24,23 @@ data class SessionLineage(
      * duplication and reordering, so the turn needs no remapping when widgets move.
      */
     val artworkTurns: Map<String, Int>? = null,
+    /**
+     * Clock pictures drawn again in a font, keyed like [artworkTurns]; absent when none is.
+     *
+     * The drawing *is* the artwork's original from then on — [ClockDigits.overlay] lays it over
+     * the pristine frames wherever they are read — so it is kept here rather than only in the
+     * container, where the next resize would sample the vendor's frames again.
+     */
+    val artworkFonts: Map<String, ArtworkFont>? = null,
 ) {
     fun turn(key: String): Int = artworkTurns?.get(key) ?: 0
+
+    fun font(key: String): ArtworkFont? = artworkFonts?.get(key)
+
+    fun withFont(key: String, font: ArtworkFont?): SessionLineage {
+        val next = artworkFonts.orEmpty() - key + (font?.let { mapOf(key to it) } ?: emptyMap())
+        return copy(artworkFonts = next.ifEmpty { null })
+    }
 
     fun withTurn(key: String, tenths: Int): SessionLineage {
         val angle = dev.fitface.studio.core.model.normalizedRotation(tenths)
@@ -33,16 +48,15 @@ data class SessionLineage(
         return copy(artworkTurns = next.ifEmpty { null })
     }
 
-    /** Turns of artwork that no longer exists: a deleted style's, or a deleted import's. */
+    /** Turns and fonts of artwork that no longer exists: a deleted style's, or a deleted import's. */
     fun withoutStaleTurns(imports: WidgetImportOrigins?): SessionLineage {
-        val kept = artworkTurns.orEmpty().filterKeys { key ->
-            when {
-                key.startsWith(NATIVE) -> key.removePrefix(NATIVE).substringBeforeLast(':') in variants.values
-                key.startsWith(IMPORT) -> imports?.widgets?.any { it.id == key.removePrefix(IMPORT) } == true
-                else -> false
-            }
+        fun live(key: String) = when {
+            key.startsWith(NATIVE) -> key.removePrefix(NATIVE).substringBeforeLast(':') in variants.values
+            key.startsWith(IMPORT) -> imports?.widgets?.any { it.id == key.removePrefix(IMPORT) } == true
+            else -> false
         }
-        return copy(artworkTurns = kept.ifEmpty { null })
+        return copy(artworkTurns = artworkTurns.orEmpty().filterKeys(::live).ifEmpty { null },
+            artworkFonts = artworkFonts.orEmpty().filterKeys(::live).ifEmpty { null })
     }
 
     fun remap(variant: String, mapping: (Int) -> Int?) = copy(widgets = widgets +
@@ -86,19 +100,29 @@ data class SessionLineage(
         }
         WidgetImportOrigins.validateResources(original, current, expectedPaths)
         imports?.validate(original, current, expectedPaths)
+        /** The entry [key]'s artwork is drawn from, or null when this face has no such artwork. */
+        fun artworkEntry(key: String): ContainerEntry? = when {
+            key.startsWith(NATIVE) -> {
+                val variant = key.removePrefix(NATIVE).substringBeforeLast(':')
+                val image = key.substringAfterLast(':').toIntOrNull()
+                original.entries.singleOrNull { it.basename == variant }?.takeIf {
+                    variant in variants.values && image != null && image in FaceRecordParser.scanImages(it).indices
+                }
+            }
+            key.startsWith(IMPORT) -> imports?.widgets?.singleOrNull { it.id == key.removePrefix(IMPORT) }
+                ?.let { it.entry(current.entryByBasename(it.variant)) }
+            else -> null
+        }
         artworkTurns?.forEach { (key, tenths) ->
             require(tenths in 10..3590 && tenths % 10 == 0) { "A saved artwork turn is invalid." }
-            val known = when {
-                key.startsWith(NATIVE) -> {
-                    val variant = key.removePrefix(NATIVE).substringBeforeLast(':')
-                    val image = key.substringAfterLast(':').toIntOrNull()
-                    variant in variants.values && image != null &&
-                        image in FaceRecordParser.scanImages(original.entryByBasename(variant)).indices
-                }
-                key.startsWith(IMPORT) -> imports?.widgets?.any { it.id == key.removePrefix(IMPORT) } == true
-                else -> false
-            }
-            require(known) { "A saved artwork turn names artwork this face does not have." }
+            require(artworkEntry(key) != null) { "A saved artwork turn names artwork this face does not have." }
+        }
+        artworkFonts?.forEach { (key, font) ->
+            val entry = artworkEntry(key)
+            require(entry != null) { "A saved clock font names artwork this face does not have." }
+            require(font.colour ushr 24 == 0xFF && font.frames.isNotEmpty() && (font.phoneFont == null) != (font.fontFile == null) &&
+                font.fontFile?.length?.let { it in 1..MAX_FONT_NAME } != false) { "A saved clock font is invalid." }
+            ClockDigits.overlay(entry, listOf(font))
         }
         if (styles.size != originalStyles.size) {
             val setting = current.entryByBasename("setting.bin")
@@ -134,12 +158,12 @@ data class SessionLineage(
             variants = variants.mapNotNull { (old, original) -> mapping[old]?.let { it to original } }.toMap(),
             widgets = widgets.mapNotNull { (old, origins) -> mapping[old]?.let { it to origins } }.toMap(),
         )
-        // Native turns name the *original* variant, which a renumbering does not change; a
-        // deleted style's artwork has no surviving variant at all.
-        val kept = artworkTurns?.filterKeys { key ->
+        // Native turns and fonts name the *original* variant, which a renumbering does not
+        // change; a deleted style's artwork has no surviving variant at all.
+        fun survives(key: String) =
             !key.startsWith(NATIVE) || key.removePrefix(NATIVE).substringBeforeLast(':') in retained.variants.values
-        }
-        return retained.copy(artworkTurns = kept?.ifEmpty { null })
+        return retained.copy(artworkTurns = artworkTurns?.filterKeys(::survives)?.ifEmpty { null },
+            artworkFonts = artworkFonts?.filterKeys(::survives)?.ifEmpty { null })
     }
 
     fun withResources(original: Fit3Container, current: Fit3Container) =
@@ -148,6 +172,8 @@ data class SessionLineage(
     companion object {
         private const val NATIVE = "native:"
         private const val IMPORT = "import:"
+        /** A picked font file's name, as the editor shows it. */
+        const val MAX_FONT_NAME = 120
 
         /** A vendor artwork's turn, by its original variant and lowest original image index. */
         fun nativeArtworkKey(originalVariant: String, imageIndex: Int) = "$NATIVE$originalVariant:$imageIndex"
