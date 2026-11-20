@@ -21,6 +21,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,9 @@ class Fit3DirectInstaller @Inject constructor(
     @Volatile
     private var watchdog: Job? = null
 
+    /** Lets the framework's consent prompt open while a discovery waits; see [ConsentPromptLease]. */
+    private val consentPrompt = ConsentPromptLease(ConsentPromptLease.FrameworkBinding(appContext))
+
     /** The Photos request in flight, or null for a face install or nothing. */
     @Volatile
     private var albumRequest: PhotoAlbumRequest? = null
@@ -67,6 +71,9 @@ class Fit3DirectInstaller @Inject constructor(
             outcome,
             detail,
         ->
+        // Every answer, kept or not, goes in the report: which agent answered and which
+        // stayed silent is what tells a consent prompt from a watch that is not connected.
+        mutableState.update { withDiscoveryAnswer(it, agentName(profile), "$outcome $code") }
         when (outcome) {
             "peer_found" -> updatePeer(profile, peer)
             "duplicate_request" -> Unit
@@ -753,6 +760,7 @@ class Fit3DirectInstaller @Inject constructor(
             } else {
                 FrameworkVerdict.MISSING
             },
+            frameworkVersionName = accessory?.versionName?.takeIf(String::isNotBlank),
             probed = true,
         )
     }
@@ -788,9 +796,16 @@ class Fit3DirectInstaller @Inject constructor(
         watchfaceAgent = null
         otaAgent = null
         discoveryStarted = false
+        consentPrompt.release()
         // Replies survive a reset: they are evidence for the report, and starting over is
         // usually the step taken right before someone copies it.
-        mutableState.update { DirectInstallState(watchReplies = it.watchReplies) }
+        mutableState.update {
+            DirectInstallState(
+                watchReplies = it.watchReplies,
+                discoveryAttempt = it.discoveryAttempt,
+                discoveryAnswers = it.discoveryAnswers,
+            )
+        }
         refreshEnvironment()
     }
 
@@ -867,10 +882,21 @@ class Fit3DirectInstaller @Inject constructor(
     @Synchronized
     private fun discoverPeers() {
         discoveryStarted = true
+        // Opened before the requests go out: the framework raises its consent prompt within
+        // a second or two of the first one, and the lease has to be in place by then.
+        val lease = consentPrompt.open()
         // `discovering()` also voids an earlier release acknowledgement: this only
         // runs with the plugin holding the watch, so the channel is demonstrably not
         // released and step 4 has to be walked again afterwards.
-        mutableState.update { it.discovering() }
+        mutableState.update {
+            withDiscoveryAnswer(it.discovering(), "prompt", lease.opened.name.lowercase())
+        }
+        // However this discovery ends — found, refused, timed out or reset — the lease ends
+        // with it, unless a later discovery has opened its own in the meantime.
+        scope.launch {
+            state.first { it.phase != DirectInstallPhase.DISCOVERING }
+            consentPrompt.close(lease)
+        }
         armWatchdog(DirectInstallPhase.DISCOVERING, PHASE_WATCHDOG_MS)
         watchfaceAgent?.forgetPeer()
         otaAgent?.forgetPeer()
@@ -1141,9 +1167,16 @@ class Fit3DirectInstaller @Inject constructor(
         else -> previous.message
     }
 
+    /** The short agent name the report uses, as for watch replies. */
+    private fun agentName(profile: String): String = when (profile) {
+        WatchfaceDeliveryAgent.PROFILE -> "watchface"
+        OtaTransferDeliveryAgent.PROFILE -> "ota"
+        else -> "agent"
+    }
+
     private companion object {
         const val PLUGIN_PACKAGE = FIT3_PLUGIN_PACKAGE
-        const val ACCESSORY_FRAMEWORK_PACKAGE = "com.samsung.accessory"
+        const val ACCESSORY_FRAMEWORK_PACKAGE = ConsentPromptLease.FRAMEWORK_PACKAGE
         const val ACCESSORY_REGISTER_AGENT_ACTION = "com.samsung.accessory.action.REGISTER_AGENT"
         const val VENDOR_PACKAGE_PREFIX = "com.samsung."
         const val OPENING_BATCH = 1

@@ -449,8 +449,9 @@
     <string name="editor_setup_phone_ready">Phone ready</string>
     <string name="editor_setup_phone_ready_detail">%1$s · Nearby access granted</string>
     <string name="editor_setup_step3_title">Find the watch for transfer</string>
-    <string name="editor_setup_step3_why">Keep the plugin’s Nearby devices access on.</string>
-    <string name="editor_setup_step3_why_legacy">Keep the plugin enabled.</string>
+    <string name="editor_setup_step3_why">Keep the plugin’s Nearby devices access on, and tap Allow if you are asked to let FitFace Studio access your accessory.</string>
+    <string name="editor_setup_step3_why_legacy">Keep the plugin enabled, and tap Allow if you are asked to let FitFace Studio access your accessory.</string>
+    <string name="editor_setup_step3_info">The phone’s accessory service asks once before another app may reach the watch. Its prompt closes by itself after about ten seconds; if you miss it, find the watch again and it asks again.</string>
     <string name="editor_setup_step3_done">Watch services found for this connection</string>
     <string name="editor_setup_step4_title">Free the connection for transfer</string>
     <string name="editor_setup_step4_why">Turn the plugin\'s Nearby devices access off. Return here after Android applies the change.</string>

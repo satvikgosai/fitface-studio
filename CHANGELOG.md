@@ -27,6 +27,9 @@ How to write this changelog
 
 Fixed:
 
+- On many phones not made by Samsung, **Find the watch for transfer** always timed out
+  saying the watch was not connected. A prompt now asks to let FitFace Studio access your
+  accessory; tap **Allow** once and the watch is found.
 - On a slow phone, a quick tap on an arrow could move a set of widgets more than one step,
   and **Undo** took a held move back a step at a time. Each tap now moves it one step, and
   one **Undo** takes back the whole move.

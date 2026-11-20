@@ -449,6 +449,7 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             var lastPhase: DirectInstallPhase? = null
             var lastReplies = emptyList<String>()
+            var lastAnswers = emptyList<String>()
             directInstaller.state.collect { delivery ->
                 // Received protocol bytes, logged once each as they arrive: on the coexistence
                 // route nothing is expected here, so any entry is news worth a line.
@@ -456,6 +457,13 @@ class EditorViewModel @Inject constructor(
                     delivery.watchReplies.filterNot(lastReplies::contains)
                         .forEach { diagnostics.info(TAG, "Watch reply", it) }
                     lastReplies = delivery.watchReplies
+                }
+                // Which agent answered a discovery, and which never did, is what tells an
+                // unanswered consent prompt from a watch that is not connected.
+                if (delivery.discoveryAnswers != lastAnswers) {
+                    delivery.discoveryAnswers.filterNot(lastAnswers::contains)
+                        .forEach { diagnostics.info(TAG, "Discovery answer", it) }
+                    lastAnswers = delivery.discoveryAnswers
                 }
                 // Physical delivery cannot be exercised in this repository's tests, so the
                 // phase order a real transfer walked is the only account of where one
@@ -2325,7 +2333,8 @@ class EditorViewModel @Inject constructor(
                         "companion=${install.environment.companionAppInstalled} " +
                             "plugin=${install.environment.pluginInstalled}" +
                             (install.environment.pluginVersionName?.let { "@$it" } ?: "") + " " +
-                            "framework=${install.environment.frameworkVerdict} " +
+                            "framework=${install.environment.frameworkVerdict}" +
+                            (install.environment.frameworkVersionName?.let { "@$it" } ?: "") + " " +
                             "agents=${install.environment.accessoryAgentCount}",
                         "peers=${install.peersCached} " +
                             "bytes=${install.acknowledgedBytes}/${install.totalBytes} " +
@@ -2333,6 +2342,8 @@ class EditorViewModel @Inject constructor(
                         install.failure?.let { "failure=$it" },
                         install.watchReplies.takeIf { it.isNotEmpty() }
                             ?.let { "replies=${it.joinToString("; ")}" },
+                        install.discoveryAnswers.takeIf { it.isNotEmpty() }
+                            ?.let { "discovery=${it.joinToString("; ")}" },
                     ),
                 ),
             )

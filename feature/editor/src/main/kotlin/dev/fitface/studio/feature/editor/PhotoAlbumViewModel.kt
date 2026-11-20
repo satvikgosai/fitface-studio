@@ -433,8 +433,12 @@ class PhotoAlbumViewModel @Inject constructor(
                     "phase=${install.phase} " +
                         "companion=${install.environment.companionAppInstalled} " +
                         "plugin=${install.environment.pluginInstalled}" +
-                        (install.environment.pluginVersionName?.let { "@$it" } ?: ""),
+                        (install.environment.pluginVersionName?.let { "@$it" } ?: "") + " " +
+                        "framework=${install.environment.frameworkVerdict}" +
+                        (install.environment.frameworkVersionName?.let { "@$it" } ?: ""),
                     install.failure?.let { "failure=$it" },
+                    install.discoveryAnswers.takeIf { it.isNotEmpty() }
+                        ?.let { "discovery=${it.joinToString("; ")}" },
                 ),
             )
             val report = reporter.render(listOf(section))

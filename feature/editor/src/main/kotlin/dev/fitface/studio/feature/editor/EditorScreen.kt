@@ -5284,6 +5284,7 @@ internal fun SetupChecklist(
                     R.string.editor_setup_step3_why_legacy
                 },
             ),
+            info = stringResource(R.string.editor_setup_step3_info),
             done = stringResource(R.string.editor_setup_step3_done),
             action = onDiscover,
         ),
