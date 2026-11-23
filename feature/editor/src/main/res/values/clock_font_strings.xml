@@ -1,5 +1,5 @@
 <resources>
-    <!-- Widgets page entry, shown when the selected style draws its clock from pictures of digits. -->
+    <!-- Read out for the Layers page's Clock font button; offered when the selected style draws its clock from pictures of digits. -->
     <string name="editor_clock_font_open">Clock font</string>
     <!-- Header subtitle on the Widgets page while the clock's font is chosen. -->
     <string name="editor_subtitle_clock_font">Choosing the clock’s font</string>

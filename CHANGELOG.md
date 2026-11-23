@@ -33,14 +33,20 @@ Fixed:
 - On a slow phone, a quick tap on an arrow could move a set of widgets more than one step,
   and **Undo** took a held move back a step at a time. Each tap now moves it one step, and
   one **Undo** takes back the whole move.
+- On **Install**, the ⓘ for **Grant FitFace Nearby devices access** sat at the far edge of
+  the row when the name ran onto two lines. It now follows the name.
+- Adding a second image from the **Layers** controls after leaving the first one unplaced
+  stayed on **Canvas** and seemed to do nothing. Each button now opens its own choice: the
+  one you left, as you left it, or a new one.
 
 Added:
 
-- **Add text** on **Widgets**, in any of your phone's fonts or a font file, placed and
-  coloured like a picture. A face's own label, such as "steps", can be redrawn the same way
-  with **Draw in another font** in **Edit widget**.
-- **Clock font** redraws a clock made of pictures of digits in another font and colour, in
-  this style or all of them. **Reset font** brings its own digits back.
+- **Add text** on **Widgets** and in the **Layers** controls, in any of your phone's fonts
+  or a font file, placed and coloured like a picture. A face's own label, such as "steps",
+  can be redrawn the same way with **Draw in another font** in **Edit widget**.
+- **Clock font**, in the **Layers** controls, redraws a clock made of pictures of digits in
+  another font and colour, in this style or all of them. **Reset font** brings its own
+  digits back.
 - Hold the face to see it as it is, without the change, on the **Clock font** page and when
   reviewing a background from another face, which no longer has **Before** and **After**.
   While placing a background, a picture or text, hold the face still to do the same.

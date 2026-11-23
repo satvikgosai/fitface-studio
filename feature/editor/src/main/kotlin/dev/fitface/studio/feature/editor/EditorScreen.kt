@@ -49,6 +49,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -99,6 +101,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
@@ -110,6 +113,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -174,6 +180,7 @@ import dev.fitface.studio.core.ui.FitTag
 import dev.fitface.studio.core.ui.FitTopBar
 import dev.fitface.studio.core.ui.InfoFacts
 import dev.fitface.studio.core.ui.InfoText
+import dev.fitface.studio.core.ui.InfoTriggerSize
 import dev.fitface.studio.core.ui.LearnedGesture
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
@@ -562,10 +569,16 @@ private fun EditorScreen(
             importingBackground = false
             page = EditorPage.Canvas
         })
-    // A picture chosen from the Canvas's Layers page is placed on the Widgets page, where
-    // placing one happens; the Canvas has no controls for it.
-    LaunchedEffect(state.pendingPicture != null) {
-        if (state.pendingPicture != null && page == EditorPage.Canvas) page = EditorPage.Widgets
+    // A picture, text or clock font started from the Canvas's Layers page is chosen on the
+    // Widgets page, where placing one happens; the Canvas has no controls for it. Driven by
+    // the count of starts, not by "something is pending": a new choice replacing one left
+    // open changes no flag, and the button seemed dead. Edit widget goes there itself.
+    var choicesSeen by rememberSaveable { mutableIntStateOf(state.widgetsChoicesStarted) }
+    LaunchedEffect(state.widgetsChoicesStarted) {
+        if (state.widgetsChoicesStarted != choicesSeen) {
+            choicesSeen = state.widgetsChoicesStarted
+            if (page == EditorPage.Canvas) page = EditorPage.Widgets
+        }
     }
     // An added picture is shown where it landed, selected, as an import is.
     LaunchedEffect(state.pictureAdded?.id) {
@@ -1271,11 +1284,27 @@ private fun EditorPageContent(
     onResetDelivery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // A picture, text or clock font being chosen stays until Discard or Add/Apply, as a
+    // background does: leaving the Widgets page keeps it. Each of the Layers page's buttons
+    // opens its own kind: the one of that kind left open, as it was, or else a new one, which
+    // replaces a different kind left unfinished (the ViewModel does that and the screen goes
+    // there when it starts).
+    val open = state.pendingPicture
+    val onAddPicture = {
+        if (open != null && open.text == null) onNavigate(EditorPage.Widgets) else pictures.onChoose()
+    }
+    val onAddText = {
+        if (open?.text != null && open.text.replacing == null) onNavigate(EditorPage.Widgets) else pictures.onAddText()
+    }
+    val onClockFont = {
+        if (state.pendingClockFont != null) onNavigate(EditorPage.Widgets) else pictures.clock.onOpen()
+    }
     when (page) {
         EditorPage.Canvas -> CanvasWorkspace(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
             onResizeWidget, onRotateWidget, onWidgetColor, onArrangeWidget, onApplyAll, onImportWidget,
-            pictures.onChoose, onDuplicateWidget, onRemoveWidget,
+            onAddPicture, onAddText, onClockFont,
+            onDuplicateWidget, onRemoveWidget,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
             selection, onUndo, onRedo, modifier,
         )
@@ -1376,6 +1405,8 @@ private fun CanvasWorkspace(
     onApplyAll: (Boolean) -> Unit,
     onImportWidget: () -> Unit,
     onAddPicture: () -> Unit,
+    onAddText: () -> Unit,
+    onClockFont: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRemoveWidget: () -> Unit,
     onOpenWidgets: () -> Unit,
@@ -1441,6 +1472,8 @@ private fun CanvasWorkspace(
                         onApplyAll = onApplyAll,
                         onImportWidget = onImportWidget,
                         onAddPicture = onAddPicture,
+                        onAddText = onAddText,
+                        onClockFont = onClockFont,
                         onInspect = onInspect,
                     )
                 }
@@ -2536,10 +2569,6 @@ private fun WidgetsWorkspace(
                         Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
                     FitButton(stringResource(R.string.editor_text_open), pictures.onAddText,
                         Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
-                    if (snapshot.widgets.any { it.clockPart != null }) {
-                        FitButton(stringResource(R.string.editor_clock_font_open), pictures.clock.onOpen,
-                            Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
-                    }
                     if (state.readingFrames) ReadingFramesLine()
                 }
             }
@@ -5454,19 +5483,36 @@ private fun SetupStepRow(
     ) {
         StepBadge(number, done, busy)
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    row.title,
-                    Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (blocked) {
-                        MaterialTheme.fitText.tertiary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                )
-                if (row.info != null && !done) FitInfo(row.title, row.info)
-            }
+            // The ⓘ is inside the title, after its last word. Beside it in a row, a title that
+            // wraps (step 2's, on most phones) took the whole width and pushed the ⓘ to the
+            // far edge, away from the words it explains.
+            val info = row.info?.takeIf { !done }
+            val triggerSize = with(LocalDensity.current) { InfoTriggerSize.toSp() }
+            Text(
+                buildAnnotatedString {
+                    append(row.title)
+                    if (info != null) {
+                        // No break before it: the ⓘ goes to the next line with the last word.
+                        append('\u00A0')
+                        appendInlineContent(SetupInfoId, "\uFFFC")
+                    }
+                },
+                style = MaterialTheme.typography.titleSmall,
+                color = if (blocked) {
+                    MaterialTheme.fitText.tertiary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                inlineContent = if (info == null) {
+                    emptyMap()
+                } else {
+                    mapOf(
+                        SetupInfoId to InlineTextContent(
+                            Placeholder(triggerSize, triggerSize, PlaceholderVerticalAlign.TextCenter),
+                        ) { FitInfo(row.title, info) },
+                    )
+                },
+            )
             val line = when {
                 busy -> stringResource(R.string.editor_step_working)
                 done -> row.done
@@ -5488,6 +5534,8 @@ private fun SetupStepRow(
         }
     }
 }
+
+private const val SetupInfoId = "info"
 
 /**
  * Whether the checklist draws step [index] (0-based) as its own row. Steps 1 and 2 fold into

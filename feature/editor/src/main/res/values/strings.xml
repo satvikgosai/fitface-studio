@@ -149,8 +149,12 @@
     <string name="editor_quick_on">On</string>
     <string name="editor_quick_off">Off</string>
     <string name="editor_quick_all">ALL</string>
-    <string name="editor_quick_import_widget">Import widget</string>
-    <string name="editor_quick_add_picture">Image/video</string>
+    <!-- The Layers page's first row: four buttons a quarter of the row each, in small type
+         on two short lines, so the line break is part of each label. -->
+    <string name="editor_quick_import_widget">Import\nwidget</string>
+    <string name="editor_quick_add_picture">Add\nimage</string>
+    <string name="editor_quick_add_text">Add\ntext</string>
+    <string name="editor_quick_clock_font">Clock\nfont</string>
     <string name="editor_quick_colour_facts">%1$s · %2$s</string>
     <string name="editor_quick_colour_unavailable">This widget\'s colour can\'t be changed.</string>
     <string name="editor_quick_colour_apply">Apply</string>

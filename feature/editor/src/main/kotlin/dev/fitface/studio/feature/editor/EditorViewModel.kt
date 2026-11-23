@@ -314,6 +314,15 @@ data class EditorUiState(
     val pendingPicture: PendingPicture? = null,
     /** The clock being drawn in another font, from the Widgets page; see [PendingClockFont]. */
     val pendingClockFont: PendingClockFont? = null,
+    /**
+     * How many picture, text and clock-font choices have started on the Widgets page.
+     *
+     * A counter, like [widgetRemovals], so the screen can go to a choice each time one starts.
+     * Going there when "something is pending" became true missed every start after the first:
+     * back on the Canvas with a choice left open, a new one replaced it and nothing changed
+     * from false to true, so the button seemed to do nothing.
+     */
+    val widgetsChoicesStarted: Int = 0,
     val pictureAdded: PictureAdded? = null,
     val selectedWidgetIndex: Int? = null,
     /**
@@ -1251,7 +1260,7 @@ class EditorViewModel @Inject constructor(
                         mutableState.value.pendingPicture?.let { previous ->
                             if (previous.animation == null) repository.releasePicture(previous.prepared.handle)
                         }
-                        mutableState.value = mutableState.value.copy(
+                        mutableState.value = mutableState.value.startingChoice().copy(
                             pendingPicture = PendingPicture(picture.copy(preview = pending.source.frames.first()),
                                 start.percent / 100f, panel.width / 2f, panel.height / 2f, animation = pending),
                             isWorking = false,
@@ -1301,7 +1310,7 @@ class EditorViewModel @Inject constructor(
                     mutableState.value.pendingPicture?.let { previous ->
                         if (previous.prepared.handle != prepared.handle) repository.releasePicture(previous.prepared.handle)
                     }
-                    mutableState.value = mutableState.value.copy(
+                    mutableState.value = mutableState.value.startingChoice().copy(
                         pendingPicture = PendingPicture(prepared, start.percent / 100f,
                             snapshot.preview.width / 2f, snapshot.preview.height / 2f),
                         isWorking = false,
@@ -1328,6 +1337,8 @@ class EditorViewModel @Inject constructor(
         val snapshot = mutableState.value.snapshot ?: return
         val label = snapshot.widgets.singleOrNull { it.globalIndex == mutableState.value.selectedWidgetIndex } ?: return
         val word = label.label ?: return
+        // This label's text left open is resumed as it was, not drawn again from the start.
+        if (mutableState.value.pendingPicture?.text?.replacing?.globalIndex == label.globalIndex) return
         // Drawn white, so white is the text's own colour and anything else is a tint.
         val tint = label.colorArgb?.let { it or 0xFF000000.toInt() }?.takeIf { it != 0xFFFFFFFF.toInt() }
         beginText(TextPicture(word.text, sizePx = TextPicture.size(word.sizePx)), tint, label) { width, height ->
@@ -1355,7 +1366,7 @@ class EditorViewModel @Inject constructor(
                     mutableState.value.pendingPicture?.let { previous ->
                         if (previous.prepared.handle != picture.handle) repository.releasePicture(previous.prepared.handle)
                     }
-                    mutableState.value = mutableState.value.copy(isWorking = false)
+                    mutableState.value = mutableState.value.startingChoice().copy(isWorking = false)
                     val (centreX, centreY) = place(picture.width, picture.height)
                     updatePicture(PendingPicture(picture, 1f, centreX, centreY, tint,
                         text = PendingText(text, text, replacing = replacing)))
@@ -1395,11 +1406,16 @@ class EditorViewModel @Inject constructor(
      * tray's style scope, with no font chosen: the face is shown as it is until one is.
      */
     fun startClockFont() {
-        val state = mutableState.value
-        val snapshot = state.snapshot ?: return
+        val snapshot = mutableState.value.snapshot ?: return
         val parts = snapshot.widgets.mapNotNull { it.clockPart }.distinct().sorted()
-        if (parts.isEmpty() || state.pendingPicture != null) return
-        mutableState.value = state.copy(pendingClockFont = PendingClockFont(
+        // Already open, it is resumed as it was: opening it again from the Canvas or Edit widget
+        // after leaving the page must not throw away the font, parts and colour chosen.
+        if (parts.isEmpty() || mutableState.value.pendingClockFont != null) return
+        // A picture or text left unfinished gives way to the clock font asked for now.
+        textJob?.cancel()
+        discardPicture()
+        val state = mutableState.value
+        mutableState.value = state.copy(widgetsChoicesStarted = state.widgetsChoicesStarted + 1, pendingClockFont = PendingClockFont(
             parts = parts.toSet(),
             applyToAllStyles = state.applyWidgetEditsToAllStyles,
             available = parts,
@@ -1457,6 +1473,16 @@ class EditorViewModel @Inject constructor(
     fun discardClockFont() {
         clockFontJob?.cancel()
         mutableState.value = mutableState.value.copy(pendingClockFont = null)
+    }
+
+    /**
+     * A picture or text starting on the Widgets page: one choice is open there at a time, so a
+     * clock font left unfinished gives way to it, and the start is counted for the screen to go
+     * there ([EditorUiState.widgetsChoicesStarted]). The caller releases a previous picture.
+     */
+    private fun EditorUiState.startingChoice(): EditorUiState {
+        if (pendingClockFont != null) clockFontJob?.cancel()
+        return copy(pendingClockFont = null, widgetsChoicesStarted = widgetsChoicesStarted + 1)
     }
 
     fun applyClockFont() {

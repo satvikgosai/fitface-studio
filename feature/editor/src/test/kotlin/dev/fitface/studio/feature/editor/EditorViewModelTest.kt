@@ -263,6 +263,43 @@ class EditorViewModelTest {
     }
 
     /**
+     * One choice is open on the Widgets page at a time, and each start is counted so the screen
+     * goes there. Opening the clock font again resumes it as chosen and counts nothing; text
+     * replaces a clock font left open, and the clock font replaces text and releases it.
+     */
+    @Test
+    fun aNewChoiceReplacesAnotherKindLeftOpenAndTheSameKindResumes() {
+        val clock = listOf(widget(globalIndex = 0, x = 10, y = 10).copy(type = 3, clockPart = ClockPart.TIME))
+        val repository = FakeRepository(snapshot(clock), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.startClockFont()
+        viewModel.setClockFont(TextFont.Phone(PhoneFont.SERIF))
+        settle()
+        val chosen = requireNotNull(viewModel.state.value.pendingClockFont)
+        assertEquals(1, viewModel.state.value.widgetsChoicesStarted)
+
+        viewModel.startClockFont()
+        assertEquals("opened again, it keeps the font chosen", chosen, viewModel.state.value.pendingClockFont)
+        assertEquals("a resume is not a start", 1, viewModel.state.value.widgetsChoicesStarted)
+
+        viewModel.startText("Text")
+        settle()
+        assertNull("text replaces the clock font left open", viewModel.state.value.pendingClockFont)
+        val text = requireNotNull(viewModel.state.value.pendingPicture)
+        assertNotNull(text.text)
+        assertEquals(2, viewModel.state.value.widgetsChoicesStarted)
+
+        viewModel.startClockFont()
+        settle()
+        assertNull("the clock font replaces the text", viewModel.state.value.pendingPicture)
+        assertTrue(text.prepared.handle in repository.released)
+        assertNotNull(viewModel.state.value.pendingClockFont)
+        assertEquals(3, viewModel.state.value.widgetsChoicesStarted)
+    }
+
+    /**
      * The Clock font page opens on every part the style draws as pictures with no font chosen,
      * drawing nothing until one is; then it draws the face again on each change with only the
      * newest request landing, keeps the last face when one is refused, and applies only what
