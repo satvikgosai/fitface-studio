@@ -4,7 +4,7 @@
 
 | Application ID | `dev.fitface.studio` |
 | --- | --- |
-| Version | `0.3.0` (code `30`) |
+| Version | `0.3.1` (code `31`) |
 | Android | 9.0 (SDK 28) or newer |
 
 An Android app for browsing, editing and installing Fit3 (SM-R390) watch faces.
@@ -59,6 +59,9 @@ the app. The watch photo shows a real Bluetooth install.
   always-on display separately.
 - Delete unused styles with an exact space-saving review, including when an edit
   needs more room under the watch's 4 MiB limit.
+- Add your own pictures, and text in any of your phone's fonts or a font file, as
+  widgets. A face's fixed labels, such as "steps", can be redrawn in another font.
+- Redraw a clock drawn as pictures of digits in another font. It still tells the time.
 - Add a moving background, or a moving picture on top of the face, from a GIF or a short
   clip of a video: placed like a still one, with as many frames as fit. The face plays on
   Canvas as it will on the watch.
@@ -121,7 +124,8 @@ the catalogue-to-watch flow. Follow the current app checklist if the video diffe
 
 ## Scope and limits
 
-Faces without an editable container, such as “Photos”, show **Not editable**.
+The Photos face has nothing to edit. Open it in **Watch faces** to send it up to 7 of your
+own photos and choose its clock style and colour.
 Several editing operations are watch-tested, but not every widget type or firmware is.
 The app enforces the watch's 4 MiB container limit; detailed editing limits and
 hardware coverage are in the [format reference](docs/bin-format.md#editing-contracts).

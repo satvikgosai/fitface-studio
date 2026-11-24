@@ -111,6 +111,48 @@ class DirectInstallStateTest {
     }
 
     /**
+     * The accessory framework's consent prompt closes itself after ten seconds, so the page
+     * has to say to expect it while discovery runs, and again when a discovery goes silent.
+     */
+    @Test
+    fun discoveryTellsTheReaderToAllowTheAccessoryPrompt() {
+        assertTrue(ready.discovering().message.contains("Allow"))
+        val timedOut = TimeoutRecovery.timedOut(ready.discovering(), DirectInstallPhase.DISCOVERING)
+        assertTrue(timedOut.message.contains("Allow"))
+    }
+
+    /**
+     * Retries repeat the same answers, and the report logs each new entry once, so every
+     * entry carries its attempt: a second silent attempt must not vanish as a duplicate.
+     */
+    @Test
+    fun discoveryAnswersAreNumberedByAttemptAndBounded() {
+        var state = ready.discovering()
+        state = withDiscoveryAnswer(state, "ota", "device_not_connected 1793")
+        state = withDiscoveryAnswer(state.discovering(), "ota", "device_not_connected 1793")
+
+        assertEquals(
+            listOf("#1 ota device_not_connected 1793", "#2 ota device_not_connected 1793"),
+            state.discoveryAnswers,
+        )
+
+        repeat(MAX_DISCOVERY_ANSWERS + 3) { state = withDiscoveryAnswer(state, "watchface", "peer_found 0") }
+        assertEquals(MAX_DISCOVERY_ANSWERS, state.discoveryAnswers.size)
+        assertEquals("#2 watchface peer_found 0", state.discoveryAnswers.last())
+    }
+
+    /** The answers are evidence for the report, so a timeout's rewind keeps them. */
+    @Test
+    fun aDiscoveryTimeoutKeepsWhatWasHeard() {
+        val heard = withDiscoveryAnswer(ready.discovering(), "watchface", "peer_found 0")
+
+        val timedOut = TimeoutRecovery.timedOut(heard, DirectInstallPhase.DISCOVERING)
+
+        assertEquals(heard.discoveryAnswers, timedOut.discoveryAnswers)
+        assertEquals(1, timedOut.discoveryAttempt)
+    }
+
+    /**
      * The case this whole recovery path exists for: the transfer fails after the
      * channel has been handed over, and the only way back is reconnecting the watch,
      * discovering again, and handing the channel over again.

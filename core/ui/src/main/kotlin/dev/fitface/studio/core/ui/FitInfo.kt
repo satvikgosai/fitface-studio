@@ -311,6 +311,12 @@ private val InfoGlyphMicro: Dp = 10.dp
 /** Inside a [FitTag], beside its micro text. */
 private val InfoGlyphTag: Dp = 9.dp
 private val InfoGlyphMargin: Dp = 4.dp
+/**
+ * The laid-out side of a default [FitInfo], for a placeholder that carries one inside text:
+ * after a title that can wrap, a ⓘ beside the text lands at the row's far edge, because the
+ * wrapped text takes the whole width.
+ */
+val InfoTriggerSize: Dp = InfoGlyphBody + InfoGlyphMargin
 private val BubbleGap: Dp = 6.dp
 private val BubbleMargin: Dp = 16.dp
 private val BubbleMaxWidth: Dp = 300.dp

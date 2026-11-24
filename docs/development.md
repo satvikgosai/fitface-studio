@@ -46,9 +46,9 @@ credentials are deliberately not stored in this repository.
   :app:lintDebug
 ```
 
-Last recorded corpus-backed verification (2026-11-06, widget deletion with artwork):
-**1047 tests collected, 1046 passed, 1 skipped, 0 failures, 0 lint errors,
-25 lint warnings.**
+Last recorded corpus-backed verification (2026-11-23, 0.3.1 release check):
+**1107 tests collected, 1106 passed, 1 skipped, 0 failures, 0 lint errors,
+26 lint warnings.**
 Those warnings were dependency/SDK notices. These are recorded results, not an
 assertion that a later checkout has already passed; run the command above.
 

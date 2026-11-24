@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.TextFont
 import dev.fitface.studio.core.model.VideoClip
 import dev.fitface.studio.core.model.WATCH_CONTAINER_BYTE_CEILING
 import dev.fitface.studio.core.model.animationFrameBytes
@@ -40,13 +41,24 @@ internal class PictureActions(
     val onAddedShown: (Long) -> Unit,
     /** A moving picture's video clip moved or stretched; read again. */
     val onClip: (VideoClip) -> Unit,
+    /** Start placing text as a picture; see [EditorViewModel.startText]. */
+    val onAddText: () -> Unit,
+    val onTextWords: (String) -> Unit,
+    val onTextFont: (TextFont) -> Unit,
+    /** Pick a TTF or OTF file to draw the text in; see [EditorViewModel.chooseFontFile]. */
+    val onChooseFontFile: () -> Unit,
+    /** Start drawing the selected label in another font; see [EditorViewModel.startTextFromLabel]. */
+    val onDrawLabel: () -> Unit,
+    /** The Clock font page's, which takes the Widgets page as placing a picture does. */
+    val clock: ClockFontActions,
 )
 
 /**
  * Placing a picked picture before it is added: the Background page's controls, in the same
  * order, for a widget. A moving picture adds what a moving background does — it plays on the
  * face, with the frames kept, the loop and, for a video, the part read — and has its size
- * chosen here for good, since an Animation is not resized once added.
+ * chosen here for good, since an Animation is not resized once added. Text is placed as the
+ * picture it becomes, with a Text card first and Placement's size in the font's pixels.
  *
  * The face draws the picture where and how it will land; a pinch sizes it and a drag moves
  * it, exactly as they place a background. Under it are the same placement controls — its
@@ -68,10 +80,12 @@ internal fun PictureWorkspace(
     val fits = snapshot.containerBytes + pending.addedBytes <= WATCH_CONTAINER_BYTE_CEILING
     val enabled = !state.isWorking
     val animation = pending.animation
+    val text = pending.text
     var playing by remember { mutableStateOf(true) }
     val frame = rememberPlayingFrame(animation, playing)
     // The face draws the frame showing now, through the same pending-picture path a still uses.
     val shown = frame?.let { pending.copy(prepared = pending.prepared.copy(preview = it)) } ?: pending
+    val compare = rememberFaceCompare(pending.prepared.handle)
     PinnedFacePage(
         snapshot,
         faceCap = 186.dp,
@@ -91,6 +105,7 @@ internal fun PictureWorkspace(
                 onTransformImage = pictures.onTransform,
                 modifier = faceModifier,
                 pendingPicture = shown,
+                compare = compare,
             )
             if (animation != null) {
                 TextButton(onClick = { playing = !playing }) {
@@ -102,7 +117,10 @@ internal fun PictureWorkspace(
             }
         },
     ) {
-        ImportFactCard {
+        CompareHint(stringResource(R.string.editor_compare_still))
+        // Text is sized and placed like any widget edit: by its font size alone. What it adds
+        // and the face's room are a picture's facts; a text is a few KB, so only a refusal shows.
+        if (text == null) ImportFactCard {
             ImportFactRow(
                 stringResource(if (animation != null) R.string.editor_moving_picture_fact else R.string.editor_picture_fact),
                 stringResource(R.string.widget_import_widget_size, size.width, size.height),
@@ -128,11 +146,25 @@ internal fun PictureWorkspace(
             )
             Box(Modifier.padding(top = 4.dp)) { ImportRoomMeter(snapshot, pending.addedBytes) }
         }
+        text?.let {
+            TextPictureControls(it, enabled, pictures, info = listOfNotNull(
+                stringResource(R.string.editor_text_detail, importVariantLabel(snapshot.selectedVariant)),
+                stringResource(R.string.editor_text_note),
+                if (snapshot.isAodSelected) stringResource(R.string.editor_picture_aod_note) else null,
+            ))
+            if (!fits) {
+                Text(
+                    stringResource(R.string.editor_text_no_room),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
         PlacementControls(
             placement = placement,
             edges = pictureEdges(pending, panel.width, panel.height),
             entryKey = pending.prepared.handle,
-            sizeDetail = stringResource(R.string.editor_size_value, size.width, size.height),
+            sizeDetail = if (text == null) stringResource(R.string.editor_size_value, size.width, size.height) else null,
             panelWidth = panel.width,
             panelHeight = panel.height,
             enabled = enabled,
@@ -143,12 +175,22 @@ internal fun PictureWorkspace(
             // Larger stops where the face is full, as a widget's does.
             maxZoomPercent = pending.largestFittingPercent(snapshot.roomForPicture()),
             stepPercent = WidgetResizeStepPercent,
+            textSizePx = text?.wanted?.sizePx,
         )
         if (animation != null) {
             FrameStepControls(animation, enabled, animationFrameBytes(size.width, size.height), pictures.onStep)
             PartControls(animation, enabled, state.readingFrames, pictures.onClip)
         }
         ImageColourControls(pending.tint, enabled = enabled, onTint = pictures.onTint, stateKey = pending.prepared.handle)
+        // Replacing a label deletes it: said where it is done, not behind an ⓘ.
+        text?.replacing?.label?.let { label ->
+            Text(
+                stringResource(R.string.editor_text_replacing, label.text),
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.fitText.secondary,
+            )
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             FitButton(
                 stringResource(R.string.editor_bg_discard),
@@ -156,10 +198,11 @@ internal fun PictureWorkspace(
                 style = FitButtonStyle.Secondary,
             )
             FitButton(
-                stringResource(R.string.widget_import_add_to, importVariantLabel(snapshot.selectedVariant)),
+                if (text?.replacing != null) stringResource(R.string.editor_text_replace)
+                else stringResource(R.string.widget_import_add_to, importVariantLabel(snapshot.selectedVariant)),
                 pictures.onAdd,
                 Modifier.weight(2f),
-                enabled && fits,
+                enabled && fits && text?.ready != false,
                 loading = state.isWorking,
             )
         }

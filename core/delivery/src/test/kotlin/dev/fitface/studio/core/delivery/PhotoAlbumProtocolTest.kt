@@ -4,6 +4,7 @@ import dev.fitface.studio.core.model.AlbumPhoto
 import dev.fitface.studio.core.model.DirectInstallPayload
 import dev.fitface.studio.core.model.PHOTO_ALBUM_FACE_ID
 import dev.fitface.studio.core.model.PhotoAlbumRequest
+import dev.fitface.studio.core.model.PhotoClock
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.zip.CRC32
@@ -11,6 +12,7 @@ import java.util.zip.Deflater
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -44,6 +46,43 @@ class PhotoAlbumProtocolTest {
                 named(0x13, a) + bytes(0x1F, 0) +
                 named(0x13, b) + bytes(0x1F, 1),
             PhotoAlbumProtocol.setEditInfo(PHOTO_ALBUM_FACE_ID, listOf(default, a, b), b),
+        )
+    }
+
+    /**
+     * With a clock, the count is 4 and its type and colour follow the backgrounds, as the
+     * plugin's builder writes them for the face's settings in their order.
+     */
+    @Test
+    fun editInfoWithAClockAddsItsTypeAndColourAfterTheBackgrounds() {
+        assertArrayEquals(
+            bytes(0x07, 0x18, 4, 0x04, 0xFE, 0x1B, 2) +
+                named(0x13, default) + bytes(0x1F, 0) +
+                named(0x13, a) + bytes(0x1F, 1) +
+                bytes(0x0D, 2, 0x1E, 57),
+            PhotoAlbumProtocol.setEditInfo(PHOTO_ALBUM_FACE_ID, listOf(default, a), a, PhotoClock(2, 57)),
+        )
+    }
+
+    /** Changing only the clock is a selection that carries it: no image list, then the face. */
+    @Test
+    fun changingOnlyTheClockSetsTheFacesSettingsWithIt() {
+        val request = PhotoAlbumRequest(PHOTO_ALBUM_FACE_ID, listOf(default), listOf(a, b), selected = a,
+            clock = PhotoClock(1, 22))
+        assertTrue(request.isSelection)
+        assertEquals(
+            listOf(
+                PhotoAlbumProtocol.setEditInfo(254, listOf(default, a, b), a, PhotoClock(1, 22)),
+                PhotoAlbumProtocol.setCurrentFace(254),
+            ).map(::hex),
+            PhotoAlbumProtocol.closing(request).map(::hex),
+        )
+        // Even with no photos of this app's on the watch: the face's own background stays shown.
+        val bare = PhotoAlbumRequest(PHOTO_ALBUM_FACE_ID, listOf(default), emptyList(), selected = default,
+            clock = PhotoClock(2, 1))
+        assertEquals(
+            hex(PhotoAlbumProtocol.setEditInfo(254, listOf(default), default, PhotoClock(2, 1))),
+            hex(PhotoAlbumProtocol.closing(bare).first()),
         )
     }
 

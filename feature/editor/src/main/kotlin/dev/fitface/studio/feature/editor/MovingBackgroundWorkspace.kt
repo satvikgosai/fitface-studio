@@ -119,6 +119,7 @@ internal fun MovingBackgroundWorkspace(
     val growth = added - snapshot.freedByMovingBackground()
     val fits = bounds != null && snapshot.containerBytes + growth <= WATCH_CONTAINER_BYTE_CEILING
     val total = pending.source.frames.size
+    val compare = rememberFaceCompare(state.pendingImage?.uri)
     PinnedFacePage(
         snapshot,
         faceCap = 186.dp,
@@ -137,6 +138,7 @@ internal fun MovingBackgroundWorkspace(
                 onMoveWidget = { _, _, _ -> },
                 onTransformImage = onTransformImage,
                 modifier = faceModifier,
+                compare = compare,
             )
             TextButton(onClick = { playing = !playing }) {
                 Text(
@@ -146,6 +148,7 @@ internal fun MovingBackgroundWorkspace(
             }
         },
     ) {
+        CompareHint(stringResource(R.string.editor_compare_still))
         ImportFactCard {
             ImportFactRow(
                 stringResource(R.string.editor_moving_fact_frames),

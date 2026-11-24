@@ -126,9 +126,9 @@ comparison locally. The test never writes to the corpus.
 | `filesDir/projects/<id>/edit-<UUID>.checkpoint` | Atomic edited BIN + session state and original widget identities; the row names the committed file, and the open session's undo and redo steps name the others |
 | `filesDir/projects/<id>/previews/style<N>.png` | The package's own picture of each style, extracted on open |
 | `filesDir/updates/fitface-studio-<version>-debug.apk` | A downloaded app update, swept once it is no longer the one on offer |
-| `filesDir/photo-album/<face>/album.json` | The photos this app has sent the Photos face and not removed, in order, where each was placed and in what colour, and the one shown |
+| `filesDir/photo-album/<face>/album.json` | The photos this app has sent the Photos face and not removed, in order, where each was placed and in what colour, the one shown, and the clock style and colour IDs last sent (absent until one is), and whether the last send left the clock out |
 | `filesDir/photo-album/<face>/<md5>.png`, `<md5>.source.jpg` | Each sent photo exactly as sent, and the reduced original (at most 1,024 px a side) it was drawn from; deleted when the photo is removed or replaced |
-| `filesDir/photo-album/<face>/draft/` | Photos picked or being changed and not sent yet: `draft.json` (order, placement, colour, the sent photo each replaces) and each one's reduced original, `<key>.jpg`; saved once changes settle and when the page closes, written on the repository's own scope so a closing page still gets its last change, cleared when they are sent or taken out |
+| `filesDir/photo-album/<face>/draft/` | The album as arranged and not sent yet: `draft.json` (photos picked or brought back, in order, with placement, colour and the sent photo each replaces; sent photos taken off; the one chosen to show) and each photo's reduced original, `<key>.jpg`; saved once changes settle and when the page closes, written on the repository's own scope so a closing page still gets its last change, cleared once sent |
 | `filesDir/datastore/photo_album.preferences_pb` | The same photos' names alone: the only record before copies were kept, still written so an older build sees the same album |
 
 The Photos face is not a project. `PhotoAlbumRepository` reads it from its catalogue
@@ -329,6 +329,18 @@ or cancelled read deletes its own file, a new read keeps only the latest finishe
 more than two are ever cached, and a file being written is never deleted;
 `:core:model`'s `VideoClip` plans which.
 
+Text is drawn by `AndroidTextSource` in `:core:data` and then is an added picture
+([format](bin-format.md#adding-a-picture)), schema 5 like any other: nothing records that
+it was text, and a picked font file is never stored.
+
+Schema 6 is any earlier schema plus `SessionLineage.artworkFonts`: a clock drawn in
+another font ([format](bin-format.md#drawing-the-clock-in-another-font)), keyed by artwork
+like a turn, holding each original frame's glyph coverage and colour. It is the artwork's
+original from then on, and `Session.pristineWidgets` lays it over the pristine entry, so an
+older build that dropped it would draw the vendor's digits back on the next resize. It is
+written exactly while a drawing is saved; Reset font and Reset drop it. Glyphs are drawn by
+`AndroidTextSource` in `:core:data`; the font file is never kept.
+
 Schema 5 is schema 3 or 4 plus an added picture: a `WidgetImportOrigin` whose `kind` is
 `PICTURE`, with an empty donor face and a baseline that is one Static placed on the panel.
 It is written exactly while one exists, for the same reason: a build that reads 4 would
@@ -367,7 +379,7 @@ those names earlier, but neither behaviour is the containment mechanism.
 | Unopenable pristine container | Same validation/error funnel as package download |
 | Invalid/oversized edited container | Must remain deliverable under the 4 MiB limit |
 | Foreign entry paths | Schema 1: exact original list; schema 2: original paths in order plus bounded validated font additions; schema 3: declared ordered style survivors and validated shared-resource closure |
-| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities and the original digest; schema 4 also requires saved artwork turns naming existing original artwork or imports; schema 5 requires a picture origin, and any other schema refuses one |
+| Missing/inconsistent provenance | Schema 2 requires donor origins; schema 3 also requires complete native identities and the original digest; schema 4 also requires saved artwork turns naming existing original artwork or imports; schema 5 requires a picture origin, a schema before 5 refuses one; schema 6 requires a clock font naming existing artwork with coverage the size of each frame, and any other schema refuses one |
 
 Clamp manifest strings; an invalid selected-style name becomes no saved selection.
 After validation, creation uses the row/files cleanup contract above. Failed import

@@ -9,6 +9,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.model.CatalogFace
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.DownloadProgress
+import dev.fitface.studio.core.model.FIT3_PLUGIN_PACKAGE
 import dev.fitface.studio.core.model.FaceCatalog
 import dev.fitface.studio.core.model.FaceCatalogRepository
 import dev.fitface.studio.core.model.FacePackage
@@ -458,7 +459,7 @@ class FaceCatalogRepositoryImpl @Inject constructor(
         const val ContentCategoryId = "0000004252"
         const val CountryCode = "KOR"
         const val DeviceModel = "SM-R390"
-        const val PluginPackage = "com.samsung.wearable.fit3plugin"
+        const val PluginPackage = FIT3_PLUGIN_PACKAGE
         const val PluginVersionCode = "126071051"
         const val HashSuffix = "GALAXYAPPSAPI"
         const val MaxPackageBytes = 32 * 1024 * 1024L

@@ -783,6 +783,55 @@ object StructuralEditor {
     }
 
     /**
+     * Each frame of [globalIndex]'s pool, by current image index, paired with the original it
+     * was drawn from in [pristineEntry]; null when any frame has none.
+     */
+    fun frameOrigins(
+        entry: ContainerEntry,
+        pristineEntry: ContainerEntry,
+        sourceIndices: Map<Int, Int>?,
+        globalIndex: Int,
+    ): Map<Int, ImageRecord>? {
+        val widgets = FaceRecordParser.scanWidgets(entry)
+        val relative = FaceRecordParser.imagesByRelativeOffset(entry)
+        val target = widgets.singleOrNull { it.globalIndex == globalIndex } ?: return null
+        val pool = FaceRecordParser.rasterPool(target, widgets, relative)
+        val origins = pristineFrameOrigins(entry, pristineEntry, widgets, relative, sourceIndices)
+        return pool.images.associateWith { origins[it] ?: return null }.takeIf { it.isNotEmpty() }
+    }
+
+    /** One widget whose artwork [redrawArtwork] draws again, from [pristine], at its present [turn]. */
+    data class ArtworkRedraw(val variant: String, val globalIndex: Int, val pristine: WidgetPristine, val turn: Int = 0)
+
+    /**
+     * Draws each widget's pool again from its originals, at the size and turn it has now — what a
+     * saved clock font, or its removal, needs once it has changed what the originals are
+     * ([ClockDigits.overlay]).
+     *
+     * It is a turn's frame writer, so a resized or turned pool is drawn exactly as its next
+     * resize or turn would draw it. Sizes and formats are the originals' and the pool's own, so
+     * no record changes length: the container keeps its size and every pointer and position,
+     * which is asserted, and a pool already drawn from these originals comes back byte for byte.
+     */
+    fun redrawArtwork(source: Fit3Container, redraws: List<ArtworkRedraw>): StructuralEdit {
+        requireValidAndTight(source)
+        val replacements = linkedMapOf<Int, ByteArray>()
+        redraws.groupBy { it.variant }.forEach { (variant, list) ->
+            var entry = source.entryByBasename(variant)
+            list.forEach { redraw ->
+                val target = FaceRecordParser.scanWidgets(entry).singleOrNull { it.globalIndex == redraw.globalIndex }
+                    ?: throw Fit3FormatException("$variant: widget ${redraw.globalIndex} is missing")
+                val data = turnedPoolEntry(entry, redraw.pristine.entry, target, redraw.pristine.sources,
+                    redraw.turn, redraw.turn, requested = null, keepCentre = false, redraw = true)
+                if (data.size != entry.data.size) throw Fit3FormatException("a redraw changed the style's length")
+                entry = entry.copy(data = data, size = data.size)
+            }
+            replacements[entry.index] = entry.data
+        }
+        return rebuild(source, replacements)
+    }
+
+    /**
      * Cuts one widget out of the first entry of [entryBasenames], and out of every
      * later entry that carries the same widget.
      *
@@ -1641,6 +1690,8 @@ object StructuralEditor {
         toTurn: Int,
         requested: Pair<Int, Int>?,
         keepCentre: Boolean,
+        /** Draw the pool again from its originals at the size and turn it has; see [redrawArtwork]. */
+        redraw: Boolean = false,
     ): ByteArray {
         val spec = WidgetSchema.spec(target.widgetType)
         if (spec.resize != WidgetSchema.ResizeModel.Raster) {
@@ -1695,7 +1746,7 @@ object StructuralEditor {
         val currentWidth = signature[0]
         val currentHeight = signature[1]
         val (anchorWidth, anchorHeight) = artworkBounds(originalWidth, originalHeight, toTurn)
-        val (width, height) = requested ?: run {
+        val (width, height) = (if (redraw) currentWidth to currentHeight else requested) ?: run {
             // The rung the pool is on now, measured where it is now: at its present turn. An
             // enlarged picture may not fit that rung at the new angle, so it takes the largest
             // that does rather than being refused by a button the editor showed as lit.
@@ -1709,10 +1760,10 @@ object StructuralEditor {
         ) {
             throw Fit3FormatException("${entry.basename}: ${width}x$height is past this artwork's resize limit")
         }
-        if (requested == null && normalizedRotation(fromTurn) == normalizedRotation(toTurn)) {
+        if (!redraw && requested == null && normalizedRotation(fromTurn) == normalizedRotation(toTurn)) {
             throw Fit3FormatException("This widget already uses that rotation.")
         }
-        if (requested != null && width == currentWidth && height == currentHeight) {
+        if (!redraw && requested != null && width == currentWidth && height == currentHeight) {
             throw Fit3FormatException("${entry.basename}: a resize requires a dimension change")
         }
 

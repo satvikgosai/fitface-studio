@@ -25,6 +25,13 @@ import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.PreparedPicture
 import dev.fitface.studio.core.model.PreviewFrame
+import dev.fitface.studio.core.model.TextFont
+import dev.fitface.studio.core.model.ClockFontName
+import dev.fitface.studio.core.model.ClockFontPreview
+import dev.fitface.studio.core.model.ClockFontRequest
+import dev.fitface.studio.core.model.ClockPart
+import dev.fitface.studio.core.model.TextPicture
+import dev.fitface.studio.core.model.TextProblem
 import dev.fitface.studio.core.model.VideoClip
 import dev.fitface.studio.core.model.pictureBaselineSize
 import dev.fitface.studio.core.model.pictureSizes
@@ -102,6 +109,55 @@ private data class QueuedColour(val globalIndex: Int, val colorArgb: Int?, val g
 data class HistoryNotice(val id: Long, val undone: Boolean, val kind: EditKind)
 
 /**
+ * Text being placed as a picture. [wanted] is what the card asks for and [drawn] what the
+ * face shows; they differ while it is drawn again, and Add waits for them to agree.
+ *
+ * Its size is the font's, so a pinch and Placement's −/+ draw it again at a new size rather
+ * than resample it, and it is added at 100%.
+ */
+data class PendingText(
+    val wanted: TextPicture,
+    val drawn: TextPicture,
+    /** Why [wanted] was not drawn; the face still shows [drawn]. */
+    val problem: TextProblem? = null,
+    /** The label it replaces when added, which goes to the Removed list. */
+    val replacing: WidgetGuide? = null,
+    /** A pinch's size before rounding, so a slow pinch adds up instead of rounding away. */
+    val pinchSize: Float = wanted.sizePx.toFloat(),
+) {
+    val ready: Boolean get() = problem == null && wanted == drawn
+}
+
+/**
+ * The clock being drawn in another font before it is applied (Stage 9b). [wanted] is what the
+ * page asks for; [preview] is the face the repository drew for [drawn], the last request that
+ * finished. Apply waits for the two to agree.
+ *
+ * The page opens with no [font]: until one is chosen nothing is drawn, the face is the clock
+ * as it is, and there is nothing to apply. Opening on a font of the page's own choosing showed
+ * a face that looked changed before anything was asked for.
+ */
+data class PendingClockFont(
+    val font: TextFont? = null,
+    val parts: Set<ClockPart>,
+    /** One colour for every part, or null for each part's own. */
+    val tint: Int? = null,
+    val applyToAllStyles: Boolean = false,
+    /** The parts the selected style draws as pictures, in order; [parts] are some of them. */
+    val available: List<ClockPart>,
+    /** The font the clock was redrawn in, named until another is chosen; null for the face's own. */
+    val current: ClockFontName? = null,
+    val drawn: ClockFontRequest? = null,
+    val preview: ClockFontPreview? = null,
+    /** Why [wanted] was not drawn; the face shows [drawn]. */
+    val problem: String? = null,
+) {
+    /** What the page asks the repository for, once a font is chosen. */
+    val wanted: ClockFontRequest? get() = font?.let { ClockFontRequest(it, parts, tint, applyToAllStyles) }
+    val ready: Boolean get() = problem == null && preview != null && wanted != null && drawn == wanted
+}
+
+/**
  * A picked picture being placed on the face before it is added: the Widgets page's
  * counterpart of a pending background, placed with the same controls.
  *
@@ -123,6 +179,8 @@ data class PendingPicture(
      * exactly as for a still picture; Add commits the frames instead.
      */
     val animation: PendingAnimation? = null,
+    /** Text being placed as a picture: [prepared] is it drawn, and [zoom] stays at 100%. */
+    val text: PendingText? = null,
 ) {
     val size: WidgetSize get() = prepared.ladder.minBy { abs(it.percentOfOriginal - zoom * 100) }
     val left: Int get() = (centreX - size.width / 2f).roundToInt()
@@ -254,6 +312,17 @@ data class EditorUiState(
     val readingFrames: Boolean = false,
     /** A picture being placed from the Widgets page; see [PendingPicture]. */
     val pendingPicture: PendingPicture? = null,
+    /** The clock being drawn in another font, from the Widgets page; see [PendingClockFont]. */
+    val pendingClockFont: PendingClockFont? = null,
+    /**
+     * How many picture, text and clock-font choices have started on the Widgets page.
+     *
+     * A counter, like [widgetRemovals], so the screen can go to a choice each time one starts.
+     * Going there when "something is pending" became true missed every start after the first:
+     * back on the Canvas with a choice left open, a new one replaced it and nothing changed
+     * from false to true, so the button seemed to do nothing.
+     */
+    val widgetsChoicesStarted: Int = 0,
     val pictureAdded: PictureAdded? = null,
     val selectedWidgetIndex: Int? = null,
     /**
@@ -389,6 +458,7 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             var lastPhase: DirectInstallPhase? = null
             var lastReplies = emptyList<String>()
+            var lastAnswers = emptyList<String>()
             directInstaller.state.collect { delivery ->
                 // Received protocol bytes, logged once each as they arrive: on the coexistence
                 // route nothing is expected here, so any entry is news worth a line.
@@ -396,6 +466,13 @@ class EditorViewModel @Inject constructor(
                     delivery.watchReplies.filterNot(lastReplies::contains)
                         .forEach { diagnostics.info(TAG, "Watch reply", it) }
                     lastReplies = delivery.watchReplies
+                }
+                // Which agent answered a discovery, and which never did, is what tells an
+                // unanswered consent prompt from a watch that is not connected.
+                if (delivery.discoveryAnswers != lastAnswers) {
+                    delivery.discoveryAnswers.filterNot(lastAnswers::contains)
+                        .forEach { diagnostics.info(TAG, "Discovery answer", it) }
+                    lastAnswers = delivery.discoveryAnswers
                 }
                 // Physical delivery cannot be exercised in this repository's tests, so the
                 // phase order a real transfer walked is the only account of where one
@@ -613,7 +690,11 @@ class EditorViewModel @Inject constructor(
         if (targets.any { (_, x, y) -> x !in Short.MIN_VALUE..Short.MAX_VALUE || y !in Short.MIN_VALUE..Short.MAX_VALUE }) {
             return
         }
-        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false, group = nudgeGroup) }
+        // A press that lands while the last one's members are still committing joins its undo
+        // step: the members it re-targets would otherwise commit under the new one, and undoing
+        // that would leave the set apart, the members already committed moved and the rest not.
+        val group = moves.firstNotNullOfOrNull { (_, base, _) -> base.group } ?: nudgeGroup
+        targets.forEach { (widget, x, y) -> queueWidgetMove(snapshot, widget, x, y, previewAlone = false, group = group) }
         // Published once, for every member, after they are all queued: the canvas moves the
         // set as one picture on this step, whatever order the commits then land in.
         mutableState.value = mutableState.value.copy(
@@ -1179,7 +1260,7 @@ class EditorViewModel @Inject constructor(
                         mutableState.value.pendingPicture?.let { previous ->
                             if (previous.animation == null) repository.releasePicture(previous.prepared.handle)
                         }
-                        mutableState.value = mutableState.value.copy(
+                        mutableState.value = mutableState.value.startingChoice().copy(
                             pendingPicture = PendingPicture(picture.copy(preview = pending.source.frames.first()),
                                 start.percent / 100f, panel.width / 2f, panel.height / 2f, animation = pending),
                             isWorking = false,
@@ -1229,7 +1310,7 @@ class EditorViewModel @Inject constructor(
                     mutableState.value.pendingPicture?.let { previous ->
                         if (previous.prepared.handle != prepared.handle) repository.releasePicture(previous.prepared.handle)
                     }
-                    mutableState.value = mutableState.value.copy(
+                    mutableState.value = mutableState.value.startingChoice().copy(
                         pendingPicture = PendingPicture(prepared, start.percent / 100f,
                             snapshot.preview.width / 2f, snapshot.preview.height / 2f),
                         isWorking = false,
@@ -1239,11 +1320,251 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    private var textJob: Job? = null
+
+    /** Starts placing [words] as text in the phone's plain font, centred, at the default size. */
+    fun startText(words: String) {
+        val panel = mutableState.value.snapshot?.preview ?: return
+        beginText(TextPicture(words), tint = null, replacing = null) { _, _ -> panel.width / 2f to panel.height / 2f }
+    }
+
+    /**
+     * Starts drawing the selected label in another font: its word at its size and colour, set
+     * where the watch draws it ([dev.fitface.studio.core.model.WidgetLabel.centreFor]). Added,
+     * the text replaces it.
+     */
+    fun startTextFromLabel() {
+        val snapshot = mutableState.value.snapshot ?: return
+        val label = snapshot.widgets.singleOrNull { it.globalIndex == mutableState.value.selectedWidgetIndex } ?: return
+        val word = label.label ?: return
+        // This label's text left open is resumed as it was, not drawn again from the start.
+        if (mutableState.value.pendingPicture?.text?.replacing?.globalIndex == label.globalIndex) return
+        // Drawn white, so white is the text's own colour and anything else is a tint.
+        val tint = label.colorArgb?.let { it or 0xFF000000.toInt() }?.takeIf { it != 0xFFFFFFFF.toInt() }
+        beginText(TextPicture(word.text, sizePx = TextPicture.size(word.sizePx)), tint, label) { width, height ->
+            labelCentre(label, width, height)
+        }
+    }
+
+    /** Where a [width] × [height] text sits for it to cover what [label] draws. */
+    private fun labelCentre(label: WidgetGuide, width: Int, height: Int): Pair<Float, Float> =
+        requireNotNull(label.label).centreFor(width, height, label.drawLeft, label.drawTop, label.width, label.height)
+
+    /** Starts placing [text] once it is drawn, its centre where [place] puts a picture its size. */
+    private fun beginText(text: TextPicture, tint: Int?, replacing: WidgetGuide?, place: (Int, Int) -> Pair<Float, Float>) {
+        val snapshot = mutableState.value.snapshot ?: return
+        textJob?.cancel()
+        textJob = viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isWorking = true, error = null)
+            runCatching { repository.prepareText(text, snapshot.projectId, snapshot.selectedVariant.basename) }
+                .onSuccess { prepared ->
+                    val picture = prepared.picture
+                    if (picture == null) {
+                        showFailure(WatchFaceException(textProblemSentence(prepared.problem)))
+                        return@onSuccess
+                    }
+                    mutableState.value.pendingPicture?.let { previous ->
+                        if (previous.prepared.handle != picture.handle) repository.releasePicture(previous.prepared.handle)
+                    }
+                    mutableState.value = mutableState.value.startingChoice().copy(isWorking = false)
+                    val (centreX, centreY) = place(picture.width, picture.height)
+                    updatePicture(PendingPicture(picture, 1f, centreX, centreY, tint,
+                        text = PendingText(text, text, replacing = replacing)))
+                }
+                .onFailure(::showFailure)
+        }
+    }
+
+    fun setTextWords(words: String) = changeText { it.copy(text = words) }
+
+    fun setTextFont(font: TextFont) = changeText { it.copy(font = font) }
+
+    /** The font size, within [TextPicture.MIN_SIZE_PX]..[TextPicture.MAX_SIZE_PX]. */
+    fun setTextSize(sizePx: Int) = setTextSize(sizePx, fromPinch = false)
+
+    private fun setTextSize(sizePx: Int, fromPinch: Boolean) = changeText { wanted ->
+        wanted.copy(sizePx = TextPicture.size(sizePx))
+    }.also {
+        if (!fromPinch) mutableState.value.pendingPicture?.text?.let { text ->
+            updateText(text.copy(pinchSize = text.wanted.sizePx.toFloat()))
+        }
+    }
+
+    /** Loads a picked font file and draws the clock, or else the text, in it. */
+    fun chooseFontFile(uri: String) {
+        viewModelScope.launch {
+            runCatching { repository.readFont(uri) }
+                .onSuccess { font -> if (mutableState.value.pendingClockFont != null) setClockFont(font) else setTextFont(font) }
+                .onFailure(::showFailure)
+        }
+    }
+
+    private var clockFontJob: Job? = null
+
+    /**
+     * Opens the Clock font page on every part the selected style draws as pictures, at the
+     * tray's style scope, with no font chosen: the face is shown as it is until one is.
+     */
+    fun startClockFont() {
+        val snapshot = mutableState.value.snapshot ?: return
+        val parts = snapshot.widgets.mapNotNull { it.clockPart }.distinct().sorted()
+        // Already open, it is resumed as it was: opening it again from the Canvas or Edit widget
+        // after leaving the page must not throw away the font, parts and colour chosen.
+        if (parts.isEmpty() || mutableState.value.pendingClockFont != null) return
+        // A picture or text left unfinished gives way to the clock font asked for now.
+        textJob?.cancel()
+        discardPicture()
+        val state = mutableState.value
+        mutableState.value = state.copy(widgetsChoicesStarted = state.widgetsChoicesStarted + 1, pendingClockFont = PendingClockFont(
+            parts = parts.toSet(),
+            applyToAllStyles = state.applyWidgetEditsToAllStyles,
+            available = parts,
+            current = snapshot.widgets.firstNotNullOfOrNull { it.clockFont },
+        ))
+    }
+
+    fun setClockFont(font: TextFont) = changeClockFont { it.copy(font = font) }
+
+    fun setClockPart(part: ClockPart, included: Boolean) =
+        changeClockFont { it.copy(parts = if (included) it.parts + part else it.parts - part) }
+
+    /** One colour for every part, or null for each part's own. */
+    fun setClockFontTint(tint: Int?) = changeClockFont { it.copy(tint = tint) }
+
+    fun setClockFontAllStyles(all: Boolean) = changeClockFont { it.copy(applyToAllStyles = all) }
+
+    private fun changeClockFont(change: (PendingClockFont) -> PendingClockFont) {
+        val pending = mutableState.value.pendingClockFont ?: return
+        val next = change(pending).copy(problem = null)
+        if (next == pending.copy(problem = null)) return
+        mutableState.value = mutableState.value.copy(pendingClockFont = next)
+        redrawClockFont()
+    }
+
+    /**
+     * Draws the face again as the page now asks; only the newest request lands. One that cannot
+     * be drawn keeps the face as it was and says why on the page. Nothing is drawn before a
+     * font is chosen.
+     */
+    private fun redrawClockFont() {
+        val snapshot = mutableState.value.snapshot ?: return
+        val wanted = mutableState.value.pendingClockFont?.wanted ?: return
+        clockFontJob?.cancel()
+        if (wanted.parts.isEmpty()) {
+            updateClockFont(wanted) { it.copy(problem = "Choose at least one part of the clock to redraw.") }
+            return
+        }
+        clockFontJob = viewModelScope.launch {
+            runCatching { repository.previewClockFont(wanted, snapshot.projectId, snapshot.selectedVariant.basename) }
+                .onSuccess { preview -> updateClockFont(wanted) { it.copy(drawn = wanted, preview = preview, problem = null) } }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    val message = (error as? WatchFaceException)?.userMessage ?: "This font could not be drawn. Choose another."
+                    updateClockFont(wanted) { it.copy(problem = message) }
+                }
+        }
+    }
+
+    private fun updateClockFont(wanted: ClockFontRequest, change: (PendingClockFont) -> PendingClockFont) {
+        val pending = mutableState.value.pendingClockFont?.takeIf { it.wanted == wanted } ?: return
+        mutableState.value = mutableState.value.copy(pendingClockFont = change(pending))
+    }
+
+    fun discardClockFont() {
+        clockFontJob?.cancel()
+        mutableState.value = mutableState.value.copy(pendingClockFont = null)
+    }
+
+    /**
+     * A picture or text starting on the Widgets page: one choice is open there at a time, so a
+     * clock font left unfinished gives way to it, and the start is counted for the screen to go
+     * there ([EditorUiState.widgetsChoicesStarted]). The caller releases a previous picture.
+     */
+    private fun EditorUiState.startingChoice(): EditorUiState {
+        if (pendingClockFont != null) clockFontJob?.cancel()
+        return copy(pendingClockFont = null, widgetsChoicesStarted = widgetsChoicesStarted + 1)
+    }
+
+    fun applyClockFont() {
+        val pending = mutableState.value.pendingClockFont?.takeIf { it.ready } ?: return
+        val ticket = requireNotNull(pending.preview).ticket
+        operate(onSuccess = { it.copy(pendingClockFont = null) }) { repository.applyClockFont(ticket) }
+    }
+
+    /** Draws [part] in the face's own pictures again, in the tray's style scope. */
+    fun resetClockFont(part: ClockPart) {
+        val state = mutableState.value
+        val snapshot = state.snapshot ?: return
+        operate { repository.resetClockFont(snapshot.selectedVariant.basename, part, state.applyWidgetEditsToAllStyles) }
+    }
+
+    private fun changeText(change: (TextPicture) -> TextPicture) {
+        val text = mutableState.value.pendingPicture?.text ?: return
+        val wanted = change(text.wanted)
+        if (wanted == text.wanted) return
+        updateText(text.copy(wanted = wanted, problem = null))
+        redrawText()
+    }
+
+    private fun updateText(text: PendingText) {
+        val pending = mutableState.value.pendingPicture ?: return
+        mutableState.value = mutableState.value.copy(pendingPicture = pending.copy(text = text))
+    }
+
+    /**
+     * Draws the text again as the card now asks, replacing the face's picture when it is
+     * drawn; only the newest request lands. A text that cannot be drawn keeps the face as it
+     * was and says why on the card; a font that cannot be read goes back to the one drawn.
+     */
+    private fun redrawText() {
+        val snapshot = mutableState.value.snapshot ?: return
+        val wanted = mutableState.value.pendingPicture?.text?.wanted ?: return
+        textJob?.cancel()
+        textJob = viewModelScope.launch {
+            runCatching { repository.prepareText(wanted, snapshot.projectId, snapshot.selectedVariant.basename) }
+                .onSuccess { prepared ->
+                    val pending = mutableState.value.pendingPicture ?: return@onSuccess
+                    val text = pending.text?.takeIf { it.wanted == wanted } ?: return@onSuccess
+                    val picture = prepared.picture
+                    if (picture == null) {
+                        updateText(text.copy(problem = prepared.problem))
+                    } else {
+                        updatePicture(pending.copy(prepared = picture, zoom = 1f, text = text.copy(drawn = wanted, problem = null)))
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    mutableState.value.pendingPicture?.text?.let { text ->
+                        if (text.wanted == wanted) updateText(text.copy(wanted = text.drawn, problem = null))
+                    }
+                    showFailure(error)
+                }
+        }
+    }
+
+    private fun textProblemSentence(problem: TextProblem?): String = when (problem) {
+        TextProblem.TOO_BIG -> "This text is too big for the face. Make it smaller or shorter."
+        TextProblem.TOO_LONG -> "This text is too long. Use up to ${TextPicture.MAX_LENGTH} characters."
+        TextProblem.TOO_MANY_LINES -> "This text has too many lines. Use up to ${TextPicture.MAX_LINES}."
+        TextProblem.EMPTY, null -> "There is nothing to draw. Type some text."
+    }
+
     /** A pinch or drag on the face, in the canvas's units: the same gesture that places a background. */
     fun transformPicture(zoomChange: Float, panX: Float, panY: Float) {
         val pending = mutableState.value.pendingPicture ?: return
         val snapshot = mutableState.value.snapshot ?: return
         val panel = snapshot.preview
+        pending.text?.let { text ->
+            val pinched = (text.pinchSize * zoomChange)
+                .coerceIn(TextPicture.MIN_SIZE_PX.toFloat(), TextPicture.MAX_SIZE_PX.toFloat())
+            updatePicture(pending.copy(
+                centreX = pending.centreX + panX * panel.width,
+                centreY = pending.centreY + panY * panel.height,
+                text = text.copy(pinchSize = pinched),
+            ))
+            if (pinched.roundToInt() != text.wanted.sizePx) setTextSize(pinched.roundToInt(), fromPinch = true)
+            return
+        }
         val ladder = pending.prepared.ladder
         updatePicture(pending.copy(
             zoom = (pending.zoom * zoomChange).coerceIn(ladder.first().percentOfOriginal / 100f,
@@ -1257,6 +1578,10 @@ class EditorViewModel @Inject constructor(
     fun stepPictureSize(grow: Boolean) {
         val pending = mutableState.value.pendingPicture ?: return
         val snapshot = mutableState.value.snapshot ?: return
+        pending.text?.let { text ->
+            setTextSize(text.wanted.sizePx + if (grow) 1 else -1)
+            return
+        }
         val current = pending.size.percentOfOriginal
         val next = pending.prepared.ladder.map { it.percentOfOriginal }
             .let { rungs -> if (grow) rungs.firstOrNull { it > current } else rungs.lastOrNull { it < current } } ?: return
@@ -1269,6 +1594,13 @@ class EditorViewModel @Inject constructor(
         val pending = mutableState.value.pendingPicture ?: return
         val snapshot = mutableState.value.snapshot ?: return
         val panel = snapshot.preview
+        pending.text?.let { text ->
+            val (x, y) = text.replacing?.let { labelCentre(it, pending.prepared.width, pending.prepared.height) }
+                ?: (panel.width / 2f to panel.height / 2f)
+            updatePicture(pending.copy(centreX = x, centreY = y))
+            setTextSize(text.replacing?.label?.sizePx ?: TextPicture.DEFAULT_SIZE_PX)
+            return
+        }
         val start = pending.prepared.defaultSize ?: return
         val percent = minOf(start.percent, pending.largestFittingPercent(snapshot.roomForPicture()))
         updatePicture(pending.copy(zoom = percent / 100f, centreX = panel.width / 2f, centreY = panel.height / 2f))
@@ -1281,6 +1613,7 @@ class EditorViewModel @Inject constructor(
 
     fun discardPicture() {
         val pending = mutableState.value.pendingPicture ?: return
+        textJob?.cancel()
         mutableState.value = mutableState.value.copy(pendingPicture = null)
         viewModelScope.launch { repository.releasePicture(pending.prepared.handle) }
     }
@@ -1292,6 +1625,9 @@ class EditorViewModel @Inject constructor(
     fun addPicture() {
         val pending = mutableState.value.pendingPicture ?: return
         val snapshot = mutableState.value.snapshot ?: return
+        if (pending.text?.ready == false) return
+        // The label a text replaces goes after the text is in, so a refusal leaves both rather than neither.
+        var labelKept: WatchFaceException? = null
         operate(onSuccess = { state ->
             state.copy(
                 pendingPicture = null,
@@ -1299,10 +1635,30 @@ class EditorViewModel @Inject constructor(
                 multiSelection = emptyList(),
                 applyWidgetEditsToAllStyles = false,
                 pictureAdded = PictureAdded(messageIds.incrementAndGet()),
+                error = labelKept?.let {
+                    UserMessage(messageIds.incrementAndGet(), "The text was added, but the label is still there: ${it.userMessage}")
+                },
             )
         }) {
             val animation = pending.animation
-            if (animation != null) {
+            val replacing = pending.text?.replacing
+            if (replacing != null) {
+                val group = EditGroups.next()
+                val added = repository.addPicture(pending.prepared.handle, snapshot.projectId, snapshot.selectedVariant.basename,
+                    100, pending.left, pending.top, pending.tint, group)
+                // Found again by identity: the label could have been moved on Canvas while this was placed.
+                val label = added.widgets.firstOrNull {
+                    it.globalIndex == replacing.globalIndex && it.type == replacing.type &&
+                        it.sequenceId == replacing.sequenceId && it.label != null
+                } ?: return@operate added
+                try {
+                    repository.removeWidget(added.selectedVariant.basename, label.globalIndex, label.type, label.sequenceId,
+                        label.x, label.y, requireFinal = false, applyToAllStyles = false, group = group)
+                } catch (error: WatchFaceException) {
+                    labelKept = error
+                    added
+                }
+            } else if (animation != null) {
                 repository.addMovingPicture(animation.source, animation.step, pending.size.width, pending.size.height,
                     pending.left, pending.top, pending.tint)
             } else {
@@ -2003,7 +2359,8 @@ class EditorViewModel @Inject constructor(
                         "companion=${install.environment.companionAppInstalled} " +
                             "plugin=${install.environment.pluginInstalled}" +
                             (install.environment.pluginVersionName?.let { "@$it" } ?: "") + " " +
-                            "framework=${install.environment.frameworkVerdict} " +
+                            "framework=${install.environment.frameworkVerdict}" +
+                            (install.environment.frameworkVersionName?.let { "@$it" } ?: "") + " " +
                             "agents=${install.environment.accessoryAgentCount}",
                         "peers=${install.peersCached} " +
                             "bytes=${install.acknowledgedBytes}/${install.totalBytes} " +
@@ -2011,6 +2368,8 @@ class EditorViewModel @Inject constructor(
                         install.failure?.let { "failure=$it" },
                         install.watchReplies.takeIf { it.isNotEmpty() }
                             ?.let { "replies=${it.joinToString("; ")}" },
+                        install.discoveryAnswers.takeIf { it.isNotEmpty() }
+                            ?.let { "discovery=${it.joinToString("; ")}" },
                     ),
                 ),
             )

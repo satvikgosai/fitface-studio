@@ -1,0 +1,42 @@
+<resources>
+    <!-- Read out for the Layers page's Clock font button; offered when the selected style draws its clock from pictures of digits. -->
+    <string name="editor_clock_font_open">Clock font</string>
+    <!-- Header subtitle on the Widgets page while the clock's font is chosen. -->
+    <string name="editor_subtitle_clock_font">Choosing the clock’s font</string>
+    <!-- The face, read by a screen reader. -->
+    <string name="editor_clock_font_compare">Hold the face to see the clock as it is</string>
+    <string name="editor_clock_font_face">The face with its clock redrawn</string>
+    <string name="editor_clock_font_drawing">Drawing…</string>
+    <string name="editor_clock_font_heading">Font</string>
+    <!-- The font field before a font is chosen. -->
+    <string name="editor_clock_font_choose">Choose a font</string>
+    <!-- Under the font field before a font is chosen. %1$s: the font the clock was redrawn in. -->
+    <string name="editor_clock_font_now">Now in %1$s</string>
+    <string name="editor_clock_font_own">Now in the face’s own digits</string>
+    <string name="editor_clock_font_own_short">The face’s own digits</string>
+    <string name="editor_clock_font_file_note">These are your phone’s fonts. A font file you choose draws the clock and is not kept.</string>
+    <string name="editor_clock_font_parts">Redraw</string>
+    <string name="editor_clock_part_time">Hours and minutes</string>
+    <string name="editor_clock_part_seconds">Seconds</string>
+    <string name="editor_clock_part_second_zone">Second time zone</string>
+    <string name="editor_clock_part_weekday">Weekday</string>
+    <string name="editor_clock_font_colour">Colour</string>
+    <string name="editor_clock_font_colour_detail">Original colours keeps each part’s own colour. Any other is drawn exactly, not as a tint by brightness. Digits on a box keep the box and are drawn over it.</string>
+    <string name="editor_clock_font_note">The digits stay pictures, so the watch shows them exactly as drawn here and they still tell the time. They keep their size and place. Weekday names are drawn in your phone’s language and no longer follow the watch’s.</string>
+    <string name="editor_clock_font_apply">Apply font</string>
+    <!-- %1$s: what changes, e.g. "Style 1" or "every style". -->
+    <string name="editor_clock_font_detail">Redraws the clock in %1$s.</string>
+    <string name="editor_clock_font_undo">Undo takes it back, and Edit widget’s Reset font brings back the face’s own digits.</string>
+    <string name="editor_clock_font_detail_all">every style that has it</string>
+
+    <!-- Edit widget, for a digit of a clock drawn from pictures. -->
+    <string name="editor_clock_font_section">Font</string>
+    <string name="editor_clock_font_body">These digits are pictures, so any font can draw them again, and they still tell the time.</string>
+    <!-- %1$s: a font's name. -->
+    <string name="editor_clock_font_drawn_in">Drawn in %1$s.</string>
+    <string name="editor_clock_font_draw">Draw the clock in another font</string>
+    <string name="editor_clock_font_reset">Reset font</string>
+
+    <!-- What an undo step that changed the clock's font is called: "Undo clock font". -->
+    <string name="editor_edit_kind_clock_font">clock font</string>
+</resources>

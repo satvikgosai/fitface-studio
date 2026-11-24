@@ -17,6 +17,59 @@ the framework assign dynamic IDs while discovery targets the two peers by path.
 
 (The misspelling is the watch's, not a typo here.)
 
+### Consent
+
+Phones from other makers get the accessory framework from Galaxy Store as its own app;
+plugin `2.2.14.26092941N`, the build those phones are served, no longer bundles one.
+Framework `com.samsung.accessory` 3.1.96.61123 answers `findPeerAgents` only for an app
+signed with its own key or one the user has allowed in its prompt. Holding
+`com.samsung.accessory.permission.ACCESSORY_FRAMEWORK`, which 3.1.96.50315 accepted
+instead, no longer counts. For an app without consent the framework:
+
+1. accepts the request, so the SDK logs "Find peer request successfully enqueued";
+2. posts a notification with no channel, which Android 8 and later drop;
+3. starts `SAMainActivity` ("FitFace Studio will be able to access your Samsung
+   accessory. Allow?") from the background: through a WorkManager worker on Android 12
+   and later, directly before that;
+4. gives up 9.5 s later without answering. The prompt itself denies after 10 s.
+
+Allow is stored in the framework's own data, so it survives this app's updates and is
+asked again only after the framework's data is cleared. Deny is not stored: the next
+request prompts again.
+
+From Android 14 a visible app lends its right to start activities to a service it binds
+only when the binding passes `BIND_ALLOW_ACTIVITY_STARTS`. The SDK binds with
+`BIND_AUTO_CREATE` alone, so the prompt was blocked (`BAL_BLOCK`), nothing answered, and
+every discovery timed out with the watch called not connected. `ConsentPromptLease`
+holds a second binding to the framework's `ISAFrameworkManagerV2` service with the flag,
+on Android 14 and later only, from the start of each discovery until that discovery
+ends; the launch is then `BAL_ALLOW_BOUND_BY_FOREGROUND`. A token keeps an earlier
+discovery's end from releasing a later one's binding, and a reset releases it outright.
+The page tells the reader to tap Allow before and during discovery and in the timeout
+message. The report records the framework version (`framework=USABLE@<version>`) and
+each discovery answer as `#<attempt> <agent> <outcome> <code>`, beginning with
+`prompt bound|not_needed|unavailable`; an attempt with no agent answer is the silence an
+unanswered prompt leaves.
+
+Recorded on emulators on 2026-11-20, framework 3.1.96.61123 and no watch. Consent comes
+before any Bluetooth work, so after Allow the expected answer is `device_not_connected`:
+
+| Android | Prompt | After Allow | Next find |
+| --- | --- | --- | --- |
+| 16 (API 36), before the lease | blocked (`BAL_BLOCK`); timed out at 20 s | — | — |
+| 16 (API 36) | shown 0.4–2.4 s after Find | both agents answer within 3 s | answers within 0.3 s, no prompt |
+| 13 (API 33) | shown 0.7–2.4 s after Find, no lease | both agents answer within 3 s | answers within 0.3 s, no prompt |
+| 11 (API 30) | shown 0.4–0.9 s after Find, no lease | both agents answer within 3 s | answers within 0.3 s, no prompt |
+| 16 (API 36), framework 3.1.96.50315 | none: the granted permission is enough; lease bound and released, unused | — | both agents answer within 2 s |
+
+Denied on 16 and left unanswered on 13 and 11, the request timed out at 20 s with the
+Allow message.
+A Samsung phone, whose framework is part of the firmware, still found the watch with the
+lease in place (2026-11-20, a maintainer's check; issue #18 found it there without a prompt).
+Not recorded: finding a real Fit3 this way on a phone from another maker, and HyperOS's own
+"display pop-up windows while running in the background" permission, which may still
+block the prompt.
+
 ## The transfer
 
 1. Recheck payload size and SHA-256.
@@ -110,16 +163,37 @@ and a one-second pause:
 | Before the photos | get-edit-info (6) | `06 04 FE` |
 | Each photo | the transfer above | |
 | After them | add-image-list (11) | `0B 04 FE 1B <n> (1C <len> <name>)…` |
-| | set-edit-info (7) | `07 18 02 04 FE 1B <n> (13 <len> <name> 1F <selected>)…` |
+| | set-edit-info (7) | `07 18 <2 or 4> 04 FE 1B <n> (13 <len> <name> 1F <selected>)… [0D <style> 1E <colour>]` |
 | | set-current-face (3) | `03 04 FE 1D 00` |
 | A removal instead | delete-image-list (12), then set-edit-info | `8C 04 FE 1B <n> (1C <len> <name>)…` |
 | After a failure in between | cancel-edit-info (8), best effort | `08 04 FE` |
 
 The set-edit-info list is every background the face shows afterwards: its preloaded ones
-first, then this app's photos, with the first new photo selected. The plugin also sends
-`0D <clock type>` and `1E <clock colour>`, because its own bundled copy of the face's settings
-lists them; the store package lists the background alone, so this app sends only that and
-leaves the clock as the watch has it. Whether the watch accepts that shorter message is T9b.
+first, then this app's photos, with the one being placed on Background selected. The clock follows in every
+set-edit-info, as `0D <clock type>` and `1E <clock colour>`, the order the plugin's
+`SetEditInfoRequestBuilder` writes them for the face's settings, and `18` counts 4 (face ID and
+three settings). A set-edit-info with the background alone (`18` = 2) left the watch drawing
+no clock, so the clock is left out only when **No clock**, the last choice on **Styles**, is
+chosen. Otherwise the clock sent is the one chosen on the Photos page (style on **Styles**,
+colour on **Canvas**), else the one last sent, else the plugin's default, else the face's own,
+type 1 and colour 1. A send with no clock is recorded as that, so later requests leave it out
+too until a style is chosen. Whether the watch takes these requests is T9b and T9h.
+
+The clock's options are not in the store package, which lists the background alone. They are
+read at run time from the stock plugin installed on the phone (`PluginPhotoClockSource`),
+found by its package name whatever its version: its APK carries its own copy of the face's
+settings, `info.json` in a folder named after the face (in 2.2.14,
+`assets/watchface/SM_R390/SM-R390_00254_256x402/`), with `clock_type` (IDs 1 and 2, each with a
+picture) and `clock_color` (IDs 1–57, each `#AARRGGBB`), and the pictures under the folder
+`info.json` names (`clocktype/`, in 2.2.14 under `assets/watchface/customize/`). Nothing is
+read by a fixed path: the asset folders are walked a few levels deep, and the face's folder is
+whichever holds an `info.json` that declares the face. Each picture has a copy per language
+(`_EN`, `_KR`, `_PR`, `_CN_Simplified`, `_CN_Traditional`), chosen as the plugin's
+`BandFaceUtils.getCountryImageFilepath` chooses, then English, then any. Nothing read is
+bundled or stored; only the IDs last sent are recorded. Without the plugin, or with options it
+no longer lists, no clock can be chosen, and the one last sent, else the face's own, still goes. The plugin's get-edit-info reply would
+carry the watch's current clock, but it goes to the plugin, so the app knows only the clock it
+last sent.
 
 Replies go to the plugin's component, as install replies do. If one reaches this app it is
 recorded and read: add-image-list `4B 04 FE 1A <status> …` (1 success, 2 too many photos,
@@ -133,14 +207,19 @@ Galaxy Wearable cannot be seen here, so the watch may still refuse with status 2
 written once the closing commands are handed over, which, as for faces, is the most the app can
 know.
 
-Other requests use the same commands:
+There is one send. It is worked out from the album as arranged on Background against what this
+phone last sent, so the request takes whichever of these shapes the changes need:
 
-| Request | Transfer | Closing commands |
+| Changes | Transfer | Closing commands |
 | --- | --- | --- |
-| Show another sent photo | none | set-edit-info, set-current-face |
-| Change a sent photo (placed again from its kept original) | the new PNG | add-image-list (new), delete-image-list (old), set-edit-info, set-current-face |
-| Remove one, or all | none | delete-image-list, set-edit-info |
-| Send them all again | every kept PNG, unchanged | add-image-list, set-edit-info, set-current-face |
+| Another sent photo shown, or only the clock | none | set-edit-info, set-current-face |
+| New photos, or a sent one placed again (from its kept original, in its own place) | the new PNGs | add-image-list (new), delete-image-list (replaced or taken off, if any), set-edit-info, set-current-face |
+| Photos taken off and nothing added | none | delete-image-list, set-edit-info |
+
+A sent photo brought back to Background but not moved is not sent again.
+
+Every request carries the clock, or leaves it out for **No clock**; one chosen and not sent yet
+goes with whichever is sent next.
 
 ## Channel handover
 
@@ -344,7 +423,8 @@ yet: every command in that section is read from the stock plugin's code. Timeout
 slow-but-healthy transfers have not been staged on a watch. `TimeoutRecoveryTest`
 checks decisions and `TransferWatchdogBudgetTest` checks budgets; manually maintained
 progress gaps are not proof of runtime callback placement. The Android 11-and-earlier
-freezing route remains unverified too.
+freezing route remains unverified too, and the consent prompt is recorded on emulators
+only; see [Consent](#consent).
 
 Structural validity does not establish firmware acceptance, battery/storage policy
 or favourites capacity. Final watch results target the stock component, so the UI

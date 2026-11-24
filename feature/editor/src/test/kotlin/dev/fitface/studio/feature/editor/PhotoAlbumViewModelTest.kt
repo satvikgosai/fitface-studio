@@ -20,6 +20,13 @@ import dev.fitface.studio.core.model.PhotoAlbum
 import dev.fitface.studio.core.model.PhotoAlbumFace
 import dev.fitface.studio.core.model.PhotoAlbumRepository
 import dev.fitface.studio.core.model.PhotoAlbumRequest
+import dev.fitface.studio.core.model.PhotoClock
+import dev.fitface.studio.core.data.DiagnosticsReporter
+import dev.fitface.studio.core.model.PhotoClockColour
+import dev.fitface.studio.core.model.PhotoClockOptions
+import dev.fitface.studio.core.model.PhotoClockSetting
+import dev.fitface.studio.core.model.PhotoDraft
+import dev.fitface.studio.core.model.PhotoClockType
 import dev.fitface.studio.core.model.PreviewFrame
 import io.mockk.every
 import io.mockk.mockk
@@ -36,6 +43,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -76,6 +84,8 @@ class PhotoAlbumViewModelTest {
         var shown: String? = null,
         val sources: Map<String, PreviewFrame> = emptyMap(),
         val kept: Map<String, AlbumPhoto> = emptyMap(),
+        var clock: PhotoClockSetting? = null,
+        val clockOptions: PhotoClockOptions? = null,
     ) : PhotoAlbumRepository {
         var photos = sent.map { name ->
             SentPhoto(name, sources[name], ImagePlacement(fit = ImageFit.CONTAIN, zoom = 2f).takeIf { name in sources })
@@ -84,18 +94,18 @@ class PhotoAlbumViewModelTest {
         val encoded = mutableListOf<Pair<String?, ImagePlacement>>()
         var recorded: List<String>? = null
         var keptRecorded: List<KeptPhoto> = emptyList()
-        var drafted: List<DraftPhoto> = emptyList()
+        var drafted = PhotoDraft()
         var draftSaves = 0
 
         override suspend fun draft(faceId: Int) = drafted
 
-        override fun saveDraft(faceId: Int, photos: List<DraftPhoto>) {
-            drafted = photos
+        override fun saveDraft(faceId: Int, draft: PhotoDraft) {
+            drafted = draft
             draftSaves++
         }
 
         override suspend fun album(face: CatalogFace, onProgress: (DownloadProgress) -> Unit) =
-            PhotoAlbum(PhotoAlbumFace(254, listOf("photo_clock_default_bg.png")), photos, shown)
+            PhotoAlbum(PhotoAlbumFace(254, listOf("photo_clock_default_bg.png")), photos, shown, clock, clockOptions)
 
         override suspend fun preview(uri: String) = PreviewFrame(4, 6, IntArray(24))
 
@@ -113,9 +123,16 @@ class PhotoAlbumViewModelTest {
 
         override suspend fun keptPhoto(faceId: Int, name: String) = kept[name]
 
-        override suspend fun recordAlbum(faceId: Int, sent: List<String>, shown: String?, keep: List<KeptPhoto>): List<SentPhoto> {
+        override suspend fun recordAlbum(
+            faceId: Int,
+            sent: List<String>,
+            shown: String?,
+            keep: List<KeptPhoto>,
+            clock: PhotoClockSetting?,
+        ): List<SentPhoto> {
             recorded = sent
             this.shown = shown
+            if (clock != null) this.clock = clock
             keptRecorded = keep
             photos = sent.map { name -> photos.firstOrNull { it.name == name } ?: SentPhoto(name, null, null) }
             return photos
@@ -135,7 +152,7 @@ class PhotoAlbumViewModelTest {
     }
 
     private fun viewModel(repository: Repository) =
-        PhotoAlbumViewModel(repository, catalog, installer, DiagnosticsLog()).also { settle() }
+        PhotoAlbumViewModel(repository, catalog, installer, DiagnosticsLog(), mockk<DiagnosticsReporter>(relaxed = true)).also { settle() }
 
     @Test
     fun photosPastTheFacesRoomAreLeftOutAndSaidSo() {
@@ -152,16 +169,16 @@ class PhotoAlbumViewModelTest {
 
     /**
      * Each photo is encoded where it was placed; the request keeps what this app sent before,
-     * adds the new ones and shows the first; the album is recorded only once the request has
-     * been handed over.
+     * adds the new ones and shows the one being placed; the album is recorded only once the
+     * request has been handed over.
      */
     @Test
-    fun sendingListsEarlierPhotosShowsTheFirstAndRecordsOnlyWhenSent() {
-        val repository = Repository(sent = listOf(earlier))
+    fun sendingListsEarlierPhotosShowsTheOneBeingPlacedAndRecordsOnlyWhenSent() {
+        val repository = Repository(sent = listOf(earlier), shown = earlier)
         val viewModel = viewModel(repository)
         viewModel.pick(listOf("content://a", "content://b"))
         settle()
-        viewModel.select(viewModel.state.value.photos.first().id)
+        viewModel.select(viewModel.state.value.photos.first().key)
         viewModel.setFit(ImageFit.CONTAIN)
         viewModel.send()
         settle()
@@ -181,6 +198,139 @@ class PhotoAlbumViewModelTest {
         assertEquals(names.first(), repository.shown)
         assertEquals(names, repository.keptRecorded.map { it.photo.fileName })
         assertTrue(viewModel.state.value.photos.isEmpty())
+    }
+
+    /**
+     * A clock chosen goes with the photos and is recorded once sent; it starts from the plugin's
+     * default when none was sent, and choosing what was last sent changes nothing.
+     */
+    @Test
+    fun aChosenClockGoesWithThePhotosAndIsRecordedOnceSent() {
+        val repository = Repository(sent = listOf(earlier), clockOptions = clockOptions)
+        val viewModel = viewModel(repository)
+        assertEquals("the plugin's default until one is sent", PhotoClock(1, 1), viewModel.state.value.clock)
+        assertNull(viewModel.state.value.clockChoice)
+        // Off and back to the default is the default, not a change.
+        viewModel.chooseNoClock()
+        viewModel.chooseClockType(1)
+        assertNull(viewModel.state.value.clockChoice)
+        viewModel.chooseClockColour(22)
+        assertEquals(drawn(1, 22), viewModel.state.value.clockChoice)
+        viewModel.chooseClockType(2)
+        viewModel.chooseClockColour(99)
+        assertEquals("a colour the plugin does not list is refused", PhotoClock(2, 22), viewModel.state.value.clock)
+        viewModel.pick(listOf("content://a"))
+        settle()
+        viewModel.send()
+        settle()
+        assertEquals(PhotoClock(2, 22), requests.single().clock)
+        delivery.value = delivery.value.copy(phase = DirectInstallPhase.COMPLETE)
+        settle()
+        assertEquals(drawn(2, 22), repository.clock)
+        assertNull(viewModel.state.value.clockChoice)
+        assertEquals(PhotoClock(2, 22), viewModel.state.value.clock)
+        // Choosing the clock last sent leaves nothing to send.
+        viewModel.chooseClockColour(1)
+        viewModel.chooseClockColour(22)
+        assertNull(viewModel.state.value.clockChoice)
+        assertFalse(viewModel.state.value.canSend)
+    }
+
+    /** With no photo picked, Send sends only the clock: no transfer, what is shown stays. */
+    @Test
+    fun aClockAloneIsSentWithoutPhotos() {
+        val other = "fedcba9876543210fedcba9876543210.png"
+        val repository = Repository(sent = listOf(earlier, other), shown = other, clockOptions = clockOptions,
+            clock = drawn(1, 1))
+        val viewModel = viewModel(repository)
+        assertFalse(viewModel.state.value.canSend)
+        viewModel.chooseClockType(2)
+        assertTrue(viewModel.state.value.canSend)
+        viewModel.send()
+        settle()
+        val request = requests.single()
+        assertTrue(request.isSelection)
+        assertTrue(request.photos.isEmpty())
+        assertEquals(other, request.selected)
+        assertEquals(PhotoClock(2, 1), request.clock)
+        delivery.value = delivery.value.copy(phase = DirectInstallPhase.COMPLETE)
+        settle()
+        assertEquals(drawn(2, 1), repository.clock)
+        assertEquals(listOf(earlier, other), repository.recorded)
+    }
+
+    /**
+     * Without the plugin's options nothing about the clock can be chosen, but the face's own still
+     * goes: a send without one leaves the watch drawing no clock.
+     */
+    @Test
+    fun withoutThePluginsOptionsTheFacesOwnClockStillGoes() {
+        val viewModel = viewModel(Repository(sent = listOf(earlier)))
+        viewModel.chooseClockType(2)
+        assertNull(viewModel.state.value.clockChoice)
+        viewModel.pick(listOf("content://a"))
+        settle()
+        viewModel.send()
+        settle()
+        assertEquals(PhotoClock.FACE_DEFAULT, requests.single().clock)
+    }
+
+    /** Every request carries the clock, even one that only shows or removes a photo. */
+    @Test
+    fun everyRequestCarriesTheClock() {
+        val other = "fedcba9876543210fedcba9876543210.png"
+        val repository = Repository(sent = listOf(earlier, other), shown = earlier, clockOptions = clockOptions,
+            clock = drawn(2, 22))
+        val viewModel = viewModel(repository)
+        viewModel.select(other)
+        viewModel.send()
+        settle()
+        assertEquals(PhotoClock(2, 22), requests.single().clock)
+    }
+
+    /**
+     * No clock is the Styles page's last choice: sends then leave the clock out, which is
+     * recorded, and choosing a style afterwards brings it back in the plugin's default colour.
+     */
+    @Test
+    fun noClockSendsTheFaceWithoutOneUntilAStyleIsChosen() {
+        val repository = Repository(sent = listOf(earlier), shown = earlier, clockOptions = clockOptions,
+            clock = drawn(2, 22))
+        val viewModel = viewModel(repository)
+        // A style, then no clock: the second choice is the one that stands.
+        viewModel.chooseClockType(1)
+        viewModel.chooseNoClock()
+        assertEquals(PhotoClockSetting.None, viewModel.state.value.clockChoice)
+        // Off and back on again before sending is the clock last sent, colour and all.
+        viewModel.chooseNoClock()
+        viewModel.chooseClockType(2)
+        assertNull(viewModel.state.value.clockChoice)
+        viewModel.chooseNoClock()
+        assertEquals(PhotoClockSetting.None, viewModel.state.value.clockChoice)
+        assertNull(viewModel.state.value.clock)
+        viewModel.chooseClockColour(1)
+        assertEquals("a clock that is off has no colour", PhotoClockSetting.None, viewModel.state.value.clockChoice)
+        assertTrue(viewModel.state.value.canSend)
+        viewModel.send()
+        settle()
+        assertNull(requests.single().clock)
+        assertTrue(viewModel.state.value.clockOnly)
+        delivery.value = delivery.value.copy(phase = DirectInstallPhase.COMPLETE)
+        settle()
+        assertEquals(PhotoClockSetting.None, repository.clock)
+        assertNull(viewModel.state.value.clockChoice)
+        // Later requests keep it off.
+        viewModel.pick(listOf("content://a"))
+        settle()
+        viewModel.send()
+        settle()
+        assertNull(requests.last().clock)
+        assertFalse(viewModel.state.value.clockOnly)
+        delivery.value = delivery.value.copy(phase = DirectInstallPhase.COMPLETE)
+        settle()
+        assertEquals(PhotoClockSetting.None, repository.clock)
+        viewModel.chooseClockType(2)
+        assertEquals(drawn(2, 1), viewModel.state.value.clockChoice)
     }
 
     /** The Background page's colour: kept through a new fit and Reset, and sent with the photo. */
@@ -217,11 +367,15 @@ class PhotoAlbumViewModelTest {
         assertEquals(1, viewModel.state.value.photos.size)
     }
 
+    /** Taking out the last photo deletes it and shows the face's own background. */
     @Test
-    fun removingAsksForEveryPhotoThisAppSentAndRecordsAnEmptyAlbum() {
-        val repository = Repository(sent = listOf(earlier))
+    fun takingOutEveryPhotoDeletesThemAndRecordsAnEmptyAlbum() {
+        val repository = Repository(sent = listOf(earlier), shown = earlier)
         val viewModel = viewModel(repository)
-        viewModel.removeSent()
+        viewModel.remove(earlier)
+        assertEquals(1, viewModel.state.value.removed)
+        assertTrue(viewModel.state.value.canSend)
+        viewModel.send()
         settle()
         val request = requests.single()
         assertEquals(listOf(earlier), request.removed)
@@ -231,25 +385,30 @@ class PhotoAlbumViewModelTest {
         settle()
         assertEquals(emptyList<String>(), repository.recorded)
         assertEquals(7, viewModel.state.value.room)
+        assertTrue(viewModel.state.value.takenOut.isEmpty())
     }
 
     /**
-     * A sent photo brought back to Background is placed again on its kept original, keeps its
-     * place in the album and what was shown stays shown; its old version is deleted.
+     * Choosing a sent photo brings it back on its kept original, placed as it went: unmoved it
+     * goes as it is, moved it is placed again in its own place, its old version deleted, and it
+     * is the one shown.
      */
     @Test
-    fun aChangedSentPhotoTakesItsOldPlaceAndReplacesIt() {
+    fun aSentPhotoMovedOnBackgroundTakesItsOldPlaceAndReplacesIt() {
         val other = "fedcba9876543210fedcba9876543210.png"
         val source = PreviewFrame(8, 4, IntArray(32))
         val repository = Repository(sent = listOf(earlier, other), shown = other, sources = mapOf(earlier to source))
         val viewModel = viewModel(repository)
-        viewModel.changeSent(earlier)
+        assertFalse(viewModel.state.value.canSend)
+        viewModel.select(earlier)
         settle()
         val pick = viewModel.state.value.photos.single()
         assertEquals(earlier, pick.replaces)
         assertEquals(ImagePlacement(fit = ImageFit.CONTAIN, zoom = 2f), pick.placement)
+        assertEquals(0, viewModel.state.value.changed)
         assertEquals(7 - 2, viewModel.state.value.room)
         viewModel.setTint(0xFFFF0000.toInt())
+        assertEquals(1, viewModel.state.value.changed)
         viewModel.send()
         settle()
 
@@ -257,49 +416,58 @@ class PhotoAlbumViewModelTest {
         val renewed = request.photos.single().fileName
         assertEquals(listOf(renewed, other), request.album)
         assertEquals(listOf(earlier), request.removed)
-        assertEquals(other, request.selected)
+        assertEquals(renewed, request.selected)
         assertEquals(null to 0xFFFF0000.toInt(), repository.encoded.single().let { it.first to it.second.tint })
         delivery.value = delivery.value.copy(phase = DirectInstallPhase.COMPLETE)
         settle()
         assertEquals(listOf(renewed, other), repository.recorded)
         assertSame(source, repository.keptRecorded.single().source)
-        assertTrue(viewModel.state.value.photos.isEmpty())
+        assertTrue(viewModel.state.value.photos.none { it.replaces == null })
+        assertEquals(renewed, viewModel.state.value.album?.shown)
     }
 
+    /** One sent before copies were kept can be shown and taken out, but not placed. */
     @Test
-    fun aPhotoSentBeforeCopiesWereKeptCannotBeChanged() {
-        val viewModel = viewModel(Repository(sent = listOf(earlier)))
-        viewModel.changeSent(earlier)
+    fun aPhotoSentBeforeCopiesWereKeptCannotBePlaced() {
+        val other = "fedcba9876543210fedcba9876543210.png"
+        val viewModel = viewModel(Repository(sent = listOf(earlier, other), shown = other))
+        viewModel.select(earlier)
         settle()
         assertTrue(viewModel.state.value.photos.isEmpty())
-        assertEquals("This photo was sent before copies were kept. Pick it again to change it.",
-            viewModel.state.value.error?.text)
+        assertNull(viewModel.state.value.selected)
+        assertEquals(earlier, viewModel.state.value.shownEntry?.key)
+        assertNull(viewModel.state.value.error)
     }
 
-    /** Showing another sent photo transfers nothing and records only which one is shown. */
+    /** Choosing another sent photo and sending transfers nothing and only changes which is shown. */
     @Test
-    fun showingAnotherSentPhotoOnlyChangesWhichIsShown() {
+    fun choosingAnotherSentPhotoOnlyChangesWhichIsShown() {
         val other = "fedcba9876543210fedcba9876543210.png"
         val repository = Repository(sent = listOf(earlier, other), shown = earlier)
         val viewModel = viewModel(repository)
-        viewModel.showSent(other)
+        viewModel.select(other)
+        assertTrue(viewModel.state.value.showsOther)
+        viewModel.send()
         settle()
         val request = requests.single()
         assertTrue(request.isSelection)
         assertEquals(other, request.selected)
+        assertTrue(repository.encoded.isEmpty())
         delivery.value = delivery.value.copy(phase = DirectInstallPhase.COMPLETE)
         settle()
         assertEquals(other, repository.shown)
         assertEquals(listOf(earlier, other), repository.recorded)
         assertEquals(other, viewModel.state.value.album?.shown)
+        assertFalse(viewModel.state.value.canSend)
     }
 
-    /** Removing one keeps the shown photo shown; removing the shown one shows the next. */
+    /** Taking out one keeps the shown photo shown; taking out the shown one shows its neighbour. */
     @Test
-    fun removingOneSentPhotoKeepsTheRest() {
+    fun takingOutOneSentPhotoKeepsTheRest() {
         val other = "fedcba9876543210fedcba9876543210.png"
         val viewModel = viewModel(Repository(sent = listOf(earlier, other), shown = other))
-        viewModel.removeSentPhoto(earlier)
+        viewModel.remove(earlier)
+        viewModel.send()
         settle()
         requests.single().let {
             assertEquals(listOf(earlier), it.removed)
@@ -307,28 +475,11 @@ class PhotoAlbumViewModelTest {
             assertEquals(other, it.selected)
             assertTrue(it.isRemoval)
         }
-        requests.clear()
-        delivery.value = DirectInstallState(phase = DirectInstallPhase.READY)
-        settle()
-        viewModel.removeSentPhoto(other)
-        settle()
-        assertEquals(earlier, requests.single().selected)
-    }
 
-    /** Sending again uses the kept copies as they were sent, in their places, the same one shown. */
-    @Test
-    fun sendingAgainUsesTheKeptCopies() {
-        val other = "fedcba9876543210fedcba9876543210.png"
-        val copy = AlbumPhoto(png(41))
-        val repository = Repository(sent = listOf(copy.fileName, other), shown = other, kept = mapOf(copy.fileName to copy))
-        val viewModel = viewModel(repository)
-        viewModel.resendAll()
-        settle()
-        val request = requests.single()
-        assertEquals(listOf(copy.fileName), request.photos.map { it.fileName })
-        assertEquals(listOf(copy.fileName, other), request.album)
-        assertEquals(other, request.selected)
-        assertTrue(repository.encoded.isEmpty())
+        delivery.value = DirectInstallState(phase = DirectInstallPhase.READY)
+        val again = viewModel(Repository(sent = listOf(earlier, other), shown = other))
+        again.remove(other)
+        assertEquals(earlier, again.state.value.shownEntry?.key)
     }
 
     /**
@@ -345,13 +496,13 @@ class PhotoAlbumViewModelTest {
         first.transform(1f, 0.1f, 0f)
         first.transform(1f, 0.1f, 0f)
         settle()
-        assertEquals(2, repository.drafted.size)
+        assertEquals(2, repository.drafted.photos.size)
         val saves = repository.draftSaves
         assertTrue("a drag's frames are saved once, when they settle", saves <= 3)
 
         val reopened = viewModel(repository)
         val photos = reopened.state.value.photos
-        assertEquals(repository.drafted.map { it.key }, photos.map { it.key })
+        assertEquals(repository.drafted.photos.map { it.key }, photos.map { it.key })
         assertTrue(photos.all { it.uri == null })
         assertEquals(0xFF00FF00.toInt(), photos.last().placement.tint)
         assertEquals(0.2f, photos.last().placement.offsetX, 0.0001f)
@@ -362,20 +513,70 @@ class PhotoAlbumViewModelTest {
         assertEquals(listOf(null, null), repository.encoded.map { it.first })
         delivery.value = delivery.value.copy(phase = DirectInstallPhase.COMPLETE)
         settle()
-        assertTrue(repository.drafted.isEmpty())
+        assertTrue(repository.drafted.isEmpty)
+    }
+
+    /** Undo puts back the photo last taken out: a sent one stays, a new one returns placed as it was. */
+    @Test
+    fun aPhotoTakenOutCanBePutBack() {
+        val other = "fedcba9876543210fedcba9876543210.png"
+        val viewModel = viewModel(Repository(sent = listOf(earlier, other), shown = earlier))
+        viewModel.remove(earlier)
+        val sentOut = viewModel.state.value.takenOutLast!!
+        assertEquals(other, viewModel.state.value.shownEntry?.key)
+        viewModel.putBack(sentOut.id)
+        assertTrue(viewModel.state.value.takenOut.isEmpty())
+        assertEquals(earlier, viewModel.state.value.shownEntry?.key)
+        assertFalse(viewModel.state.value.canSend)
+
+        viewModel.pick(listOf("content://a"))
+        settle()
+        viewModel.setTint(0xFF00FF00.toInt())
+        val key = viewModel.state.value.photos.single().key
+        viewModel.remove(key)
+        val newOut = viewModel.state.value.takenOutLast!!
+        // An old offer cannot put back a newer taking-out.
+        viewModel.putBack(sentOut.id)
+        assertTrue(viewModel.state.value.photos.isEmpty())
+        viewModel.putBack(newOut.id)
+        assertEquals(0xFF00FF00.toInt(), viewModel.state.value.photos.single().placement.tint)
+        assertEquals(key, viewModel.state.value.shownEntry?.key)
+        assertNull(viewModel.state.value.takenOutLast)
+    }
+
+    /** Photos taken out, and the one being placed, survive leaving the page too. */
+    @Test
+    fun photosTakenOutSurviveLeavingThePage() {
+        val other = "fedcba9876543210fedcba9876543210.png"
+        val repository = Repository(sent = listOf(earlier, other), shown = earlier)
+        val first = viewModel(repository)
+        first.remove(earlier)
+        settle()
+        assertEquals(listOf(earlier), repository.drafted.takenOut)
+        val reopened = viewModel(repository)
+        assertEquals(setOf(earlier), reopened.state.value.takenOut)
+        assertEquals(other, reopened.state.value.shownEntry?.key)
     }
 
     /** A drafted change of a photo that is no longer on the watch has nothing to replace. */
     @Test
     fun aDraftedChangeOfARemovedPhotoIsDropped() {
         val repository = Repository(sent = emptyList()).apply {
-            drafted = listOf(DraftPhoto("0f0e0d0c-0b0a-4908-8706-050403020100", PreviewFrame(4, 6, IntArray(24)),
-                ImagePlacement(), replaces = earlier))
+            drafted = PhotoDraft(listOf(DraftPhoto("0f0e0d0c-0b0a-4908-8706-050403020100", PreviewFrame(4, 6, IntArray(24)),
+                ImagePlacement(), replaces = earlier)))
         }
         assertTrue(viewModel(repository).state.value.photos.isEmpty())
     }
 
     private fun settle() = scope.testScheduler.advanceUntilIdle()
+
+    private fun drawn(type: Int, colour: Int) = PhotoClockSetting.Drawn(PhotoClock(type, colour))
+
+    private val clockOptions = PhotoClockOptions(
+        listOf(PhotoClockType(1, null), PhotoClockType(2, null)),
+        listOf(PhotoClockColour(1, 0xFFFFFFFF.toInt()), PhotoClockColour(22, 0xFFF03426.toInt())),
+        PhotoClock(1, 1),
+    )
 
     companion object {
         /** A valid 256 × 402 PNG whose bytes, and so whose name, depend on [seed]. */

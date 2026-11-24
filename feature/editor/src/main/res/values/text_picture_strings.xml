@@ -1,0 +1,48 @@
+<resources>
+    <!-- Widgets page entry, under "Add a moving picture". -->
+    <string name="editor_text_open">Add text</string>
+    <!-- The words a new text starts with. -->
+    <string name="editor_text_default">Text</string>
+    <!-- Header subtitle on the Widgets page while text is being placed. -->
+    <string name="editor_subtitle_text_positioning">Placing text: drag to move, pinch to resize</string>
+    <string name="editor_text_heading">Text</string>
+    <string name="editor_text_words">Words</string>
+    <string name="editor_text_font">Font</string>
+    <string name="editor_text_font_file">Choose a font file (TTF or OTF)…</string>
+    <!-- The font field, read by a screen reader with its drop-down role. -->
+    <string name="editor_text_font_a11y">Font: %1$s</string>
+    <string name="editor_text_font_note">These are your phone’s fonts. A font file you choose draws this text and is not kept.</string>
+    <string name="editor_text_problem_empty">Type some text.</string>
+    <string name="editor_text_problem_long">Up to %1$d characters.</string>
+    <string name="editor_text_problem_lines">Up to %1$d lines.</string>
+    <string name="editor_text_problem_big">Too big for the face at %1$d px. Make it smaller or shorter.</string>
+    <string name="editor_text_note">It is added as a picture, so the watch shows it exactly as drawn here. Its words stay as typed whatever language the watch uses.</string>
+    <string name="editor_text_replacing">Replacing deletes the label “%1$s”. Undo brings it back.</string>
+    <string name="editor_text_replace">Replace label</string>
+    <string name="editor_text_no_room">No room for this text: the face is at the 4 MB the watch accepts.</string>
+    <string name="editor_text_detail">It is added on top of everything in %1$s. Move, resize, turn or delete it there like any picture. To change its words, delete it and add the text again.</string>
+
+    <string name="editor_font_sans">Sans</string>
+    <string name="editor_font_sans_bold">Sans bold</string>
+    <string name="editor_font_sans_light">Sans light</string>
+    <string name="editor_font_condensed">Condensed</string>
+    <string name="editor_font_condensed_bold">Condensed bold</string>
+    <string name="editor_font_serif">Serif</string>
+    <string name="editor_font_serif_bold">Serif bold</string>
+    <string name="editor_font_monospace">Monospace</string>
+    <string name="editor_font_typewriter">Typewriter</string>
+    <string name="editor_font_handwriting">Handwriting</string>
+    <string name="editor_font_casual">Casual</string>
+    <string name="editor_font_small_capitals">Small capitals</string>
+
+    <!-- How a label is named in the widget list, the tray and Edit widget, in place of its reading. -->
+    <string name="editor_widget_label">label “%1$s”</string>
+    <!-- Edit widget, for a label: a Value that draws a fixed word. -->
+    <string name="editor_label_detail">A fixed word drawn with the watch’s font, in the watch’s language.</string>
+    <string name="editor_label_font_heading">Font</string>
+    <string name="editor_label_font_now">The watch’s own font</string>
+    <string name="editor_label_font_info">The watch draws “%1$s” in its own font, in its own language. Drawing it in another font adds it as a picture, which keeps these words in every watch language.</string>
+    <string name="editor_label_font_draw">Draw in another font</string>
+
+    <string name="editor_edit_kind_text_picture">new text</string>
+</resources>

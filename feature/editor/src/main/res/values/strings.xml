@@ -149,8 +149,12 @@
     <string name="editor_quick_on">On</string>
     <string name="editor_quick_off">Off</string>
     <string name="editor_quick_all">ALL</string>
-    <string name="editor_quick_import_widget">Import widget</string>
-    <string name="editor_quick_add_picture">Image/video</string>
+    <!-- The Layers page's first row: four buttons a quarter of the row each, in small type
+         on two short lines, so the line break is part of each label. -->
+    <string name="editor_quick_import_widget">Import\nwidget</string>
+    <string name="editor_quick_add_picture">Add\nimage</string>
+    <string name="editor_quick_add_text">Add\ntext</string>
+    <string name="editor_quick_clock_font">Clock\nfont</string>
     <string name="editor_quick_colour_facts">%1$s · %2$s</string>
     <string name="editor_quick_colour_unavailable">This widget\'s colour can\'t be changed.</string>
     <string name="editor_quick_colour_apply">Apply</string>
@@ -301,6 +305,8 @@
 
     <!-- Placement controls -->
     <string name="editor_placement_hint">Tap: 1 px or %1$d%% · hold to repeat · pinch for larger changes</string>
+    <string name="editor_size_text">%1$d px font</string>
+    <string name="editor_placement_hint_text">Tap: 1 px · hold to repeat · pinch for larger changes</string>
     <string name="editor_placement_reset">RESET PLACEMENT</string>
 
     <!-- Background page -->
@@ -447,8 +453,9 @@
     <string name="editor_setup_phone_ready">Phone ready</string>
     <string name="editor_setup_phone_ready_detail">%1$s · Nearby access granted</string>
     <string name="editor_setup_step3_title">Find the watch for transfer</string>
-    <string name="editor_setup_step3_why">Keep the plugin’s Nearby devices access on.</string>
-    <string name="editor_setup_step3_why_legacy">Keep the plugin enabled.</string>
+    <string name="editor_setup_step3_why">Keep the plugin’s Nearby devices access on, and tap Allow if you are asked to let FitFace Studio access your accessory.</string>
+    <string name="editor_setup_step3_why_legacy">Keep the plugin enabled, and tap Allow if you are asked to let FitFace Studio access your accessory.</string>
+    <string name="editor_setup_step3_info">The phone’s accessory service asks once before another app may reach the watch. Its prompt closes by itself after about ten seconds; if you miss it, find the watch again and it asks again.</string>
     <string name="editor_setup_step3_done">Watch services found for this connection</string>
     <string name="editor_setup_step4_title">Free the connection for transfer</string>
     <string name="editor_setup_step4_why">Turn the plugin\'s Nearby devices access off. Return here after Android applies the change.</string>
@@ -508,12 +515,13 @@
     <string name="editor_bg_import_saving">Applying background…</string>
     <string name="editor_bg_import_asset">Source background image</string>
     <string name="editor_bg_import_result">Background replacement preview</string>
+    <string name="editor_bg_import_compare">Hold the face to see its background now</string>
+    <string name="editor_compare_still">Hold the face still to see it as it is</string>
+    <string name="editor_compare_action">Switch between the change and the face as it is</string>
     <string name="editor_bg_import_missing">This style has no background image. Choose another style or face.</string>
     <string name="editor_bg_import_heading">Background image</string>
     <string name="editor_bg_import_primary">Copies this background image. Your widgets stay in place.</string>
     <string name="editor_bg_import_multiple">This style has additional full-face artwork. Only its primary background is copied.</string>
-    <string name="editor_bg_import_before">Before</string>
-    <string name="editor_bg_import_after">After</string>
     <string name="editor_bg_import_scope">Applies to: %1$s</string>
     <string name="editor_bg_import_skipped">Unchanged: %1$s</string>
     <string name="editor_bg_import_result_detail">Colours and transparency follow your face’s background. This sample preview may differ from the watch.</string>

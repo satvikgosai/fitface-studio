@@ -13,7 +13,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.data.db.ProjectDao
 import dev.fitface.studio.core.data.db.ProjectEntity
 import dev.fitface.studio.core.format.BackgroundDeletion
+import dev.fitface.studio.core.format.ArtworkFont
 import dev.fitface.studio.core.format.BackgroundImporter
+import dev.fitface.studio.core.format.ClockDigits
 import dev.fitface.studio.core.format.BackgroundImportEdit
 import dev.fitface.studio.core.model.drawLeft
 import dev.fitface.studio.core.model.drawTop
@@ -42,6 +44,7 @@ import dev.fitface.studio.core.format.Fit3NoContainerException
 import dev.fitface.studio.core.format.Fit3TemplateMismatchException
 import dev.fitface.studio.core.format.Fit3WidgetIsAnchorException
 import dev.fitface.studio.core.format.ImageRecord
+import dev.fitface.studio.core.format.IMAGE_RGB565
 import dev.fitface.studio.core.format.ProjectArchive
 import dev.fitface.studio.core.format.ProjectArchiveException
 import dev.fitface.studio.core.format.ProjectManifest
@@ -57,6 +60,7 @@ import dev.fitface.studio.core.format.WidgetImportOrigin
 import dev.fitface.studio.core.format.WidgetImportOrigins
 import dev.fitface.studio.core.format.WidgetImporter
 import dev.fitface.studio.core.format.PictureWidget
+import dev.fitface.studio.core.format.WidgetTextResources
 import dev.fitface.studio.core.format.PanelSize
 import dev.fitface.studio.core.format.WidgetPristine
 import dev.fitface.studio.core.format.WidgetRecord
@@ -69,6 +73,16 @@ import dev.fitface.studio.core.model.animationAddedBytes
 import dev.fitface.studio.core.model.movingBackgroundBounds
 import dev.fitface.studio.core.model.PixelBounds
 import dev.fitface.studio.core.model.PreparedPicture
+import dev.fitface.studio.core.model.PreparedText
+import dev.fitface.studio.core.model.TextFont
+import dev.fitface.studio.core.model.ClockFontPreview
+import dev.fitface.studio.core.model.ClockFontRequest
+import dev.fitface.studio.core.model.ClockPart
+import dev.fitface.studio.core.model.TextPicture
+import dev.fitface.studio.core.model.TextProblem
+import dev.fitface.studio.core.model.WidgetLabel
+import dev.fitface.studio.core.model.LabelAlignment
+import dev.fitface.studio.core.model.WidgetCategory
 import dev.fitface.studio.core.model.pictureBaselineSize
 import dev.fitface.studio.core.model.pictureSizes
 import dev.fitface.studio.core.model.tinted
@@ -160,11 +174,16 @@ class WatchFaceRepositoryImpl @Inject constructor(
         /** The selected variant's moving background, which the import replaces. */
         val replacing: AnimationDeletion? = null)
     private var pendingBackground: PendingBackground? = null
-    /** A picked picture at its baseline size, kept while it is placed on the canvas. */
-    private class Picture(val handle: String, val width: Int, val height: Int, val argb: IntArray)
+    /** A clock redrawn in a font, previewed and waiting for Apply. */
+    private class PendingClockFont(val ticket: String, val session: Session, val before: Fit3Container,
+        val variant: String, val edit: StructuralEdit, val lineage: SessionLineage, val audit: EditAuditSummary)
+    private var pendingClockFont: PendingClockFont? = null
+    /** A picked picture, or text drawn as one, at its baseline size, kept while it is placed on the canvas. */
+    private class Picture(val handle: String, val width: Int, val height: Int, val argb: IntArray, val text: Boolean = false)
     private var picture: Picture? = null
     private val videoSource = AndroidVideoSource(context)
     private val videoFrameFiles = VideoFrameFiles(File(context.cacheDir, "video-frames"))
+    private val textSource = AndroidTextSource(context)
 
     override suspend fun inspectWidgetDonor(download: FacePackage): WidgetDonor = withContext(Dispatchers.Default) {
         // This must not call openPackage: inspecting a donor never replaces the active project.
@@ -360,10 +379,165 @@ class WatchFaceRepositoryImpl @Inject constructor(
             val origins = current.originsWith("", targetVariant, result, AddedWidgetKind.PICTURE)
             current.identities().withResources(current.originalContainer, result.edit.container)
                 .validate(current.originalContainer, result.edit.container, origins)
-            commit(current, result.edit.container, result.edit.audit("Picture added to $targetVariant"),
-                targetVariant, origins, kind = EditKind.PICTURE, group = group)
+            commit(current, result.edit.container,
+                result.edit.audit("${if (source.text) "Text" else "Picture"} added to $targetVariant"),
+                targetVariant, origins, kind = if (source.text) EditKind.TEXT_PICTURE else EditKind.PICTURE, group = group)
         }
     }
+
+    override suspend fun prepareText(text: TextPicture, projectId: Long, targetVariant: String): PreparedText =
+        withContext(Dispatchers.Default) {
+            val panel = mutex.withLock { pictureTarget(projectId, targetVariant) }
+            text.problem?.let { return@withContext PreparedText(text, null, it) }
+            // A picture is kept a pixel short of the panel's height, as a picked one is fitted.
+            when (val drawing = textSource.render(text, textSource.typeface(text.font), panel.width, panel.height - 1)) {
+                AndroidTextSource.Drawing.Empty -> PreparedText(text, null, TextProblem.EMPTY)
+                AndroidTextSource.Drawing.TooBig -> PreparedText(text, null, TextProblem.TOO_BIG)
+                is AndroidTextSource.Drawing.Drawn -> mutex.withLock {
+                    currentCoroutineContext().ensureActive()
+                    val frame = drawing.frame
+                    val kept = Picture(UUID.randomUUID().toString(), frame.width, frame.height, frame.argb, text = true)
+                    picture = kept
+                    PreparedText(text, PreparedPicture(kept.handle, frame.width, frame.height, opaque = false,
+                        pictureSizes(frame.width, frame.height, panel.width, panel.height, kept = true), frame))
+                }
+            }
+        }
+
+    override suspend fun readFont(uri: String): TextFont.File = withContext(Dispatchers.IO) { textSource.readFont(uri) }
+
+    override suspend fun previewClockFont(request: ClockFontRequest, projectId: Long, targetVariant: String): ClockFontPreview =
+        withContext(Dispatchers.Default) {
+            val typeface = textSource.typeface(request.font)
+            mutex.withLock {
+                pendingClockFont = null
+                val current = requireSession()
+                if (current.projectId != projectId || current.selectedVariantName != targetVariant)
+                    throw WatchFaceException("The project changed. Open Clock font again.")
+                val saved = current.identities()
+                val sets = current.editTargets(targetVariant, request.applyToAllStyles)
+                    .flatMap(current::clockSets).filter { it.set.part in request.parts }
+                if (sets.isEmpty()) throw WatchFaceException("None of these is drawn from pictures a font can redraw here.")
+                val fonts = drawClockFonts(current, sets, typeface, request, saved)
+                if (fonts.isEmpty()) throw WatchFaceException("This font has none of these characters. Choose another.")
+                val lineage = fonts.entries.fold(saved) { state, (set, font) -> state.withFont(set.key, font) }
+                val edit = redrawClock(current, fonts.keys, lineage)
+                lineage.withResources(current.originalContainer, edit.container)
+                    .validate(current.originalContainer, edit.container, current.importOrigins)
+                val preview = WidgetPreviewComposer.compose(edit.container.entryByBasename(targetVariant),
+                    edit.container.entries, WidgetTextRasterizer::render, previewDictionaryLocale()).composed
+                val ticket = UUID.randomUUID().toString()
+                currentCoroutineContext().ensureActive()
+                pendingClockFont = PendingClockFont(ticket, current, current.currentContainer, targetVariant, edit, lineage,
+                    edit.audit("Clock font changed " + editScope(targetVariant, request.applyToAllStyles)))
+                ClockFontPreview(ticket, preview, edit.changedStyles, fonts.size)
+            }
+        }
+
+    override suspend fun applyClockFont(ticket: String): EditorSnapshot = withContext(Dispatchers.Default) {
+        mutex.withLock {
+            val pending = pendingClockFont?.takeIf { it.ticket == ticket }
+                ?: throw WatchFaceException("Choose the font again before applying it.")
+            val current = requireSession()
+            if (current !== pending.session || current.currentContainer !== pending.before ||
+                current.selectedVariantName != pending.variant)
+                throw WatchFaceException("The project changed after the preview. Choose the font again.")
+            val snapshot = commit(current, pending.edit.container, pending.audit, pending.variant,
+                lineage = pending.lineage, kind = EditKind.CLOCK_FONT)
+            pendingClockFont = null
+            snapshot
+        }
+    }
+
+    override suspend fun resetClockFont(styleName: String, part: ClockPart, applyToAllStyles: Boolean): EditorSnapshot =
+        withContext(Dispatchers.Default) {
+            mutex.withLock {
+                val current = requireSession()
+                val saved = current.identities()
+                val sets = current.editTargets(styleName, applyToAllStyles).flatMap(current::clockSets)
+                    .filter { it.set.part == part && saved.font(it.key) != null }
+                if (sets.isEmpty()) throw WatchFaceException("This clock is already in its own font.")
+                val lineage = sets.fold(saved) { state, set -> state.withFont(set.key, null) }
+                val edit = redrawClock(current, sets, lineage)
+                commit(current, edit.container, edit.audit("Clock font reset " + editScope(styleName, applyToAllStyles)),
+                    styleName, lineage = lineage, kind = EditKind.CLOCK_FONT)
+            }
+        }
+
+    /**
+     * Each of [sets] drawn in [typeface], keyed by the set; one the font inks nothing of is
+     * left out.
+     *
+     * Every set is measured on the face's **own** frames, whatever font it is in now, so
+     * choosing fonts one after another never drifts. Sets of one part, size and format in a
+     * style are fitted together — hours and minutes that do not share frames still come out
+     * the same size on the same baseline — and each keeps its own colour unless one is asked
+     * for: the colour its saved font has, or its own digits' colour. A colon is drawn at its
+     * style's digits' size, centred where the face's own colon is.
+     */
+    private fun drawClockFonts(current: Session, sets: List<Session.ClockSet>, typeface: android.graphics.Typeface,
+        request: ClockFontRequest, saved: SessionLineage): Map<Session.ClockSet, ArtworkFont> {
+        val vendor = saved.copy(artworkFonts = null)
+        class Resolved(val set: Session.ClockSet, val pristine: ContainerEntry, val origins: Map<Int, ImageRecord>) {
+            val first = origins.values.first()
+            val frames by lazy(LazyThreadSafetyMode.NONE) {
+                origins.values.distinctBy { it.index }.map { FaceRecordParser.decodeImage(pristine, it) }
+            }
+        }
+        val resolved = sets.mapNotNull { set ->
+            val pristine = current.pristineWidgets(listOf(set.variant), set.variant, set.target, vendor).getValue(set.variant)
+            val origins = StructuralEditor.frameOrigins(current.currentContainer.entryByBasename(set.variant),
+                pristine.entry, pristine.sources, set.target) ?: return@mapNotNull null
+            origins.takeIf { all -> all.values.map { listOf(it.width, it.height, it.format) }.toSet().size == 1 }
+                ?.let { Resolved(set, pristine.entry, it) }
+        }
+        val weekdays = weekdayNames()
+        val (phone, file) = when (val font = request.font) {
+            is TextFont.Phone -> font.font to null
+            is TextFont.File -> null to font.name.take(SessionLineage.MAX_FONT_NAME)
+        }
+        fun colon(member: Resolved) = ClockDigits.COLON in member.set.set.values.values
+        // The digits' text size in each style, which its colon is drawn at.
+        val digitSizes = mutableMapOf<String, Float>()
+        return resolved.sortedBy(::colon)
+            .groupBy { listOf(it.set.variant, it.set.set.part, colon(it), it.first.width, it.first.height, it.first.format) }
+            .flatMap { (_, group) ->
+                val look = ClockDigits.look(group.flatMap { it.frames }) ?: return@flatMap emptyList()
+                // Every original frame once, with what it shows.
+                val frames = group.flatMap { member ->
+                    member.origins.entries.distinctBy { it.value.index }.map { (image, origin) ->
+                        val value = member.set.set.values.getValue(image)
+                        Triple(member, origin.index, when {
+                            value == ClockDigits.COLON -> ":"
+                            member.set.set.part == ClockPart.WEEKDAY -> weekdays[value]
+                            else -> value.toString()
+                        })
+                    }
+                }
+                val variant = group.first().set.variant
+                val isColon = colon(group.first())
+                val glyphs = textSource.glyphs(frames.map { it.third }, typeface, group.first().first.width,
+                    group.first().first.height, look, if (isColon) digitSizes[variant] else null)
+                    ?: return@flatMap emptyList()
+                if (!isColon && group.first().set.set.part == ClockPart.TIME) digitSizes.putIfAbsent(variant, glyphs.textSize)
+                val coverage = glyphs.coverage
+                group.map { member ->
+                    val drawn = frames.indices.filter { frames[it].first === member }
+                        .associate { frames[it].second to ClockDigits.encodeCoverage(coverage[it]) }
+                    val colour = request.tint?.let { it or (0xFF shl 24) } ?: saved.font(member.set.key)?.colour
+                        ?: ClockDigits.look(member.frames)?.colour ?: look.colour
+                    member.set to ArtworkFont(phone, file, colour, drawn)
+                }
+            }.toMap()
+    }
+
+    /** [sets] drawn on the face again from the originals [lineage] gives them, at their size and turn. */
+    private fun redrawClock(current: Session, sets: Collection<Session.ClockSet>, lineage: SessionLineage): StructuralEdit =
+        StructuralEditor.redrawArtwork(current.currentContainer, sets.map { set ->
+            StructuralEditor.ArtworkRedraw(set.variant, set.target,
+                current.pristineWidgets(listOf(set.variant), set.variant, set.target, lineage).getValue(set.variant),
+                lineage.turn(set.key))
+        })
 
     override suspend fun releasePicture(handle: String) = mutex.withLock {
         if (picture?.handle == handle) picture = null
@@ -2811,9 +2985,11 @@ class WatchFaceRepositoryImpl @Inject constructor(
 
     // Schema 4 only when an artwork turn is saved. Readers use `ignoreUnknownKeys`, so an
     // older build would drop the turn without a word and then straighten the artwork on its
-    // next resize; at 4 it refuses the project instead. Untouched projects stay at 3.
+    // next resize; at 4 it refuses the project instead. Untouched projects stay at 3. A clock
+    // font is 6 for the same reason: dropped, the next resize would draw the old digits back.
     private fun storedState(current: Session) = StoredSessionState(
         schema = when {
+            !current.identities().artworkFonts.isNullOrEmpty() -> 6
             current.importOrigins?.hasPictures == true -> 5
             current.identities().artworkTurns.isNullOrEmpty() -> 3
             else -> 4
@@ -3342,17 +3518,48 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }.toMap()
         }
 
-        fun pristineWidgets(styleNames: List<String>, styleName: String, index: Int): Map<String, WidgetPristine> {
+        /**
+         * What every resize, turn and redraw of [index]'s artwork samples: its original — the
+         * vendor's variant, or its import's baseline — with each clock font [saved] keeps drawn
+         * over it ([ClockDigits.overlay]), so a redrawn clock stays in its font.
+         */
+        fun pristineWidgets(styleNames: List<String>, styleName: String, index: Int,
+            saved: SessionLineage = identities()): Map<String, WidgetPristine> {
             val imported = importOrigins?.find(styleName, index)
             if (imported != null) return mapOf(styleName to WidgetPristine(
-                imported.entry(currentContainer.entryByBasename(styleName)), imported.indices.associateWith { 0 }))
+                ClockDigits.overlay(imported.entry(currentContainer.entryByBasename(styleName)),
+                    listOfNotNull(saved.font(SessionLineage.importArtworkKey(imported.id)))),
+                imported.indices.associateWith { 0 }))
             return styleNames.associateWith { variant ->
-                val entry = currentContainer.entryByBasename(variant)
-                val original = originalEntry(variant)
-                val sources = identities().widgets.getValue(variant).mapNotNull { (index, origin) ->
+                val sources = saved.widgets.getValue(variant).mapNotNull { (index, origin) ->
                     origin.originalIndex?.let { index to it }
                 }.toMap()
-                WidgetPristine(original, sources)
+                WidgetPristine(drawnOriginalEntry(variant, saved), sources)
+            }
+        }
+
+        /** [variant]'s original entry with the clock fonts [saved] keeps for it drawn over it. */
+        fun drawnOriginalEntry(variant: String, saved: SessionLineage = identities()): ContainerEntry {
+            val original = originalEntry(variant)
+            val fonts = saved.artworkFonts ?: return original
+            val prefix = SessionLineage.nativeArtworkKey(original.basename, 0).substringBeforeLast(':') + ":"
+            return ClockDigits.overlay(original, fonts.filterKeys { it.startsWith(prefix) }.values)
+        }
+
+        /** One set of [variant]'s clock pictures, the widget it is edited through, and where its font is kept. */
+        class ClockSet(val variant: String, val set: ClockDigits.DigitSet, val target: Int, val key: String)
+
+        private var cachedClockSets: Pair<Fit3Container, MutableMap<String, List<ClockSet>>>? = null
+
+        /** [variant]'s sets of clock pictures whose artwork has an original to be drawn from. */
+        fun clockSets(variant: String): List<ClockSet> {
+            val cache = cachedClockSets?.takeIf { it.first === currentContainer }?.second
+                ?: mutableMapOf<String, List<ClockSet>>().also { cachedClockSets = currentContainer to it }
+            return cache.getOrPut(variant) {
+                val sets = ClockDigits.sets(currentContainer.entryByBasename(variant))
+                if (sets.isEmpty()) return@getOrPut emptyList()
+                val keys = artworkKeys(variant, sets.map { it.widgets.min() }.toSet())
+                sets.mapNotNull { set -> keys[set.widgets.min()]?.let { ClockSet(variant, set, set.widgets.min(), it) } }
             }
         }
         private val originalReport = originalContainer.validate()
@@ -3847,10 +4054,13 @@ class WatchFaceRepositoryImpl @Inject constructor(
             }
             val savedTurns = identities().takeIf { !it.artworkTurns.isNullOrEmpty() }
             val movingPictures = movingPictureIndices(selected)
+            val texts by lazy(LazyThreadSafetyMode.NONE) { WidgetTextResources(currentContainer.entries, previewLocale()) }
             val artworkKeys by lazy(LazyThreadSafetyMode.NONE) {
                 artworkKeys(selected.basename, FaceRecordParser.widgetGuides(selected)
                     .filter { it.rotationKind == WidgetRotationKind.ARTWORK }.map { it.globalIndex }.toSet())
             }
+            // Each widget drawing a set of clock pictures, by index, with the set.
+            val clock = clockSets(selected.basename).flatMap { set -> set.set.widgets.map { it to set } }.toMap()
             val widgets = FaceRecordParser.widgetGuides(selected).map { widget ->
                 val duplicateSource = duplicateSources[widget.globalIndex]
                 val imported = importOrigins?.find(selected.basename, widget.globalIndex)
@@ -3896,6 +4106,12 @@ class WatchFaceRepositoryImpl @Inject constructor(
                     importedFromFaceId = imported?.faceId?.takeIf { imported.kind == AddedWidgetKind.DONOR },
                     addedKind = imported?.kind
                         ?: AddedWidgetKind.MOVING_PICTURE.takeIf { widget.globalIndex in movingPictures },
+                    label = if (widget.category != WidgetCategory.VALUE) null else
+                        texts.label(selected, currentRecords.getValue(widget.globalIndex))
+                            ?.let { WidgetLabel(it.text, it.font.pixelSize, LabelAlignment.entries[it.alignment.coerceIn(0, 2)]) },
+                    clockPart = clock[widget.globalIndex]?.set?.part,
+                    // No lineage yet means nothing was edited, so no font is saved.
+                    clockFont = clock[widget.globalIndex]?.let { lineage?.font(it.key)?.name },
                 )
             }
             // Every variant is reconstructed from its current records, in record order.
@@ -4077,18 +4293,21 @@ private data class StoredSessionState(
 ) {
     /**
      * Whether what each schema adds is there, and only there: 2 an import table, 3 the
-     * lineage, 4 an artwork turn, 5 an added picture. Pictures exist exactly at 5, so a
-     * build that predates them refuses the project instead of saving it back without them.
+     * lineage, 4 an artwork turn, 5 an added picture, 6 a clock font. Pictures need 5 or
+     * more and 5 needs one; fonts exist exactly at 6. So a build that predates either refuses
+     * the project instead of saving it back without them.
      */
     fun isConsistent(): Boolean =
         (schema != 2 || importOrigins != null) &&
             (schema < 3 || lineage != null) &&
             (schema != 4 || lineage?.artworkTurns != null) &&
-            (schema >= 5) == (importOrigins?.hasPictures == true)
+            (schema != 5 || importOrigins?.hasPictures == true) &&
+            (importOrigins?.hasPictures != true || schema >= 5) &&
+            (schema >= 6) == (lineage?.artworkFonts != null)
 
     companion object {
         /** The newest session schema this build writes and reads. */
-        const val NEWEST = 5
+        const val NEWEST = 6
     }
 }
 
@@ -4152,6 +4371,17 @@ private val PreviewFileNamePattern = Regex("""style(\d+)\.png""")
 
 /** [WatchFaceRepositoryImpl]'s face-picker thumbnails; never matched by [PreviewFileNamePattern]. */
 private val PickerFileNamePattern = Regex("""picker-style(\d+)\.png""")
+
+/**
+ * The phone's short weekday names, Monday first, in capitals: what a face's seven weekday
+ * pictures are drawn again as. Drawn once, they no longer follow the watch's language.
+ */
+internal fun weekdayNames(locale: java.util.Locale = java.util.Locale.getDefault()): List<String> {
+    val names = java.text.DateFormatSymbols.getInstance(locale).shortWeekdays
+    return listOf(java.util.Calendar.MONDAY, java.util.Calendar.TUESDAY, java.util.Calendar.WEDNESDAY,
+        java.util.Calendar.THURSDAY, java.util.Calendar.FRIDAY, java.util.Calendar.SATURDAY, java.util.Calendar.SUNDAY)
+        .map { names[it].trimEnd('.').uppercase(locale) }
+}
 
 /** The index in `styleN.bin`, which is the index the package's previews use too. */
 /**

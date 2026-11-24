@@ -21,7 +21,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -49,6 +49,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -99,6 +101,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
@@ -110,6 +113,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -131,6 +137,7 @@ import dev.fitface.studio.core.model.AddedWidgetKind
 import dev.fitface.studio.core.model.EditAuditSummary
 import dev.fitface.studio.core.model.EditKind
 import dev.fitface.studio.core.model.EditorSnapshot
+import dev.fitface.studio.core.model.TextPicture
 import dev.fitface.studio.core.model.EditorVariant
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
@@ -173,6 +180,7 @@ import dev.fitface.studio.core.ui.FitTag
 import dev.fitface.studio.core.ui.FitTopBar
 import dev.fitface.studio.core.ui.InfoFacts
 import dev.fitface.studio.core.ui.InfoText
+import dev.fitface.studio.core.ui.InfoTriggerSize
 import dev.fitface.studio.core.ui.LearnedGesture
 import dev.fitface.studio.core.ui.MicroLabel
 import dev.fitface.studio.core.ui.StatusBanner
@@ -185,7 +193,10 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 
+import kotlinx.coroutines.launch
 @Composable
 fun EditorRoute(
     projectId: Long,
@@ -213,6 +224,12 @@ fun EditorRoute(
     ) { uri ->
         if (uri != null) viewModel.choosePicture(uri.toString(), context.contentResolver.getType(uri))
     }
+    val fontPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) viewModel.chooseFontFile(uri.toString())
+    }
+    val defaultText = stringResource(R.string.editor_text_default)
     val nearbyPermissionRequester = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
@@ -364,6 +381,22 @@ fun EditorRoute(
             onAdd = viewModel::addPicture,
             onAddedShown = viewModel::clearPictureAdded,
             onClip = viewModel::setAnimationPart,
+            onAddText = { viewModel.startText(defaultText) },
+            onTextWords = viewModel::setTextWords,
+            onTextFont = viewModel::setTextFont,
+            onChooseFontFile = { fontPicker.launch(FontFileTypes) },
+            onDrawLabel = viewModel::startTextFromLabel,
+            clock = ClockFontActions(
+                onOpen = viewModel::startClockFont,
+                onFont = viewModel::setClockFont,
+                onChooseFontFile = { fontPicker.launch(FontFileTypes) },
+                onPart = viewModel::setClockPart,
+                onTint = viewModel::setClockFontTint,
+                onAllStyles = viewModel::setClockFontAllStyles,
+                onDiscard = viewModel::discardClockFont,
+                onApply = viewModel::applyClockFont,
+                onReset = viewModel::resetClockFont,
+            ),
         ),
         moving = MovingBackgroundActions(
             onStep = viewModel::setMovingBackgroundStep,
@@ -395,6 +428,15 @@ fun EditorRoute(
 
 /** What a background or picture is picked from: a still image, or a GIF or video to play. */
 private val PickableMediaTypes = arrayOf("image/*", "video/*")
+
+/**
+ * What a font is picked from. Phones label a TTF or OTF inconsistently, often as plain
+ * binary, so that is offered too; loading it is the real check.
+ */
+private val FontFileTypes = arrayOf(
+    "font/*", "application/x-font-ttf", "application/x-font-otf", "application/font-sfnt",
+    "application/vnd.ms-opentype", "application/octet-stream",
+)
 
 private enum class EditorPage {
     Canvas,
@@ -527,10 +569,16 @@ private fun EditorScreen(
             importingBackground = false
             page = EditorPage.Canvas
         })
-    // A picture chosen from the Canvas's Layers page is placed on the Widgets page, where
-    // placing one happens; the Canvas has no controls for it.
-    LaunchedEffect(state.pendingPicture != null) {
-        if (state.pendingPicture != null && page == EditorPage.Canvas) page = EditorPage.Widgets
+    // A picture, text or clock font started from the Canvas's Layers page is chosen on the
+    // Widgets page, where placing one happens; the Canvas has no controls for it. Driven by
+    // the count of starts, not by "something is pending": a new choice replacing one left
+    // open changes no flag, and the button seemed dead. Edit widget goes there itself.
+    var choicesSeen by rememberSaveable { mutableIntStateOf(state.widgetsChoicesStarted) }
+    LaunchedEffect(state.widgetsChoicesStarted) {
+        if (state.widgetsChoicesStarted != choicesSeen) {
+            choicesSeen = state.widgetsChoicesStarted
+            if (page == EditorPage.Canvas) page = EditorPage.Widgets
+        }
     }
     // An added picture is shown where it landed, selected, as an import is.
     LaunchedEffect(state.pictureAdded?.id) {
@@ -598,6 +646,8 @@ private fun EditorScreen(
                     snapshot = snapshot,
                     pendingImage = state.pendingImage != null,
                     placingPicture = state.pendingPicture != null,
+                    placingText = state.pendingPicture?.text != null,
+                    choosingClockFont = state.pendingClockFont != null,
                     selected = selected,
                     onBack = goBack,
                     onProject = { navigate(EditorPage.Project) },
@@ -836,6 +886,8 @@ private fun EditorHeader(
     snapshot: EditorSnapshot,
     pendingImage: Boolean,
     placingPicture: Boolean,
+    placingText: Boolean,
+    choosingClockFont: Boolean,
     selected: WidgetGuide?,
     onBack: () -> Unit,
     onProject: () -> Unit,
@@ -866,7 +918,11 @@ private fun EditorHeader(
             snapshot.faceId,
             snapshot.selectedVariantLabel(),
         )
-        EditorPage.Widgets -> if (placingPicture) {
+        EditorPage.Widgets -> if (choosingClockFont) {
+            stringResource(R.string.editor_subtitle_clock_font)
+        } else if (placingText) {
+            stringResource(R.string.editor_subtitle_text_positioning)
+        } else if (placingPicture) {
             stringResource(R.string.editor_subtitle_picture_positioning)
         } else {
             stringResource(
@@ -1228,11 +1284,27 @@ private fun EditorPageContent(
     onResetDelivery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // A picture, text or clock font being chosen stays until Discard or Add/Apply, as a
+    // background does: leaving the Widgets page keeps it. Each of the Layers page's buttons
+    // opens its own kind: the one of that kind left open, as it was, or else a new one, which
+    // replaces a different kind left unfinished (the ViewModel does that and the screen goes
+    // there when it starts).
+    val open = state.pendingPicture
+    val onAddPicture = {
+        if (open != null && open.text == null) onNavigate(EditorPage.Widgets) else pictures.onChoose()
+    }
+    val onAddText = {
+        if (open?.text != null && open.text.replacing == null) onNavigate(EditorPage.Widgets) else pictures.onAddText()
+    }
+    val onClockFont = {
+        if (state.pendingClockFont != null) onNavigate(EditorPage.Widgets) else pictures.clock.onOpen()
+    }
     when (page) {
         EditorPage.Canvas -> CanvasWorkspace(
             state, snapshot, selected, onWidget, onMoveWidget, onNudgeWidget, onTransformImage,
             onResizeWidget, onRotateWidget, onWidgetColor, onArrangeWidget, onApplyAll, onImportWidget,
-            pictures.onChoose, onDuplicateWidget, onRemoveWidget,
+            onAddPicture, onAddText, onClockFont,
+            onDuplicateWidget, onRemoveWidget,
             { onNavigate(EditorPage.Widgets) }, { onNavigate(EditorPage.Inspector) },
             selection, onUndo, onRedo, modifier,
         )
@@ -1262,7 +1334,20 @@ private fun EditorPageContent(
         )
         EditorPage.Inspector -> InspectorWorkspace(
             state, snapshot, selected, onNudgeWidget, onPlaceWidget, selection.onBeginNudge, onApplyAll, onRemoveWidget,
-            onDuplicateWidget, onResizeWidget, { onWidgetColor(it, null) }, onRotateWidget, onArrangeWidget, modifier,
+            onDuplicateWidget, onResizeWidget, { onWidgetColor(it, null) }, onRotateWidget, onArrangeWidget,
+            onDrawLabel = { pictures.onDrawLabel(); onNavigate(EditorPage.Widgets) },
+            clock = ClockFontActions(
+                onOpen = { pictures.clock.onOpen(); onNavigate(EditorPage.Widgets) },
+                onFont = pictures.clock.onFont,
+                onChooseFontFile = pictures.clock.onChooseFontFile,
+                onPart = pictures.clock.onPart,
+                onTint = pictures.clock.onTint,
+                onAllStyles = pictures.clock.onAllStyles,
+                onDiscard = pictures.clock.onDiscard,
+                onApply = pictures.clock.onApply,
+                onReset = pictures.clock.onReset,
+            ),
+            modifier = modifier,
         )
         EditorPage.Background -> BackgroundWorkspace(
             state, snapshot, onWidget, onMoveWidget, onTransformImage, onStepImageZoom, onFit,
@@ -1320,6 +1405,8 @@ private fun CanvasWorkspace(
     onApplyAll: (Boolean) -> Unit,
     onImportWidget: () -> Unit,
     onAddPicture: () -> Unit,
+    onAddText: () -> Unit,
+    onClockFont: () -> Unit,
     onDuplicateWidget: () -> Unit,
     onRemoveWidget: () -> Unit,
     onOpenWidgets: () -> Unit,
@@ -1385,6 +1472,8 @@ private fun CanvasWorkspace(
                         onApplyAll = onApplyAll,
                         onImportWidget = onImportWidget,
                         onAddPicture = onAddPicture,
+                        onAddText = onAddText,
+                        onClockFont = onClockFont,
                         onInspect = onInspect,
                     )
                 }
@@ -1535,6 +1624,8 @@ internal fun editKindLabel(kind: EditKind): String = stringResource(
         EditKind.PICTURE -> R.string.editor_edit_kind_picture
         EditKind.MOVING_BACKGROUND -> R.string.editor_edit_kind_moving_background
         EditKind.MOVING_PICTURE -> R.string.editor_edit_kind_moving_picture
+        EditKind.TEXT_PICTURE -> R.string.editor_edit_kind_text_picture
+        EditKind.CLOCK_FONT -> R.string.editor_edit_kind_clock_font
     },
 )
 
@@ -2199,16 +2290,8 @@ private val NudgeArrowSize = 15.dp
 private val NudgeArrowStroke = 1.6.dp
 
 /**
- * Fires once on press and then keeps firing while the finger is down, so nudging a
- * widget across the face is one long press instead of forty taps.
- *
- * The repeat is driven from the press interaction rather than a click, because a
- * click only arrives on release. That alone dropped the shortest taps: the effect is
- * launched by the recomposition the press causes and runs a frame later, so a tap that
- * is over within that frame was cancelled before its first step ever ran, and a control
- * whose own label promises "tap for 1 px" moved nothing at all. The click is the
- * fallback for exactly that case, and [steppedWhilePressed] keeps the release of a
- * longer press from adding a step the repeat already made.
+ * Steps once for a tap and keeps stepping while the finger is down, so nudging a widget
+ * across the face is one long press instead of forty taps. See [NudgeRepeater].
  */
 @Composable
 private fun RepeatingNudgeButton(
@@ -2259,40 +2342,27 @@ private fun RepeatingButton(
     content: @Composable RowScope.() -> Unit,
 ) {
     val interactions = remember { MutableInteractionSource() }
-    val pressed by interactions.collectIsPressedAsState()
     val step by rememberUpdatedState(onStep)
     val press by rememberUpdatedState(onPress)
-    val steppedWhilePressed = remember { mutableStateOf(false) }
+    val repeater = remember { NudgeRepeater(onPress = { press() }, onStep = { step(it) }) }
 
-    LaunchedEffect(pressed, enabled) {
-        if (!pressed || !enabled) return@LaunchedEffect
-        press()
-        // The first step is always the one the label promises, however long the press
-        // turns out to be: a hold that began as a tap must not overshoot.
-        step(1)
-        steppedWhilePressed.value = true
-        delay(FirstRepeatDelayMillis)
-        var interval = RepeatIntervalMillis
-        var repeat = 0
-        while (true) {
-            step(nudgeStepPixels(repeat))
-            repeat++
-            delay(interval)
-            // The repeat rate accelerates too, but never faster than the editor can
-            // commit an edit. Rate alone was not enough: at one pixel a tick, the far
-            // side of a 402px panel is still half a minute away.
-            interval = (interval - 8).coerceAtLeast(MinRepeatIntervalMillis)
+    LaunchedEffect(interactions, enabled) {
+        // A hold this replaced (the button was disabled under it) has ended without a click.
+        repeater.cancelled()
+        if (!enabled) return@LaunchedEffect
+        // The interactions themselves, in order, rather than a pressed state that reaches a
+        // recomposition a frame or more after the release it should have stopped at.
+        interactions.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> repeater.pressed(this@LaunchedEffect)
+                is PressInteraction.Release -> repeater.released()
+                is PressInteraction.Cancel -> repeater.cancelled()
+            }
         }
     }
 
     FitButton(
-        onClick = {
-            if (!steppedWhilePressed.value) {
-                press()
-                step(1)
-            }
-            steppedWhilePressed.value = false
-        },
+        onClick = repeater::clicked,
         modifier = modifier,
         enabled = enabled,
         style = FitButtonStyle.Secondary,
@@ -2324,7 +2394,7 @@ internal fun nudgeStepPixels(repeat: Int): Int = when {
     else -> 1
 }
 
-private const val FirstRepeatDelayMillis = 420L
+internal const val FirstRepeatDelayMillis = 420L
 
 /** Repetitions before a held nudge widens its step, and how far it widens it. */
 private const val MediumNudgeRepeat = 10
@@ -2333,6 +2403,76 @@ private const val MediumNudgePixels = 2
 private const val CoarseNudgePixels = 5
 private const val RepeatIntervalMillis = 110L
 private const val MinRepeatIntervalMillis = 45L
+
+/**
+ * One arrow's taps and holds, as steps: a tap is one step, from its click; a hold steps
+ * from [FirstRepeatDelayMillis] on, coarser as it goes, and its release adds nothing. Each
+ * gesture is one [onPress], so one undo step.
+ *
+ * The first step used to be taken on the press, with the click as a fallback for a tap
+ * too short for the press to be seen. A slow phone sees the press after the click it
+ * belongs to, and then both stepped: one tap moved 2 px, as two presses, and the second
+ * press's undo step took over the members of a set the first had not committed yet, so
+ * undoing it left the set apart. Now a tap only ever steps from its click and a hold only
+ * from its timer, which the click stops, so the order press, click and release arrive in
+ * cannot add a step. Pure of Compose, so a test can play them in any order.
+ */
+internal class NudgeRepeater(
+    private val onPress: () -> Unit,
+    private val onStep: (Int) -> Unit,
+) {
+    private var hold: Job? = null
+
+    /** This press's hold has stepped, so its click is a release, not a tap. */
+    private var held = false
+
+    /** This press's click has come: a hold still waiting must not start. */
+    private var clicked = false
+
+    fun pressed(scope: CoroutineScope) {
+        hold?.cancel()
+        held = false
+        clicked = false
+        hold = scope.launch {
+            delay(FirstRepeatDelayMillis)
+            if (clicked) return@launch
+            held = true
+            onPress()
+            var interval = RepeatIntervalMillis
+            var repeat = 0
+            while (!clicked) {
+                onStep(nudgeStepPixels(repeat))
+                repeat++
+                delay(interval)
+                // The repeat rate accelerates too, but never faster than the editor can
+                // commit an edit. Rate alone was not enough: at one pixel a tick, the far
+                // side of a 402px panel is still half a minute away.
+                interval = (interval - 8).coerceAtLeast(MinRepeatIntervalMillis)
+            }
+        }
+    }
+
+    fun released() {
+        hold?.cancel()
+    }
+
+    /** The finger left the button, or the button went away: no click follows. */
+    fun cancelled() {
+        hold?.cancel()
+        held = false
+    }
+
+    /** A tap, a hold's release, or an accessibility click, which has no press at all. */
+    fun clicked() {
+        if (held) {
+            held = false
+        } else {
+            onPress()
+            onStep(1)
+        }
+        clicked = true
+    }
+}
 
 @Composable
 private fun CanvasSidePane(
@@ -2405,6 +2545,10 @@ private fun WidgetsWorkspace(
         PictureWorkspace(state, snapshot, pending, pictures, modifier)
         return
     }
+    state.pendingClockFont?.let { pending ->
+        ClockFontWorkspace(state, snapshot, pending, pictures.clock, modifier)
+        return
+    }
     val onCanvas = snapshot.canvasWidgets
     val offCanvas = snapshot.offCanvasWidgets
     val picks = multiSelection.mapNotNull { index -> snapshot.widgets.firstOrNull { it.globalIndex == index } }
@@ -2422,6 +2566,8 @@ private fun WidgetsWorkspace(
                     FitButton(stringResource(R.string.widget_import_open), onImport, Modifier.fillMaxWidth(),
                         enabled = enabled, style = FitButtonStyle.Secondary)
                     FitButton(stringResource(R.string.editor_media_choose), pictures.onChoose,
+                        Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
+                    FitButton(stringResource(R.string.editor_text_open), pictures.onAddText,
                         Modifier.fillMaxWidth(), enabled = enabled, style = FitButtonStyle.Secondary)
                     if (state.readingFrames) ReadingFramesLine()
                 }
@@ -2713,7 +2859,8 @@ private fun WidgetThumbnail(
  */
 @Composable
 private fun WidgetGuide.readingLabel(): String = when (val reading = sourceLabel) {
-    is String -> reading
+    // A label's reading is the constant zero; what it shows is its word.
+    is String -> label?.let { stringResource(R.string.editor_widget_label, it.text) } ?: reading
     else -> if (followsReading) {
         stringResource(R.string.editor_widget_reading_unnamed, sequenceId)
     } else {
@@ -2738,6 +2885,10 @@ private fun InspectorWorkspace(
     onColor: (Int?) -> Unit,
     onRotate: (Int) -> Unit,
     onArrange: (dev.fitface.studio.core.model.WidgetArrangement) -> Unit,
+    /** Draw the selected label in another font, on the Widgets page; see [EditorViewModel.startTextFromLabel]. */
+    onDrawLabel: () -> Unit,
+    /** The Font section of a clock digit; its [ClockFontActions.onOpen] goes to the Widgets page. */
+    clock: ClockFontActions,
     modifier: Modifier = Modifier,
 ) {
     if (widget == null) {
@@ -2835,6 +2986,11 @@ private fun InspectorWorkspace(
         WidgetSizeControls(widget, enabled = true, onResize)
         RotationControls(widget, !state.isWorking, onRotate)
         ColorControls(widget, !state.isWorking, onColor)
+        widget.label?.let { label -> LabelFontControls(label, !state.isWorking && state.pendingPicture == null, onDrawLabel) }
+        widget.clockPart?.let { part ->
+            ClockFontInspectorControls(part, widget.clockFont,
+                !state.isWorking && state.pendingPicture == null && state.pendingClockFont == null, clock)
+        }
         ArrangementControls(widget, snapshot, !state.isWorking, onArrange)
         WidgetScope(widget, snapshot, state.applyWidgetEditsToAllStyles, onApplyAll)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2874,7 +3030,7 @@ private fun WidgetFactTags(widget: WidgetGuide) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         FitTag(widget.category.label.uppercase(), MaterialTheme.colorScheme.tertiary, key = widget.globalIndex) {
-            InfoText(widget.category.detail)
+            InfoText(if (widget.label != null) stringResource(R.string.editor_label_detail) else widget.category.detail)
             // A no-outline widget's support message is its own tag's bubble, not repeated here.
             if (widget.placement == WidgetPlacement.CANVAS) InfoText(widget.supportMessage)
             InfoFacts(
@@ -3355,6 +3511,7 @@ private fun BackgroundWorkspace(
     val thisStyleOnly = state.backgroundThisStyleOnly && snapshot.offersBackgroundScope
     val adding = snapshot.backgroundAdds(thisStyleOnly)
     val placeable = snapshot.canPlaceBackground(thisStyleOnly)
+    val compare = rememberFaceCompare(state.pendingImage?.uri)
     PinnedFacePage(
         snapshot,
         faceCap = 186.dp,
@@ -3374,6 +3531,7 @@ private fun BackgroundWorkspace(
                 onMoveWidget = onMoveWidget,
                 onTransformImage = onTransformImage,
                 modifier = faceModifier,
+                compare = compare,
             )
         },
     ) {
@@ -3425,6 +3583,7 @@ private fun BackgroundWorkspace(
             )
             if (state.readingFrames) ReadingFramesLine(Modifier.fillMaxWidth())
         } else {
+            CompareHint(stringResource(R.string.editor_compare_still))
             FitControls(
                 state.placement.fit, !state.isWorking, onFit,
                 info = stringResource(R.string.editor_bg_no_image_detail, snapshot.preview.width, snapshot.preview.height),
@@ -3521,6 +3680,14 @@ private fun NoBackgroundRasterNotice(snapshot: EditorSnapshot) {
 @Composable
 private fun BackgroundScopeChoice(
     snapshot: EditorSnapshot,
+    thisStyleOnly: Boolean,
+    enabled: Boolean,
+    onScope: (Boolean) -> Unit,
+) = ScopeChoice(thisStyleOnly, enabled, onScope)
+
+/** Applies to: All styles or This style only, as Background offers it, for any page that has the choice. */
+@Composable
+internal fun ScopeChoice(
     thisStyleOnly: Boolean,
     enabled: Boolean,
     onScope: (Boolean) -> Unit,
@@ -3640,6 +3807,8 @@ internal fun PlacementControls(
     canGrow: Boolean = true,
     /** False greys out Reset: it would make a moving background larger than there is room for. */
     canReset: Boolean = true,
+    /** Text's size is its font's, in pixels: −/+ step one and the readout says it. */
+    textSizePx: Int? = null,
 ) {
     val width = panelWidth.coerceAtLeast(1).toFloat()
     val height = panelHeight.coerceAtLeast(1).toFloat()
@@ -3656,13 +3825,15 @@ internal fun PlacementControls(
             entryKey = entryKey,
         )
         val pinchHint = rememberLearnedHint(LearnedGesture.PinchResize)
-        val placementHint = stringResource(R.string.editor_placement_hint, stepPercent)
+        val placementHint = if (textSizePx != null) stringResource(R.string.editor_placement_hint_text)
+            else stringResource(R.string.editor_placement_hint, stepPercent)
         SizeControls(
-            readout = stringResource(R.string.editor_size_zoom, percent),
+            readout = textSizePx?.let { stringResource(R.string.editor_size_text, it) }
+                ?: stringResource(R.string.editor_size_zoom, percent),
             detail = sizeDetail,
             enabled = enabled,
-            canShrink = percent > minZoomPercent,
-            canGrow = percent < maxZoomPercent && canGrow,
+            canShrink = textSizePx?.let { it > TextPicture.MIN_SIZE_PX } ?: (percent > minZoomPercent),
+            canGrow = textSizePx?.let { it < TextPicture.MAX_SIZE_PX } ?: (percent < maxZoomPercent && canGrow),
             onStep = onStepZoom,
             info = { InfoText(placementHint) },
             infoKey = entryKey,
@@ -4397,7 +4568,13 @@ internal fun DirectWatchCanvas(
      * being dragged, nudged as a set or placed: those draw the face as it rests.
      */
     playAnimations: Boolean = false,
+    /**
+     * Placing only: a finger held still on the face shows it as it is, without what is being
+     * placed, until it lets go; see [FaceCompare.stillModifier].
+     */
+    compare: FaceCompare? = null,
 ) {
+    val comparing = compare?.comparing == true
     val composedBitmap = snapshot.composedPreview.rememberBitmap()
     val overlayBitmap = snapshot.widgetOverlay.rememberBitmap()
     // The colour is drawn here as it will be applied: the same rule, before anything commits.
@@ -4444,8 +4621,11 @@ internal fun DirectWatchCanvas(
         snapshot.selectedVariantLabel(),
         snapshot.canvasWidgets.size,
     )
+    // The label a text is replacing is left out while the text is placed, as Add will leave it.
+    val replacedIndex = pendingPicture?.text?.replacing?.globalIndex
     val visualMoveIndex = draggingIndex.takeIf { it >= 0 }
         ?: pendingWidgetMove?.globalIndex
+        ?: replacedIndex
         ?: -1
     val visualMovePosition = if (draggingIndex >= 0) {
         draggingPosition
@@ -4496,6 +4676,8 @@ internal fun DirectWatchCanvas(
                     }
                 }
             }
+            // After the pinch-and-drag, so it sees a held finger first and can keep it.
+            .then(if (compare != null && (pendingImage != null || pendingPicture != null)) compare.stillModifier else Modifier)
             .pointerInput(snapshot.selectedVariant.basename, pendingImage?.uri, editing) {
                 if (pendingImage == null && editing) {
                     fun hit(position: Offset): Int? {
@@ -4642,7 +4824,14 @@ internal fun DirectWatchCanvas(
             },
     ) {
         drawRect(Color.Black)
-        if (pendingImage != null && pendingBitmap != null) {
+        if (comparing) {
+            // The face as it is: no placed picture or background, and a label being replaced still there.
+            drawImage(
+                image = composedBitmap,
+                dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                filterQuality = FilterQuality.Low,
+            )
+        } else if (pendingImage != null && pendingBitmap != null) {
             val fitted = fittedRect(
                 sourceWidth = pendingImage.preview.width,
                 sourceHeight = pendingImage.preview.height,
@@ -4729,7 +4918,7 @@ internal fun DirectWatchCanvas(
             if (dragLayer != null) {
                 val scaleX = size.width / snapshot.preview.width
                 val scaleY = size.height / snapshot.preview.height
-                drawImage(
+                if (visualMoveIndex != replacedIndex) drawImage(
                     image = dragLayer.widget,
                     dstOffset = IntOffset(
                         ((visualMovePosition.x + dragLayer.offsetX) * scaleX).roundToInt(),
@@ -4749,7 +4938,7 @@ internal fun DirectWatchCanvas(
             }
         }
 
-        if (pendingPicture != null && pictureBitmap != null) {
+        if (!comparing && pendingPicture != null && pictureBitmap != null) {
             val scaleX = size.width / snapshot.preview.width
             val scaleY = size.height / snapshot.preview.height
             val placed = pendingPicture.size
@@ -4830,27 +5019,16 @@ internal fun DirectWatchCanvas(
  * is, and it is fail-closed — but it is the one that makes having seen the render a
  * precondition for sending it, which is the whole reason the flag exists.
  */
+
+/**
+ * A note, not a wall. This used to replace the whole checklist whenever a package probe came
+ * up short, which is how a phone with the watch paired, connected and holding a live accessory
+ * session was told direct install was unavailable — with no way forward on the screen. What is
+ * installed cannot answer that question, so it is said once, in passing, and the checklist
+ * below stays usable. Shared by every page that sends to the watch.
+ */
 @Composable
-private fun ColumnScope.WatchSection(
-    state: EditorUiState,
-    snapshot: EditorSnapshot,
-    canSend: Boolean,
-    onGrantNearby: () -> Unit,
-    onOpenCompanion: () -> Unit,
-    onInitializeAndDiscover: () -> Unit,
-    onOpenPluginSettings: () -> Unit,
-    onConfirmPluginReleased: () -> Unit,
-    onRediscover: () -> Unit,
-    onSendBin: () -> Unit,
-    onReset: () -> Unit,
-    onCanvas: () -> Unit,
-) {
-    val delivery = state.directInstall
-    // A note, not a wall. This used to replace the whole checklist whenever a package
-    // probe came up short, which is how a phone with the watch paired, connected and
-    // holding a live accessory session was told direct install was unavailable — with
-    // no way forward on the screen. What is installed cannot answer that question, so
-    // it is said once, in passing, and the checklist below stays usable.
+internal fun EnvironmentAdvisoryBanner(delivery: DirectInstallState) {
     delivery.environment.advisory?.let { advisory ->
         val (short, full) = when (advisory) {
             EnvironmentAdvisory.FRAMEWORK_MISSING ->
@@ -4867,6 +5045,25 @@ private fun ColumnScope.WatchSection(
             info = { InfoText(stringResource(full)) },
         )
     }
+}
+
+@Composable
+private fun ColumnScope.WatchSection(
+    state: EditorUiState,
+    snapshot: EditorSnapshot,
+    canSend: Boolean,
+    onGrantNearby: () -> Unit,
+    onOpenCompanion: () -> Unit,
+    onInitializeAndDiscover: () -> Unit,
+    onOpenPluginSettings: () -> Unit,
+    onConfirmPluginReleased: () -> Unit,
+    onRediscover: () -> Unit,
+    onSendBin: () -> Unit,
+    onReset: () -> Unit,
+    onCanvas: () -> Unit,
+) {
+    val delivery = state.directInstall
+    EnvironmentAdvisoryBanner(delivery)
 
     run {
         // A rewound setup shows the checklist, which says what to do next but not
@@ -5116,6 +5313,7 @@ internal fun SetupChecklist(
                     R.string.editor_setup_step3_why_legacy
                 },
             ),
+            info = stringResource(R.string.editor_setup_step3_info),
             done = stringResource(R.string.editor_setup_step3_done),
             action = onDiscover,
         ),
@@ -5285,19 +5483,36 @@ private fun SetupStepRow(
     ) {
         StepBadge(number, done, busy)
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    row.title,
-                    Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (blocked) {
-                        MaterialTheme.fitText.tertiary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                )
-                if (row.info != null && !done) FitInfo(row.title, row.info)
-            }
+            // The ⓘ is inside the title, after its last word. Beside it in a row, a title that
+            // wraps (step 2's, on most phones) took the whole width and pushed the ⓘ to the
+            // far edge, away from the words it explains.
+            val info = row.info?.takeIf { !done }
+            val triggerSize = with(LocalDensity.current) { InfoTriggerSize.toSp() }
+            Text(
+                buildAnnotatedString {
+                    append(row.title)
+                    if (info != null) {
+                        // No break before it: the ⓘ goes to the next line with the last word.
+                        append('\u00A0')
+                        appendInlineContent(SetupInfoId, "\uFFFC")
+                    }
+                },
+                style = MaterialTheme.typography.titleSmall,
+                color = if (blocked) {
+                    MaterialTheme.fitText.tertiary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                inlineContent = if (info == null) {
+                    emptyMap()
+                } else {
+                    mapOf(
+                        SetupInfoId to InlineTextContent(
+                            Placeholder(triggerSize, triggerSize, PlaceholderVerticalAlign.TextCenter),
+                        ) { FitInfo(row.title, info) },
+                    )
+                },
+            )
             val line = when {
                 busy -> stringResource(R.string.editor_step_working)
                 done -> row.done
@@ -5319,6 +5534,8 @@ private fun SetupStepRow(
         }
     }
 }
+
+private const val SetupInfoId = "info"
 
 /**
  * Whether the checklist draws step [index] (0-based) as its own row. Steps 1 and 2 fold into

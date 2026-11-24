@@ -1,7 +1,6 @@
 package dev.fitface.studio.feature.editor
 
 import android.graphics.Bitmap
-import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -68,8 +67,6 @@ import dev.fitface.studio.core.ui.*
 import dev.fitface.studio.core.ui.FitHeading
 import dev.fitface.studio.core.ui.FitInfo
 import dev.fitface.studio.core.ui.InfoText
-import dev.fitface.studio.core.ui.LearnedGesture
-import dev.fitface.studio.core.ui.rememberLearnedHint
 import kotlin.math.roundToInt
 
 @Composable
@@ -384,13 +381,11 @@ private fun BackgroundDonorPage(state: WidgetImportUiState, viewModel: WidgetImp
 private fun BackgroundReviewPage(state: WidgetImportUiState, snapshot: EditorSnapshot,
     viewModel: WidgetImportViewModel, modifier: Modifier) {
     val preview = state.backgroundPreview ?: return
-    var before by remember(preview.ticket) { mutableStateOf(false) }
-    BackgroundPageBody(if (before) snapshot.composedPreview else preview.preview, modifier,
-        stringResource(R.string.editor_bg_import_result)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FitChip(stringResource(R.string.editor_bg_import_before), before, { before = true }, Modifier.weight(1f))
-            FitChip(stringResource(R.string.editor_bg_import_after), !before, { before = false }, Modifier.weight(1f))
-        }
+    // The face as the edit will leave it; held, the face as it is.
+    val compare = rememberFaceCompare(preview.ticket)
+    BackgroundPageBody(if (compare.comparing) snapshot.composedPreview else preview.preview, modifier,
+        stringResource(R.string.editor_bg_import_result), faceModifier = compare.modifier) {
+        CompareHint(stringResource(R.string.editor_bg_import_compare))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val scope = stringResource(R.string.editor_bg_import_scope,
                 preview.changedVariants.map { backgroundVariantLabel(it) }.joinToString())
@@ -415,7 +410,7 @@ private fun backgroundVariantLabel(name: String): String = importVariantLabel(Ed
 /** Scrollable even when long target lists or large text leave little room for the preview. */
 @Composable
 private fun BackgroundPageBody(frame: PreviewFrame?, modifier: Modifier, description: String,
-    content: @Composable ColumnScope.() -> Unit) {
+    faceModifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     BoxWithConstraints(modifier) {
         val width = frame?.let { minOf(maxWidth - 32.dp, maxHeight * .55f * it.width / it.height, 186.dp) }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -423,7 +418,8 @@ private fun BackgroundPageBody(frame: PreviewFrame?, modifier: Modifier, descrip
             if (frame != null && width != null) {
                 androidx.compose.foundation.Image(frame.rememberImportBitmap(), description,
                     Modifier.width(width).aspectRatio(frame.width.toFloat() / frame.height)
-                        .background(Color.Black, MaterialTheme.shapes.medium).clip(MaterialTheme.shapes.medium),
+                        .background(Color.Black, MaterialTheme.shapes.medium).clip(MaterialTheme.shapes.medium)
+                        .then(faceModifier),
                     contentScale = ContentScale.Fit)
             }
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
@@ -1215,7 +1211,7 @@ private fun ImportReviewPage(
             )
         },
     ) {
-        ImportReviewNotes(stringResource(R.string.widget_import_compare))
+        CompareHint(stringResource(R.string.widget_import_compare))
         ImportFactCard {
             ImportFactRow(
                 stringResource(R.string.widget_import_fact_from),
@@ -1292,7 +1288,7 @@ private fun ImportSetReviewPage(
             )
         },
     ) {
-        ImportReviewNotes(stringResource(R.string.widget_import_compare_set))
+        CompareHint(stringResource(R.string.widget_import_compare_set))
         ImportFactCard {
             ImportFactRow(stringResource(R.string.widget_import_fact_from), importDonorLabel(state))
             ImportFactRow(stringResource(R.string.widget_import_fact_widgets), "${state.picks.size}")
@@ -1316,13 +1312,6 @@ private fun ImportSetReviewPage(
             loading = state.saving,
         )
     }
-}
-
-/** Above a review's facts: how to compare, until holding the face to compare has been done once. */
-@Composable
-private fun ImportReviewNotes(compareHint: String) {
-    val hint = rememberLearnedHint(LearnedGesture.CompareHold)
-    if (hint.shown) MicroLabel(compareHint, Modifier.fillMaxWidth())
 }
 
 /**
@@ -1412,8 +1401,8 @@ private fun ImportReviewFace(
     /** A set's additions carry their add order, the way they did on the donor face. */
     numbered: Boolean = false,
 ) {
-    var comparing by remember { mutableStateOf(false) }
-    val compareHint = rememberLearnedHint(LearnedGesture.CompareHold)
+    val compare = rememberFaceCompare(after to before)
+    val comparing = compare.comparing
     val afterBitmap = after.rememberImportBitmap()
     val original = before.rememberImportBitmap()
     val scrim = MaterialTheme.colorScheme.background.copy(alpha = .55f)
@@ -1431,17 +1420,7 @@ private fun ImportReviewFace(
                 .aspectRatio(after.width.toFloat() / after.height)
                 .clip(RoundedCornerShape(FaceOutlineCorner))
                 .semantics { contentDescription = description }
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = {
-                            comparing = true
-                            val pressed = SystemClock.uptimeMillis()
-                            tryAwaitRelease()
-                            comparing = false
-                            if (SystemClock.uptimeMillis() - pressed >= CompareLearnedMillis) compareHint.learn()
-                        },
-                    )
-                },
+                .then(compare.modifier),
         ) {
             drawRect(Color.Black)
             drawImage(
@@ -1581,5 +1560,3 @@ internal fun importBytes(bytes: Long): String = if (bytes >= 1L shl 20) {
     stringResource(R.string.widget_import_kilobytes, bytes / 1024f)
 }
 
-/** How long a press on the review face must last to count as comparing, not a tap. */
-private const val CompareLearnedMillis = 400L

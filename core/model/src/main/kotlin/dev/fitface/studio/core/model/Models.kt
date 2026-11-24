@@ -759,6 +759,12 @@ data class WidgetGuide(
      * is edited only in the variant it was added to, and deleted outright with its artwork.
      */
     val addedKind: AddedWidgetKind? = null,
+    /** The fixed word a Value draws, when it is a label rather than a reading. */
+    val label: WidgetLabel? = null,
+    /** The clock part this Sprite's pictures show, when a font can redraw them; see [ClockPart]. */
+    val clockPart: ClockPart? = null,
+    /** The font its pictures were redrawn in, when they were. */
+    val clockFont: ClockFontName? = null,
     val supportMessage: String,
 ) {
     /** Whether the editor may offer to resize this widget at all. */
@@ -854,6 +860,12 @@ data class EditAuditSummary(
 enum class EditKind {
     MOVE, RESIZE, ROTATE, COLOUR, ARRANGE, REMOVE, DUPLICATE, IMPORT, BACKGROUND,
     STYLES, THUMBNAIL, TEXT, PICTURE, MOVING_BACKGROUND, MOVING_PICTURE,
+
+    /** Text added as a picture; [TEXT] is a Value's own colour or position. */
+    TEXT_PICTURE,
+
+    /** The clock's pictures redrawn in another font, or back in their own. */
+    CLOCK_FONT,
 }
 
 data class EditorSnapshot(
@@ -1262,6 +1274,26 @@ interface WatchFaceRepository {
     suspend fun addPicture(handle: String, projectId: Long, targetVariant: String, percent: Int, x: Int, y: Int,
         tint: Int? = null, group: Long? = null): EditorSnapshot = throw UnsupportedOperationException()
     suspend fun releasePicture(handle: String) {}
+    /**
+     * Draws [text] as a picture for the selected variant, kept like a prepared picture and
+     * added with [addPicture]. Refused with a sentence when the font cannot be read, and with
+     * [TextProblem] when there is nothing to draw or it would not fit the face.
+     */
+    suspend fun prepareText(text: TextPicture, projectId: Long, targetVariant: String): PreparedText =
+        throw UnsupportedOperationException()
+    /** The font file at [uri], checked by loading it; refused with a sentence when it is not one. */
+    suspend fun readFont(uri: String): TextFont.File = throw UnsupportedOperationException()
+    /**
+     * The selected variant with [request]'s clock parts redrawn, composed, kept until
+     * [applyClockFont] commits it or another preview replaces it. Refused with a sentence
+     * when no part asked for can be redrawn or the font cannot be read.
+     */
+    suspend fun previewClockFont(request: ClockFontRequest, projectId: Long, targetVariant: String): ClockFontPreview =
+        throw UnsupportedOperationException()
+    suspend fun applyClockFont(ticket: String): EditorSnapshot = throw UnsupportedOperationException()
+    /** Draws [part] in the face's own pictures again, in the selected style or every style. */
+    suspend fun resetClockFont(styleName: String, part: ClockPart, applyToAllStyles: Boolean): EditorSnapshot =
+        throw UnsupportedOperationException()
     suspend fun backgroundDonorVariant(handle: String, variant: String): BackgroundDonorVariant =
         throw UnsupportedOperationException()
     /** @param thisStyleOnly write [targetVariant] alone rather than every style. */

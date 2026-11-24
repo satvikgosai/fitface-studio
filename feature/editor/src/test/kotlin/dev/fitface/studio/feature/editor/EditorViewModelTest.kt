@@ -16,7 +16,17 @@ import dev.fitface.studio.core.model.EditorSnapshot
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.MovingBackground
+import dev.fitface.studio.core.model.PhoneFont
+import dev.fitface.studio.core.model.ClockFontName
+import dev.fitface.studio.core.model.ClockFontPreview
+import dev.fitface.studio.core.model.ClockFontRequest
+import dev.fitface.studio.core.model.ClockPart
 import dev.fitface.studio.core.model.PreparedPicture
+import dev.fitface.studio.core.model.PreparedText
+import dev.fitface.studio.core.model.TextFont
+import dev.fitface.studio.core.model.TextPicture
+import dev.fitface.studio.core.model.TextProblem
+import dev.fitface.studio.core.model.WidgetLabel
 import dev.fitface.studio.core.model.ReplacementImage
 import dev.fitface.studio.core.model.pictureAddedBytes
 import dev.fitface.studio.core.model.pictureSizes
@@ -135,6 +145,227 @@ class EditorViewModelTest {
         assertNotNull("the screen moves to the face to show it", state.pictureAdded)
         viewModel.clearPictureAdded(requireNotNull(state.pictureAdded).id)
         assertNull(viewModel.state.value.pictureAdded)
+    }
+
+    /**
+     * Text is placed as the picture it becomes, but its size is the font's: each change to the
+     * words, the font or the size draws it again, a pinch and −/+ change the font size, and it
+     * is added at 100% of what was drawn.
+     */
+    @Test
+    fun textIsDrawnAgainAtEachChangeAndAddedAsDrawn() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.startText("Text")
+        settle()
+        var pending = requireNotNull(viewModel.state.value.pendingPicture)
+        var text = requireNotNull(pending.text)
+        assertEquals(TextPicture("Text"), text.wanted)
+        assertTrue(text.ready)
+        assertEquals(100, pending.size.percentOfOriginal)
+        assertEquals(PanelWidth / 2f to PanelHeight / 2f, pending.centreX to pending.centreY)
+
+        viewModel.setTextWords("Hello")
+        viewModel.setTextFont(TextFont.Phone(PhoneFont.SERIF))
+        assertFalse("Add waits for the drawing", requireNotNull(viewModel.state.value.pendingPicture?.text).ready)
+        settle()
+        viewModel.stepPictureSize(grow = true)
+        settle()
+        pending = requireNotNull(viewModel.state.value.pendingPicture)
+        text = requireNotNull(pending.text)
+        assertEquals(TextPicture("Hello", TextFont.Phone(PhoneFont.SERIF), 33), text.drawn)
+        assertTrue(text.ready)
+        assertEquals("drawn at its size, not resampled", 100, pending.size.percentOfOriginal)
+        assertEquals(5 * 33 / 2, pending.size.width)
+
+        viewModel.transformPicture(2f, 0f, 0f)
+        settle()
+        assertEquals("a pinch draws it again at the font size it reaches",
+            66, viewModel.state.value.pendingPicture?.text?.drawn?.sizePx)
+
+        val handle = requireNotNull(viewModel.state.value.pendingPicture).prepared.handle
+        viewModel.addPicture()
+        settle()
+        assertEquals(handle, repository.addedPictures.single()[0])
+        assertEquals(100, repository.addedPictures.single()[1])
+        assertNull(viewModel.state.value.pendingPicture)
+    }
+
+    /** Too big to draw: the card says so, the face keeps what was drawn, and Add waits. */
+    @Test
+    fun textTooBigForTheFaceKeepsWhatWasDrawnAndHoldsAdd() {
+        val repository = FakeRepository(snapshot(widgets), commitImmediately = true).apply { tooBigOver = 40 }
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.startText("Text")
+        settle()
+        viewModel.setTextSize(41)
+        settle()
+        val text = requireNotNull(viewModel.state.value.pendingPicture?.text)
+        assertEquals(TextProblem.TOO_BIG, text.problem)
+        assertEquals(32, text.drawn.sizePx)
+        assertEquals(32 * 4 / 2, viewModel.state.value.pendingPicture?.prepared?.width)
+        viewModel.addPicture()
+        settle()
+        assertTrue(repository.addedPictures.isEmpty())
+
+        viewModel.setTextSize(40)
+        settle()
+        assertTrue(requireNotNull(viewModel.state.value.pendingPicture?.text).ready)
+    }
+
+    /**
+     * A label is drawn in another font from Edit widget: its word, size and colour, centred
+     * where it is. Added, the text goes in and the label goes to Removed, under one undo group;
+     * a refused removal keeps both and says so.
+     */
+    @Test
+    fun aLabelIsReplacedByItsTextUnderOneUndoGroup() {
+        val label = widget(globalIndex = 2, x = 60, y = 120).copy(type = 5, colorArgb = 0xFF00FF00.toInt(),
+            label = WidgetLabel("steps", 24))
+        val repository = FakeRepository(snapshot(listOf(widgets[0], label, widgets[2])), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.selectWidget(2)
+        viewModel.startTextFromLabel()
+        settle()
+        val pending = requireNotNull(viewModel.state.value.pendingPicture)
+        assertEquals(TextPicture("steps", sizePx = 24), pending.text?.wanted)
+        assertEquals(0xFF00FF00.toInt(), pending.tint)
+        assertEquals("against the label's left edge, on the line written from its top",
+            60f + 5 * 24 / 2 / 2f to 120f + 24 * 0.6f, pending.centreX to pending.centreY)
+        assertEquals(2, pending.text?.replacing?.globalIndex)
+
+        viewModel.addPicture()
+        settle()
+        val group = repository.pictureGroups.single()
+        assertNotNull(group)
+        assertEquals(listOf(2 to group), repository.removals)
+        assertNull(viewModel.state.value.error)
+
+        val again = FakeRepository(snapshot(listOf(widgets[0], label, widgets[2])), commitImmediately = true)
+            .apply { refuseRemoval = WatchFaceException("It cannot be removed.") }
+        val second = EditorViewModel(again, installer, DiagnosticsLog(), reporter())
+        second.loadProject(1)
+        settle()
+        second.selectWidget(2)
+        second.startTextFromLabel()
+        settle()
+        second.addPicture()
+        settle()
+        assertEquals("the text is in", 1, again.addedPictures.size)
+        assertTrue(second.state.value.snapshot!!.widgets.any { it.globalIndex == 2 })
+        assertTrue(requireNotNull(second.state.value.error).text.contains("the label is still there"))
+    }
+
+    /**
+     * One choice is open on the Widgets page at a time, and each start is counted so the screen
+     * goes there. Opening the clock font again resumes it as chosen and counts nothing; text
+     * replaces a clock font left open, and the clock font replaces text and releases it.
+     */
+    @Test
+    fun aNewChoiceReplacesAnotherKindLeftOpenAndTheSameKindResumes() {
+        val clock = listOf(widget(globalIndex = 0, x = 10, y = 10).copy(type = 3, clockPart = ClockPart.TIME))
+        val repository = FakeRepository(snapshot(clock), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.startClockFont()
+        viewModel.setClockFont(TextFont.Phone(PhoneFont.SERIF))
+        settle()
+        val chosen = requireNotNull(viewModel.state.value.pendingClockFont)
+        assertEquals(1, viewModel.state.value.widgetsChoicesStarted)
+
+        viewModel.startClockFont()
+        assertEquals("opened again, it keeps the font chosen", chosen, viewModel.state.value.pendingClockFont)
+        assertEquals("a resume is not a start", 1, viewModel.state.value.widgetsChoicesStarted)
+
+        viewModel.startText("Text")
+        settle()
+        assertNull("text replaces the clock font left open", viewModel.state.value.pendingClockFont)
+        val text = requireNotNull(viewModel.state.value.pendingPicture)
+        assertNotNull(text.text)
+        assertEquals(2, viewModel.state.value.widgetsChoicesStarted)
+
+        viewModel.startClockFont()
+        settle()
+        assertNull("the clock font replaces the text", viewModel.state.value.pendingPicture)
+        assertTrue(text.prepared.handle in repository.released)
+        assertNotNull(viewModel.state.value.pendingClockFont)
+        assertEquals(3, viewModel.state.value.widgetsChoicesStarted)
+    }
+
+    /**
+     * The Clock font page opens on every part the style draws as pictures with no font chosen,
+     * drawing nothing until one is; then it draws the face again on each change with only the
+     * newest request landing, keeps the last face when one is refused, and applies only what
+     * it drew.
+     */
+    @Test
+    fun theClockFontPageDrawsEachChangeAndAppliesWhatItDrew() {
+        val clock = listOf(widget(globalIndex = 0, x = 10, y = 10).copy(type = 3, clockPart = ClockPart.TIME),
+            widget(globalIndex = 1, x = 40, y = 10).copy(type = 3, clockPart = ClockPart.WEEKDAY,
+                clockFont = ClockFontName(PhoneFont.SERIF)))
+        val repository = FakeRepository(snapshot(clock), commitImmediately = true)
+        val viewModel = EditorViewModel(repository, installer, DiagnosticsLog(), reporter())
+        viewModel.loadProject(1)
+        settle()
+        viewModel.startClockFont()
+        settle()
+        var pending = requireNotNull(viewModel.state.value.pendingClockFont)
+        assertEquals(listOf(ClockPart.TIME, ClockPart.WEEKDAY), pending.available)
+        assertEquals(setOf(ClockPart.TIME, ClockPart.WEEKDAY), pending.parts)
+        assertNull("no font until one is chosen", pending.font)
+        assertEquals("names the font the clock is in", ClockFontName(PhoneFont.SERIF), pending.current)
+        // Parts and colour can be set first; nothing is drawn or applied without a font.
+        viewModel.setClockPart(ClockPart.WEEKDAY, included = false)
+        viewModel.setClockFontTint(0xFFFF0000.toInt())
+        viewModel.applyClockFont()
+        settle()
+        assertTrue(repository.clockPreviews.isEmpty())
+        assertTrue(repository.appliedClockFonts.isEmpty())
+        assertFalse(requireNotNull(viewModel.state.value.pendingClockFont).ready)
+
+        viewModel.setClockFont(TextFont.Phone(PhoneFont.SERIF))
+        settle()
+        pending = requireNotNull(viewModel.state.value.pendingClockFont)
+        assertEquals(ClockFontRequest(TextFont.Phone(PhoneFont.SERIF), setOf(ClockPart.TIME), 0xFFFF0000.toInt()),
+            pending.drawn)
+        assertTrue(pending.ready)
+
+        repository.refuseClockFont = TextFont.Phone(PhoneFont.MONOSPACE)
+        viewModel.setClockFont(TextFont.Phone(PhoneFont.MONOSPACE))
+        settle()
+        pending = requireNotNull(viewModel.state.value.pendingClockFont)
+        assertEquals("This font has none of these characters.", pending.problem)
+        assertEquals("the face keeps the last drawing", TextFont.Phone(PhoneFont.SERIF), pending.drawn?.font)
+        viewModel.applyClockFont()
+        settle()
+        assertTrue("nothing applied while the page asks for what it could not draw", repository.appliedClockFonts.isEmpty())
+
+        viewModel.setClockPart(ClockPart.TIME, included = false)
+        settle()
+        assertNotNull(viewModel.state.value.pendingClockFont?.problem)
+        viewModel.setClockPart(ClockPart.TIME, included = true)
+        // A picked file goes to the clock while its page is open, not to a text.
+        viewModel.chooseFontFile("content://font")
+        settle()
+        assertEquals(TextFont.File("content://font", "picked.ttf"), viewModel.state.value.pendingClockFont?.drawn?.font)
+        viewModel.setClockFont(TextFont.Phone(PhoneFont.CASUAL))
+        settle()
+        val ticket = requireNotNull(viewModel.state.value.pendingClockFont?.preview).ticket
+        viewModel.applyClockFont()
+        settle()
+        assertEquals(listOf(ticket), repository.appliedClockFonts)
+        assertNull(viewModel.state.value.pendingClockFont)
+
+        viewModel.resetClockFont(ClockPart.WEEKDAY)
+        settle()
+        assertEquals(listOf(ClockPart.WEEKDAY to false), repository.clockResets)
     }
 
     /** Twenty 100 ms frames, each a different shade so the frame shown can be told apart. */
@@ -1399,11 +1630,64 @@ class EditorViewModelTest {
         override suspend fun addPicture(handle: String, projectId: Long, targetVariant: String, percent: Int,
             x: Int, y: Int, tint: Int?, group: Long?): EditorSnapshot {
             addedPictures += listOf(handle, percent, x, y, tint)
+            pictureGroups += group
             current = current.copy(widgets = current.widgets + widget(globalIndex = 9, x = x, y = y))
             return current
         }
 
         override suspend fun releasePicture(handle: String) { released += handle }
+
+        /** The undo group each picture was added under. */
+        val pictureGroups = mutableListOf<Long?>()
+
+        /** Each text drawn, in order. One over [tooBigOver] px is refused as too big for the face. */
+        val drawnTexts = mutableListOf<TextPicture>()
+        var tooBigOver = Int.MAX_VALUE
+
+        override suspend fun prepareText(text: TextPicture, projectId: Long, targetVariant: String): PreparedText {
+            drawnTexts += text
+            if (text.sizePx > tooBigOver) return PreparedText(text, null, TextProblem.TOO_BIG)
+            val width = text.text.length * text.sizePx / 2
+            val height = text.sizePx
+            return PreparedText(text, PreparedPicture("t${drawnTexts.size}", width, height, opaque = false,
+                pictureSizes(width, height, PanelWidth, PanelHeight, kept = true), PreviewFrame(width, height, IntArray(width * height))))
+        }
+
+        /** Each clock font previewed, in order; a request naming [refuseClockFont]'s font is refused. */
+        val clockPreviews = mutableListOf<ClockFontRequest>()
+        var refuseClockFont: TextFont? = null
+        val appliedClockFonts = mutableListOf<String>()
+        val clockResets = mutableListOf<Pair<ClockPart, Boolean>>()
+
+        override suspend fun previewClockFont(request: ClockFontRequest, projectId: Long, targetVariant: String): ClockFontPreview {
+            clockPreviews += request
+            if (request.font == refuseClockFont) throw WatchFaceException("This font has none of these characters.")
+            return ClockFontPreview("c${clockPreviews.size}", frame(), listOf(targetVariant), request.parts.size)
+        }
+
+        override suspend fun applyClockFont(ticket: String): EditorSnapshot {
+            appliedClockFonts += ticket
+            return current
+        }
+
+        override suspend fun readFont(uri: String) = TextFont.File(uri, "picked.ttf")
+
+        override suspend fun resetClockFont(styleName: String, part: ClockPart, applyToAllStyles: Boolean): EditorSnapshot {
+            clockResets += part to applyToAllStyles
+            return current
+        }
+
+        /** Each widget removed, with the undo group it was removed under. */
+        val removals = mutableListOf<Pair<Int, Long?>>()
+        var refuseRemoval: WatchFaceException? = null
+
+        override suspend fun removeWidget(styleName: String, globalIndex: Int, widgetType: Int, sequenceId: Int,
+            x: Int, y: Int, requireFinal: Boolean, applyToAllStyles: Boolean, group: Long?): EditorSnapshot {
+            refuseRemoval?.let { throw it }
+            removals += globalIndex to group
+            current = current.copy(widgets = current.widgets.filter { it.globalIndex != globalIndex })
+            return current
+        }
 
         override suspend fun prepareReplacementImage(imageUri: String) = ReplacementImage(imageUri, frame())
 

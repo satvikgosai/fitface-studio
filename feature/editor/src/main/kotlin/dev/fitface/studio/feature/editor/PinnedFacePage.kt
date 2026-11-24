@@ -1,5 +1,6 @@
 package dev.fitface.studio.feature.editor
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -40,8 +41,36 @@ internal fun PinnedFacePage(
     face: @Composable ColumnScope.(Modifier) -> Unit,
     controls: @Composable ColumnScope.() -> Unit,
 ) {
+    PinnedFacePage(
+        aspect = snapshot.preview.width.toFloat() / snapshot.preview.height.coerceAtLeast(1),
+        faceCap = faceCap,
+        modifier = modifier,
+        spacing = spacing,
+        horizontalAlignment = horizontalAlignment,
+        faceExtra = faceExtra,
+        face = face,
+        controls = controls,
+    )
+}
+
+/**
+ * [PinnedFacePage] for a face that is not the open project's, such as the Photos face's
+ * 256 × 402 photo: [aspect] is its width over its height. [scroll] is the controls' scroll
+ * (or the whole page's, when not pinned), for a page that keeps its place across tabs.
+ */
+@Composable
+internal fun PinnedFacePage(
+    aspect: Float,
+    faceCap: Dp,
+    modifier: Modifier = Modifier,
+    spacing: Dp = 16.dp,
+    horizontalAlignment: Alignment.Horizontal = Alignment.CenterHorizontally,
+    faceExtra: Dp = 0.dp,
+    scroll: ScrollState = rememberScrollState(),
+    face: @Composable ColumnScope.(Modifier) -> Unit,
+    controls: @Composable ColumnScope.() -> Unit,
+) {
     BoxWithConstraints(modifier) {
-        val aspect = snapshot.preview.width.toFloat() / snapshot.preview.height.coerceAtLeast(1)
         val pinned = pinnedFaceWidth(maxWidth - PagePadding * 2, maxHeight, faceCap, aspect, faceExtra)
         if (pinned != null) {
             Column(Modifier.fillMaxSize()) {
@@ -52,7 +81,7 @@ internal fun PinnedFacePage(
                     face(Modifier.width(pinned))
                 }
                 Column(
-                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(PagePadding),
+                    Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(PagePadding),
                     horizontalAlignment = horizontalAlignment,
                     verticalArrangement = Arrangement.spacedBy(spacing),
                     content = controls,
@@ -60,7 +89,7 @@ internal fun PinnedFacePage(
             }
         } else {
             Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(PagePadding),
+                Modifier.fillMaxSize().verticalScroll(scroll).padding(PagePadding),
                 horizontalAlignment = horizontalAlignment,
                 verticalArrangement = Arrangement.spacedBy(spacing),
             ) {

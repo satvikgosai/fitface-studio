@@ -12,8 +12,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
 /**
@@ -121,20 +125,33 @@ fun FitDropdownMenu(
  *
  * @param tint overrides the label colour — the crash offer uses it, and so does a
  *   destructive entry, which takes `colorScheme.error` like every other danger in the app.
+ * @param fontFamily draws the label in that family, for a menu that picks a font.
+ * @param selected marks the current choice in a menu that picks one: a trailing `✓`, and
+ *   selected state for a screen reader.
  *
  * Every caller closes the menu before it runs its callback: these all open a dialog or
  * navigate, and a popup left standing behind one is the first thing to go wrong here.
  */
 @Composable
-fun FitMenuEntry(label: String, tint: Color? = null, onClick: () -> Unit) {
+fun FitMenuEntry(
+    label: String,
+    tint: Color? = null,
+    fontFamily: FontFamily? = null,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
     DropdownMenuItem(
         text = {
             Text(
                 label,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyMedium.let { style -> fontFamily?.let { style.copy(fontFamily = it) } ?: style },
                 color = tint ?: MaterialTheme.colorScheme.onSurface,
             )
         },
         onClick = onClick,
+        modifier = if (selected) Modifier.semantics { this.selected = true } else Modifier,
+        trailingIcon = if (selected) {
+            { Text("✓", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
+        } else null,
     )
 }

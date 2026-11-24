@@ -23,6 +23,32 @@ How to write this changelog
 - The initial release is one line.
 -->
 
+## 0.3.1 (code `31`) — 2026-11-24
+
+Fixed:
+
+- On many phones not made by Samsung, **Find the watch for transfer** always timed out
+  saying the watch was not connected. A prompt now asks to let FitFace Studio access your
+  accessory; tap **Allow** once and the watch is found.
+- On a slow phone, an arrow tap could move a set more than one step, and **Undo** took a
+  held move back step by step. Each tap now moves one step, and one **Undo** undoes it all.
+- On **Install**, a step's ⓘ sat at the row's far edge when its name wrapped. It now
+  follows the name.
+- With an image left unplaced, **Add image** in the **Layers** controls seemed to do
+  nothing. It now opens the one you left, or a new one.
+
+Added:
+
+- **Add text** on **Widgets** and in the **Layers** controls, in any of your phone's fonts
+  or a font file, placed and coloured like a picture. A face's own label, such as "steps",
+  can be redrawn the same way with **Draw in another font** in **Edit widget**.
+- **Clock font**, in the **Layers** controls, redraws a clock made of pictures of digits in
+  another font and colour, in this style or all of them. **Reset font** brings its own
+  digits back.
+- Hold the face to compare it with how it is now, wherever a change is previewed.
+- **Send your photos**, up to 7, to the watch's Photos face from its card in **Watch
+  faces**, and choose its clock's style and colour, or **No clock**.
+
 ## 0.3.0 (code `30`) — 2026-11-10
 
 Fixed:

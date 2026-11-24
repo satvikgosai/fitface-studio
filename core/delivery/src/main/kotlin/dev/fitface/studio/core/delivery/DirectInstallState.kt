@@ -53,6 +53,11 @@ data class CompanionEnvironment(
     /** Apps declaring an accessory agent, the stock plugin among them when present. */
     val accessoryAgentCount: Int = 0,
     val frameworkVerdict: FrameworkVerdict = FrameworkVerdict.UNKNOWN,
+    /**
+     * The accessory framework's version, for the report: from 3.1.96.61123 it answers
+     * discovery only after its own consent prompt, so the version explains a silence.
+     */
+    val frameworkVersionName: String? = null,
     /** False until the environment has actually been probed once. */
     val probed: Boolean = false,
 ) {
@@ -88,7 +93,7 @@ data class AlbumProgress(
     val bytesSent: Int = 0,
     /** Only deletes photos. */
     val removing: Boolean = false,
-    /** Only changes which photo is shown. */
+    /** Only changes which photo is shown, or the clock. */
     val showing: Boolean = false,
 )
 
@@ -129,6 +134,14 @@ data class DirectInstallState(
      * never a device identity.
      */
     val watchReplies: List<String> = emptyList(),
+    /** How many discoveries have started, which numbers [discoveryAnswers]. */
+    val discoveryAttempt: Int = 0,
+    /**
+     * What each discovery heard, as `#<attempt> <agent> <outcome>`, newest last and at most
+     * [MAX_DISCOVERY_ANSWERS]. Outcomes and codes only, never a peer or device identity. An
+     * attempt with no answer from an agent is the silence a consent prompt nobody saw leaves.
+     */
+    val discoveryAnswers: List<String> = emptyList(),
     /** Set while the request is for the Photos face's album rather than a face install. */
     val album: AlbumProgress? = null,
 ) {
@@ -199,7 +212,11 @@ data class DirectInstallState(
         otaPeerCached = false,
         pluginNearbyReleaseAcknowledged = false,
         failure = null,
-        message = "Finding the watch for transfer…",
+        discoveryAttempt = discoveryAttempt + 1,
+        // The accessory framework may put its own prompt over this page now, closing it
+        // after ten seconds, so the reader has to know to expect it before it appears.
+        message = "Finding the watch for transfer… Tap Allow if you are asked to let " +
+            "FitFace Studio access your accessory.",
     )
 
     /**
@@ -274,13 +291,16 @@ data class DirectInstallState(
  */
 internal object TimeoutRecovery {
     /**
-     * Silence from discovery means the same thing as an explicit `device_not_connected`
-     * and has the same way out, so it rewinds to the checklist rather than failing.
+     * Silence from discovery rewinds to the checklist rather than failing: both of its
+     * causes are put right on the phone. The accessory framework says nothing to an app
+     * whose consent prompt went unanswered — it closes itself after ten seconds — and a
+     * watch the plugin is not holding cannot be found.
      */
     const val DISCOVERY =
-        "Peer discovery timed out, which normally means the watch is not connected. Check " +
-            "it in the companion app — the stock plugin has to be holding the watch for " +
-            "this step — then discover again."
+        "The watch did not answer. Find it again, and tap Allow if you are asked to let " +
+            "FitFace Studio access your accessory. If it still times out, check the watch " +
+            "is connected in the companion app — the stock plugin has to be holding it for " +
+            "this step."
     const val INITIALIZATION = "Accessory initialization timed out. Restart setup and retry."
     const val INSTALL = "The install request timed out. Check the watch, then reconnect it and " +
         "discover again before retrying."
@@ -401,6 +421,19 @@ internal const val MAX_WATCH_REPLIES = 8
  */
 internal fun withWatchReply(state: DirectInstallState, agent: String, data: ByteArray): DirectInstallState =
     state.copy(watchReplies = (state.watchReplies + "$agent ${data.replyHex()}").takeLast(MAX_WATCH_REPLIES))
+
+/** How many discovery answers [DirectInstallState.discoveryAnswers] keeps. */
+internal const val MAX_DISCOVERY_ANSWERS = 8
+
+/**
+ * [state] with [what] [agent] heard during the current discovery recorded, oldest dropped
+ * past [MAX_DISCOVERY_ANSWERS]. Like a watch reply it is evidence and moves nothing.
+ */
+internal fun withDiscoveryAnswer(state: DirectInstallState, agent: String, what: String): DirectInstallState =
+    state.copy(
+        discoveryAnswers = (state.discoveryAnswers + "#${state.discoveryAttempt} $agent $what")
+            .takeLast(MAX_DISCOVERY_ANSWERS),
+    )
 
 /** How long a phase that is merely waiting on the accessory framework may stay silent. */
 internal const val PHASE_WATCHDOG_MS = 20_000L

@@ -409,6 +409,45 @@ class EditorSelectionSetTest {
         assertEquals(listOf(28, 68), vm.state.value.snapshot!!.widgets.take(2).map { it.x })
     }
 
+    /**
+     * A second press while the first's members are still committing joins its undo step.
+     *
+     * Each press is its own undo group, and the queue keeps only a member's newest target,
+     * so the second press re-targeted the members the first had not committed yet; they
+     * committed under its group, and undoing it left the set apart — the member already in
+     * moved, the rest back where they began.
+     */
+    @Test fun aPressWhileTheLastIsStillCommittingIsTheSameUndoStep() {
+        val (vm, repository) = opened()
+        repository.parked = CompletableDeferred()
+        vm.selectWidget(1)
+        vm.toggleInSelection(2)
+        vm.beginNudge()
+        vm.nudgeSelection(1, 0)
+        settle()
+        vm.beginNudge()
+        vm.nudgeSelection(1, 0)
+        settle()
+        repository.parked!!.complete(Unit)
+        settle()
+        assertEquals(1, repository.groups.toSet().size)
+        assertEquals(listOf(22, 62), vm.state.value.snapshot!!.widgets.take(2).map { it.x })
+    }
+
+    @Test fun aPressAfterTheLastHasCommittedIsItsOwnUndoStep() {
+        val (vm, repository) = opened()
+        vm.selectWidget(1)
+        vm.toggleInSelection(2)
+        vm.beginNudge()
+        vm.nudgeSelection(1, 0)
+        settle()
+        vm.beginNudge()
+        vm.nudgeSelection(1, 0)
+        settle()
+        assertEquals(2, repository.groups.toSet().size)
+        assertEquals(1, repository.groups.take(2).toSet().size)
+    }
+
     @Test fun theLayerStackIsCutAtEveryMovingMemberInRecordOrder() {
         fun layer(index: Int) = WidgetImageLayer(index, PreviewFrame(1, 1, intArrayOf(0)))
         val layers = (1..6).map(::layer)

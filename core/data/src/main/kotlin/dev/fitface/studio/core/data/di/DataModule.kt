@@ -14,11 +14,13 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.fitface.studio.core.data.WatchFaceRepositoryImpl
 import dev.fitface.studio.core.data.FaceCatalogRepositoryImpl
 import dev.fitface.studio.core.data.PhotoAlbumRepositoryImpl
+import dev.fitface.studio.core.data.PluginPhotoClockSource
 import dev.fitface.studio.core.data.db.FitFaceDatabase
 import dev.fitface.studio.core.data.db.ProjectDao
 import dev.fitface.studio.core.model.DiagnosticsLog
 import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.PhotoAlbumRepository
+import dev.fitface.studio.core.model.PhotoClockSource
 import dev.fitface.studio.core.model.ProjectNaming
 import dev.fitface.studio.core.model.WatchFaceRepository
 import dev.fitface.studio.core.model.FaceCatalogRepository
@@ -44,6 +46,12 @@ abstract class RepositoryModule {
     abstract fun bindPhotoAlbumRepository(
         implementation: PhotoAlbumRepositoryImpl,
     ): PhotoAlbumRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindPhotoClockSource(
+        implementation: PluginPhotoClockSource,
+    ): PhotoClockSource
 }
 
 @Module

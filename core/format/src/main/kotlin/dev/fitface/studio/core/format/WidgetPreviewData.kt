@@ -70,6 +70,17 @@ class WidgetTextResources(entries: List<ContainerEntry>, private val locale: Str
         ?.let { runCatching { LocaleDictionary.parse(it).items }.getOrNull() }
     private val fonts = mutableMapOf<Int, FontBinding?>()
 
+    /**
+     * The fixed word [record] draws when it is a label — a Value on the constant-zero reading
+     * that names a dictionary word, such as `steps` — or null for anything else, a reading
+     * included. 105 of the catalogue's Values are labels, on 13 faces.
+     */
+    fun label(entry: ContainerEntry, record: WidgetRecord): WidgetText? {
+        if (record.widgetType != WIDGET_PAIR || record.sourceId != 0) return null
+        if (WidgetFields(entry, record).short(0x2C) == 0xFFFF) return null
+        return text(entry, record)?.takeIf { it.text.isNotBlank() }
+    }
+
     fun text(entry: ContainerEntry, record: WidgetRecord): WidgetText? {
         val binding = record.fontBindingIndex ?: return null
         val bindingFont = fonts.getOrPut(binding) {

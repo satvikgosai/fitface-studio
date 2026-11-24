@@ -14,9 +14,16 @@ import dev.fitface.studio.core.model.FacePackage
 import dev.fitface.studio.core.model.FaceStyleOption
 import dev.fitface.studio.core.model.ImageFit
 import dev.fitface.studio.core.model.DraftPhoto
+import dev.fitface.studio.core.model.PhotoDraft
 import dev.fitface.studio.core.model.ImagePlacement
 import dev.fitface.studio.core.model.KeptPhoto
 import dev.fitface.studio.core.model.PhotoAlbumFace
+import dev.fitface.studio.core.model.PhotoClock
+import dev.fitface.studio.core.model.PhotoClockColour
+import dev.fitface.studio.core.model.PhotoClockOptions
+import dev.fitface.studio.core.model.PhotoClockSetting
+import dev.fitface.studio.core.model.PhotoClockSource
+import dev.fitface.studio.core.model.PhotoClockType
 import dev.fitface.studio.core.model.WatchFaceException
 import io.mockk.every
 import io.mockk.mockk
@@ -30,6 +37,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -171,27 +179,35 @@ class PhotoAlbumRepositoryTest {
         val key = "0f0e0d0c-0b0a-4908-8706-050403020100"
         val replaced = "fedcba9876543210fedcba9876543210.png"
         val placement = ImagePlacement(fit = ImageFit.STRETCH, zoom = 1.25f, offsetY = -0.2f, tint = 0xFFFF0000.toInt())
-        repository.saveDraft(254, listOf(DraftPhoto(key, source, placement, replaced)))
+        val takenOut = "0123456789abcdef0123456789abcdef.png"
+        repository.saveDraft(254, PhotoDraft(listOf(DraftPhoto(key, source, placement, replaced)), listOf(takenOut), key))
         repository.draftWrite?.join()
         val original = File(context.filesDir, "photo-album/254/draft/$key.jpg")
         val written = original.readBytes()
 
-        val back = repository.draft(254).single()
+        val draft = repository.draft(254)
+        assertEquals(listOf(takenOut), draft.takenOut)
+        assertEquals(key, draft.shown)
+        val back = draft.photos.single()
         assertEquals(key, back.key)
         assertEquals(placement, back.placement)
         assertEquals(replaced, back.replaces)
         assertEquals(source.width to source.height, back.source.width to back.source.height)
 
-        repository.saveDraft(254, listOf(DraftPhoto(key, back.source, placement.copy(zoom = 2f), null)))
+        repository.saveDraft(254, PhotoDraft(listOf(DraftPhoto(key, back.source, placement.copy(zoom = 2f), null))))
         repository.draftWrite?.join()
         assertArrayEquals("the original is written once", written, original.readBytes())
-        assertEquals(2f, repository.draft(254).single().placement.zoom)
+        assertEquals(2f, repository.draft(254).photos.single().placement.zoom)
 
         repository.recordAlbum(254, emptyList(), null)
-        assertEquals(1, repository.draft(254).size)
-        repository.saveDraft(254, emptyList())
+        assertEquals(1, repository.draft(254).photos.size)
+        // Only photos taken out is still a draft.
+        repository.saveDraft(254, PhotoDraft(takenOut = listOf(takenOut)))
         repository.draftWrite?.join()
-        assertTrue(repository.draft(254).isEmpty())
+        assertEquals(listOf(takenOut), repository.draft(254).takenOut)
+        repository.saveDraft(254, PhotoDraft())
+        repository.draftWrite?.join()
+        assertTrue(repository.draft(254).isEmpty)
         assertTrue(!File(context.filesDir, "photo-album/254/draft").exists())
     }
 
@@ -219,7 +235,37 @@ class PhotoAlbumRepositoryTest {
     private val face = CatalogFace("p254", "00254", "My Photo", "", "com.samsung.fit3watchface.sm_r390_0254",
         "1.0.0", 10000, 1, listOf(FaceStyleOption(0, "https://example.invalid/s.png")))
 
-    private fun repository(image: ByteArray, metadata: Boolean = true) = PhotoAlbumRepositoryImpl(
+    /** The plugin's options are read with the album; the clock last sent is kept until another is. */
+    @Test
+    fun theClockOptionsComeWithTheAlbumAndTheClockSentIsKept() = runBlocking {
+        val options = PhotoClockOptions(
+            listOf(PhotoClockType(1, null), PhotoClockType(2, null)),
+            listOf(PhotoClockColour(1, 0xFFFFFFFF.toInt()), PhotoClockColour(22, 0xFFF03426.toInt())),
+            PhotoClock(1, 1),
+        )
+        val repository = repository(jpeg(800, 400), clocks = options)
+        val first = repository.album(face)
+        assertSame(options, first.clockOptions)
+        assertNull("never sent one: the watch's own is unknown", first.clock)
+
+        val photo = repository.encode("content://fitface/photo.jpg", ImagePlacement(fit = ImageFit.COVER))
+        val drawn = PhotoClockSetting.Drawn(PhotoClock(2, 22))
+        repository.recordAlbum(254, listOf(photo.fileName), photo.fileName, clock = drawn)
+        assertEquals(drawn, repository.album(face).clock)
+        // A later record that names no clock leaves the recorded one.
+        repository.recordAlbum(254, emptyList(), null)
+        assertEquals(drawn, repository(jpeg(800, 400)).album(face).clock)
+        // A send with no clock is recorded as that, and survives a later record that names none.
+        repository.recordAlbum(254, emptyList(), null, clock = PhotoClockSetting.None)
+        repository.recordAlbum(254, emptyList(), null)
+        assertEquals(PhotoClockSetting.None, repository(jpeg(800, 400)).album(face).clock)
+        repository.recordAlbum(254, emptyList(), null, clock = drawn)
+        assertEquals(drawn, repository.album(face).clock)
+        // No plugin to read: no options, the record unchanged.
+        assertNull(repository(jpeg(800, 400)).album(face).clockOptions)
+    }
+
+    private fun repository(image: ByteArray, metadata: Boolean = true, clocks: PhotoClockOptions? = null) = PhotoAlbumRepositoryImpl(
         context,
         object : FaceCatalogRepository {
             override suspend fun cachedCatalog(): FaceCatalog? = null
@@ -234,6 +280,9 @@ class PhotoAlbumRepositoryTest {
         AndroidImageSource(mockk<ContentResolver>().also { resolver ->
             every { resolver.openInputStream(any()) } answers { ByteArrayInputStream(image) }
         }),
+        object : PhotoClockSource {
+            override suspend fun options(faceId: Int) = clocks
+        },
     )
 
     private fun apk(album: Boolean): ByteArray = ByteArrayOutputStream().also { bytes ->

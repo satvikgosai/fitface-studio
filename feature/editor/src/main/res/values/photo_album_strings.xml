@@ -1,76 +1,75 @@
 <resources>
     <!-- The page that sends the user's photos to the watch's own Photos face. -->
     <string name="editor_photos_title">Photos face</string>
+    <!-- Canvas while the face is still being read, before its clock is known. -->
+    <string name="editor_photos_subtitle_reading">face %1$s</string>
     <string name="editor_photos_subtitle_choose">choose photos</string>
-    <string name="editor_photos_subtitle_placing">placing photo %1$d of %2$d</string>
-    <string name="editor_photos_subtitle_install">send to the watch</string>
+    <string name="editor_photos_subtitle_placing">photo %1$d of %2$d</string>
+    <string name="editor_photos_subtitle_styles">choose the clock’s style</string>
     <string name="editor_photos_details_label">Photo details</string>
-    <string name="editor_photos_intro">Your photos go to the watch\'s own Photos face, the way Galaxy Wearable sends them. The face holds up to %1$d. The first photo you pick is the one shown.</string>
+    <string name="editor_photos_intro">Your photos go to the watch\'s own Photos face, the way Galaxy Wearable sends them. The face holds up to %1$d. The photo you are placing when you send is the one the face shows.</string>
     <string name="editor_photos_loading">Reading the Photos face…</string>
     <string name="editor_photos_loading_percent">Reading the Photos face… %1$d%%</string>
     <string name="editor_photos_retry">@string/ui_try_again</string>
 
-    <string name="editor_photos_next">Next: install</string>
-    <string name="editor_photos_install_none">No photos picked. Pick them on Background first.</string>
-    <plurals name="editor_photos_install_ready">
-        <item quantity="one">%1$d photo ready to send. Tap it to place it again.</item>
-        <item quantity="other">%1$d photos ready to send, the first one shown. Tap one to place it again.</item>
-    </plurals>
 
     <string name="editor_photos_none_picked">No photos picked yet</string>
-    <string name="editor_photos_choose">Choose photos</string>
-    <string name="editor_photos_add_more">Add photos</string>
     <string name="editor_photos_full">The Photos face has no room for more. Remove photos from it first.</string>
-    <plurals name="editor_photos_room">
-        <item quantity="one">Room for %1$d more photo.</item>
-        <item quantity="other">Room for %1$d more photos.</item>
-    </plurals>
     <plurals name="editor_photos_dropped">
         <item quantity="one">%1$d photo was left out: the Photos face has no room for it.</item>
         <item quantity="other">%1$d photos were left out: the Photos face has no room for them.</item>
     </plurals>
-    <string name="editor_photos_thumb_a11y">Photo %1$d of %2$d</string>
-    <string name="editor_photos_thumb_selected_a11y">Photo %1$d of %2$d, being placed</string>
+    <string name="editor_photos_thumb_a11y">Photo %1$d of %2$d, %3$s</string>
+    <string name="editor_photos_thumb_selected_a11y">Photo %1$d of %2$d, %3$s, shown once sent</string>
+    <string name="editor_photos_status_new">new</string>
+    <string name="editor_photos_status_changed">placed again</string>
+    <string name="editor_photos_status_sent">on the watch</string>
+    <string name="editor_photos_status_no_copy">on the watch, no copy kept</string>
     <string name="editor_photos_shown_label">SHOWN</string>
     <string name="editor_photos_preview_a11y">Photo %1$d on the watch face. Drag to move, pinch to resize.</string>
+    <string name="editor_photos_preview_fixed_a11y">Photo %1$d on the watch face.</string>
     <string name="editor_photos_remove_one">Take out</string>
+    <string name="editor_photos_take_off">Take off the watch</string>
+    <string name="editor_photos_taken_off">Photo to be taken off the watch</string>
+    <string name="editor_photos_taken_out">Photo taken out</string>
+    <string name="editor_photos_fixed">Can’t be placed again</string>
+    <string name="editor_photos_fixed_info">This photo was sent before this app kept copies of what it sends. It can still be shown or taken off the watch; to change it, pick it again and take this one off.</string>
 
-    <plurals name="editor_photos_sent_count">
-        <item quantity="one">%1$d photo sent from this phone is on the Photos face.</item>
-        <item quantity="other">%1$d photos sent from this phone are on the Photos face.</item>
+    <plurals name="editor_photos_choose_room">
+        <item quantity="one">Choose photos · %1$d left</item>
+        <item quantity="other">Choose photos · %1$d left</item>
     </plurals>
-    <string name="editor_photos_remove_sent">Remove all from the watch</string>
-    <string name="editor_photos_on_watch">On the watch</string>
+    <plurals name="editor_photos_add_room">
+        <item quantity="one">Add photos · %1$d left</item>
+        <item quantity="other">Add photos · %1$d left</item>
+    </plurals>
+    <string name="editor_photos_choose_full">Choose photos · none left</string>
+    <string name="editor_photos_add_full">Add photos · none left</string>
+    <string name="editor_photos_ready_heading">Changes to send</string>
+    <string name="editor_photos_ready_none">none</string>
+    <string name="editor_photos_send">Send to the watch</string>
+    <string name="editor_photos_ready_info">What sending changes on the watch, worked out from Background, Canvas and Styles against what this phone last sent: photos added, placed again or taken off, the one the face shows (the one being placed on Background), and the clock. Tap a photo to place it. Photos sent from Galaxy Wearable aren’t listed and stay.</string>
+    <plurals name="editor_photos_change_added">
+        <item quantity="one">%1$d new photo</item>
+        <item quantity="other">%1$d new photos</item>
+    </plurals>
+    <plurals name="editor_photos_change_changed">
+        <item quantity="one">%1$d photo placed again</item>
+        <item quantity="other">%1$d photos placed again</item>
+    </plurals>
+    <plurals name="editor_photos_change_removed">
+        <item quantity="one">%1$d photo taken off the watch</item>
+        <item quantity="other">%1$d photos taken off the watch</item>
+    </plurals>
+    <string name="editor_photos_change_shown">Shows photo %1$d</string>
+    <string name="editor_photos_change_shown_own">Shows the face’s own background</string>
     <string name="editor_photos_no_copy">NO COPY</string>
-    <string name="editor_photos_sent_a11y">Sent photo %1$d of %2$d</string>
-    <string name="editor_photos_sent_shown_a11y">Sent photo %1$d of %2$d, shown on the watch</string>
-    <string name="editor_photos_choose_sent">Tap a photo to show it, change it or remove it.</string>
-    <string name="editor_photos_show_this">Show it</string>
-    <string name="editor_photos_change">Change</string>
-    <string name="editor_photos_remove_this">Remove this photo</string>
-    <string name="editor_photos_resend">Send them all again</string>
-    <string name="editor_photos_no_copy_note">Sent before this app kept copies, so it can be shown or removed but not changed or sent again. Pick it again to change it.</string>
-    <string name="editor_photos_sent_needs_setup">Showing, removing and sending again need the steps below.</string>
-    <string name="editor_photos_remove_one_title">Remove this photo?</string>
-    <string name="editor_photos_remove_one_body">The watch is asked to delete this photo, and this phone\'s copy is deleted with it.</string>
-    <string name="editor_photos_changing_label">CHANGING</string>
-    <string name="editor_photos_subtitle_changing">changing a sent photo</string>
+    <string name="editor_photos_changing_label">CHANGED</string>
+    <string name="editor_photos_new_label">NEW</string>
     <string name="editor_photos_phase_show">Ask the watch to show it</string>
     <string name="editor_photos_shown_done">Request sent. Look at the Photos face on your watch, then restore the plugin and reconnect in the companion app.</string>
-    <string name="editor_photos_remove_title">Remove the photos?</string>
-    <plurals name="editor_photos_remove_body">
-        <item quantity="one">The watch is asked to delete the %1$d photo this phone sent and show the Photos face\'s own background. Photos sent from Galaxy Wearable stay.</item>
-        <item quantity="other">The watch is asked to delete the %1$d photos this phone sent and show the Photos face\'s own background. Photos sent from Galaxy Wearable stay.</item>
-    </plurals>
-    <string name="editor_photos_remove_confirm">Remove</string>
-    <string name="editor_photos_cancel">Cancel</string>
 
-    <plurals name="editor_photos_send">
-        <item quantity="one">Send %1$d photo to the watch</item>
-        <item quantity="other">Send %1$d photos to the watch</item>
-    </plurals>
     <string name="editor_photos_preparing">Preparing the photos…</string>
-    <string name="editor_photos_send_heading">Send to the watch</string>
 
     <!-- Phase timeline, in order. -->
     <string name="editor_photos_phase_prepare">Prepare connection</string>
@@ -90,6 +89,27 @@
     <string name="editor_photos_about">• Sending makes the Photos face the current one.
 • The watch’s answer goes to the stock plugin, so this app can only say the request was sent.
 • Galaxy Wearable may not list photos sent from here, and saving its Photos screen may replace them.
-• The face’s clock type and colour are left as they are; change them on the watch.
+• Every send carries the clock, since the watch draws none without one: the one chosen, else the one last sent, else the face’s own. Its choices come from the watch plugin on this phone. Choose No clock on Styles to send the face without one.
 • The Photos face has to be in the watch’s face list. It comes with the watch, but it can be removed there.</string>
+
+    <!-- Styles: the clock's style and colour, as the stock plugin on this phone lists them. -->
+    <string name="editor_photos_style_info">The Photos face’s styles, as the watch plugin on this phone pictures them: where the clock sits. Each is drawn in the clock’s colour, which is on Canvas. The style belongs to the whole face, whichever photo is shown, and goes with every send. No clock sends the face without its clock settings, and the watch then draws none.</string>
+    <string name="editor_photos_clock_info">The colours the watch offers its clock. The colour belongs to the whole face, whichever photo is shown, and goes with every send; the one last sent stays until you choose another.</string>
+    <string name="editor_photos_clock_title">Clock</string>
+    <string name="editor_photos_clock_facts">%1$s · colour %2$d of %3$d</string>
+    <string name="editor_photos_clock_unavailable_short">Can’t be changed here</string>
+    <string name="editor_photos_no_clock">No clock</string>
+    <string name="editor_photos_clock_off_info">The face is set to have no clock: sends leave the clock out, and the watch then draws none. Choose a style on Styles to bring it back.</string>
+    <string name="editor_photos_canvas_face_a11y">The Photos face, with its clock selected</string>
+    <string name="editor_photos_styles_unavailable">Styles unavailable</string>
+    <string name="editor_photos_styles_details">About these styles</string>
+    <string name="editor_photos_style_current">Selected · as last sent</string>
+    <string name="editor_photos_style_current_changed">Selected · goes with the next send</string>
+    <string name="editor_photos_clock_colour_a11y">Clock colour %1$d of %2$d, %3$s</string>
+    <string name="editor_photos_clock_unavailable">The watch plugin on this phone doesn’t list the clock’s choices, so they can’t be changed here. Every send still carries a clock, since the watch draws none without one: the one last sent, or the face’s own, style 1 in white.</string>
+    <string name="editor_photos_install_clock">Clock: style %1$d, colour %2$d</string>
+    <string name="editor_photos_install_clock_changed">Clock: style %1$d, colour %2$d, changed</string>
+    <string name="editor_photos_install_no_clock">Clock: none</string>
+    <string name="editor_photos_install_no_clock_changed">Clock: none, changed</string>
+    <string name="editor_photos_phase_clock">Ask the watch to set the clock</string>
 </resources>
