@@ -4372,16 +4372,6 @@ private val PreviewFileNamePattern = Regex("""style(\d+)\.png""")
 /** [WatchFaceRepositoryImpl]'s face-picker thumbnails; never matched by [PreviewFileNamePattern]. */
 private val PickerFileNamePattern = Regex("""picker-style(\d+)\.png""")
 
-/** The index in `styleN.bin`, which is the index the package's previews use too. */
-/**
- * Which of a face's `font_<key>.bin` dictionaries the preview reads for the phone's language.
- *
- * Faces ship eight keyed dictionaries (`cn0`, `cn2`, `en`, `fr`, `it`, `ja`, `ko`, `pt_rPT`),
- * and a key no face has falls back to English. One mapping for every preview: the editor's,
- * a donor's, an import review's and the custom template's picker frame. Passing the raw
- * locale (`fr_FR`) instead named a dictionary that never exists, so those previews were
- * always English while the canvas beside them was French.
- */
 /**
  * The phone's short weekday names, Monday first, in capitals: what a face's seven weekday
  * pictures are drawn again as. Drawn once, they no longer follow the watch's language.
@@ -4393,6 +4383,16 @@ internal fun weekdayNames(locale: java.util.Locale = java.util.Locale.getDefault
         .map { names[it].trimEnd('.').uppercase(locale) }
 }
 
+/** The index in `styleN.bin`, which is the index the package's previews use too. */
+/**
+ * Which of a face's `font_<key>.bin` dictionaries the preview reads for the phone's language.
+ *
+ * Faces ship eight keyed dictionaries (`cn0`, `cn2`, `en`, `fr`, `it`, `ja`, `ko`, `pt_rPT`),
+ * and a key no face has falls back to English. One mapping for every preview: the editor's,
+ * a donor's, an import review's and the custom template's picker frame. Passing the raw
+ * locale (`fr_FR`) instead named a dictionary that never exists, so those previews were
+ * always English while the canvas beside them was French.
+ */
 internal fun previewDictionaryLocale(locale: java.util.Locale = java.util.Locale.getDefault()): String =
     when (locale.language) {
         "zh" -> if (locale.script == "Hant" || locale.country in setOf("TW", "HK", "MO")) "cn2" else "cn0"

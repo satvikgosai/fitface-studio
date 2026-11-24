@@ -46,7 +46,7 @@ credentials are deliberately not stored in this repository.
   :app:lintDebug
 ```
 
-Last recorded corpus-backed verification (2026-11-20, accessory consent prompt):
+Last recorded corpus-backed verification (2026-11-23, 0.3.1 release check):
 **1107 tests collected, 1106 passed, 1 skipped, 0 failures, 0 lint errors,
 26 lint warnings.**
 Those warnings were dependency/SDK notices. These are recorded results, not an

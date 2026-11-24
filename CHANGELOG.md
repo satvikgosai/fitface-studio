@@ -23,21 +23,19 @@ How to write this changelog
 - The initial release is one line.
 -->
 
-## Unreleased
+## 0.3.1 (code `31`) — 2026-11-24
 
 Fixed:
 
 - On many phones not made by Samsung, **Find the watch for transfer** always timed out
   saying the watch was not connected. A prompt now asks to let FitFace Studio access your
   accessory; tap **Allow** once and the watch is found.
-- On a slow phone, a quick tap on an arrow could move a set of widgets more than one step,
-  and **Undo** took a held move back a step at a time. Each tap now moves it one step, and
-  one **Undo** takes back the whole move.
-- On **Install**, the ⓘ for **Grant FitFace Nearby devices access** sat at the far edge of
-  the row when the name ran onto two lines. It now follows the name.
-- Adding a second image from the **Layers** controls after leaving the first one unplaced
-  stayed on **Canvas** and seemed to do nothing. Each button now opens its own choice: the
-  one you left, as you left it, or a new one.
+- On a slow phone, an arrow tap could move a set more than one step, and **Undo** took a
+  held move back step by step. Each tap now moves one step, and one **Undo** undoes it all.
+- On **Install**, a step's ⓘ sat at the row's far edge when its name wrapped. It now
+  follows the name.
+- With an image left unplaced, **Add image** in the **Layers** controls seemed to do
+  nothing. It now opens the one you left, or a new one.
 
 Added:
 
@@ -47,12 +45,9 @@ Added:
 - **Clock font**, in the **Layers** controls, redraws a clock made of pictures of digits in
   another font and colour, in this style or all of them. **Reset font** brings its own
   digits back.
-- Hold the face to see it as it is, without the change, on the **Clock font** page and when
-  reviewing a background from another face, which no longer has **Before** and **After**.
-  While placing a background, a picture or text, hold the face still to do the same.
-- **Send your photos** to the watch's Photos face from its card in **Watch faces**, up to 7,
-  placed and coloured like a background, and choose its clock's style on **Styles**, or
-  **No clock**, and colour on **Canvas**.
+- Hold the face to compare it with how it is now, wherever a change is previewed.
+- **Send your photos**, up to 7, to the watch's Photos face from its card in **Watch
+  faces**, and choose its clock's style and colour, or **No clock**.
 
 ## 0.3.0 (code `30`) — 2026-11-10
 

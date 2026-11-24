@@ -163,6 +163,9 @@ fun PhotoAlbumRoute(
                 },
             ),
             subtitle = when {
+                // Until the face is read its clock is unknown, which is not the same as none.
+                page == PhotosPage.Canvas && state.clockSetting == null -> stringResource(
+                    R.string.editor_photos_subtitle_reading, PHOTO_ALBUM_FACE_ID.toString().padStart(5, '0'))
                 page == PhotosPage.Canvas -> stringResource(R.string.editor_subtitle_canvas,
                     PHOTO_ALBUM_FACE_ID.toString().padStart(5, '0'),
                     state.clock?.let { clock -> styleLabel(styles?.indexOfFirst { it.id == clock.type }?.coerceAtLeast(0) ?: 0) }

@@ -1,6 +1,8 @@
 <resources>
     <!-- The page that sends the user's photos to the watch's own Photos face. -->
     <string name="editor_photos_title">Photos face</string>
+    <!-- Canvas while the face is still being read, before its clock is known. -->
+    <string name="editor_photos_subtitle_reading">face %1$s</string>
     <string name="editor_photos_subtitle_choose">choose photos</string>
     <string name="editor_photos_subtitle_placing">photo %1$d of %2$d</string>
     <string name="editor_photos_subtitle_styles">choose the clock’s style</string>

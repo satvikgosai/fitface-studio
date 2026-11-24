@@ -77,8 +77,8 @@ internal object PhotoAlbumProtocol {
      * The background setting, then the clock's when one is given: the order the plugin writes
      * them in, its list following the face's settings (background, clock type, clock colour).
      * The plugin's own reply parser reads each parameter by its ID, not its place. `18` counts
-     * the face ID plus each setting: 2 with the background alone, which leaves the watch's
-     * clock as it is, and 4 with the clock.
+     * the face ID plus each setting: 2 with the background alone, which leaves the watch
+     * drawing no clock, and 4 with the clock.
      */
     fun setEditInfo(faceId: Int, backgrounds: List<String>, selected: String, clock: PhotoClock? = null): ByteArray {
         require(backgrounds.size in 1..255 && selected in backgrounds) { "No background to show" }
